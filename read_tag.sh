@@ -1,4 +1,4 @@
 #!/bin/sh
 
 cd /home/pi/limn
-uv run rfid.py read-tag
+/home/pi/.local/bin/uv run rfid.py read-tag
