@@ -1,3 +1,13 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "typer>=0.21.1",
+#     "adafruit-blinka>=9.0.4",
+#     "adafruit-circuitpython-pn532>=2.4.8",
+# ]
+# ///
+
 import board
 import busio
 import typer
