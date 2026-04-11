@@ -1,13 +1,3 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "typer>=0.21.1",
-#     "adafruit-blinka>=9.0.4",
-#     "adafruit-circuitpython-pn532>=2.4.8",
-# ]
-# ///
-
 import board
 import busio
 import typer
@@ -34,13 +24,21 @@ def decode_num(val: bytearray):
      sign = '-' if val[0] == 1 else ''
      return float(f'{sign}{val[1]}.{val[2]}')
 
-def get_nfc():
-    i2c = busio.I2C(board.SCL, board.SDA)
-    pn532 = PN532_I2C(i2c, debug=False)
-    ic, ver, rev, support = pn532.firmware_version
-    print(f"Found PN532 with firmware version: {ver}.{rev}")
-    pn532.SAM_configuration()
-    return pn532
+def get_nfc(retries: int = 3):
+    try:
+        i2c = busio.I2C(board.SCL, board.SDA)
+        pn532 = PN532_I2C(i2c, debug=False)
+        ic, ver, rev, support = pn532.firmware_version
+        print(f"Found PN532 with firmware version: {ver}.{rev}")
+        pn532.SAM_configuration()
+        return pn532
+    except Exception as e:
+        print(f"Error initializing PN532: {e}")
+        if retries > 0:
+            print("Retrying...")
+            return get_nfc(retries - 1)
+        else:
+            raise RuntimeError("Failed to initialize PN532 after multiple attempts.")
 
 @dataclass
 class TagData:
