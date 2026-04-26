@@ -17,6 +17,9 @@ class ShellOutputBuffer:
         if not cmd_str:
             raise gcmd.error("No COMMAND parameter provided")
 
+        # clear previous results.
+        self.results = []
+
         try:
             process = subprocess.Popen(
                 cmd_str,
@@ -42,13 +45,8 @@ class ShellOutputBuffer:
             gcmd.respond_info(f"Exception: {e}")
             self.results.append(f"Exception: {e}")
 
-    def pop(self):
-        if not self.results:
-            return None
-        return self.results.pop(0)
-
     def get_status(self, eventtime):
-        return {'buffer_size': len(self.results)}
+        return {'buffer_size': len(self.results), 'output': self.results[-1] if self.results else None}
 
 def load_config_prefix(config):
     return ShellOutputBuffer(config)
