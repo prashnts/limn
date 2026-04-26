@@ -45,7 +45,7 @@ class ShellOutputBuffer:
     def pop(self):
         if not self.results:
             return None
-        return self.results.pop()
+        return self.results.pop(0)
 
     def get_status(self, eventtime):
         return {'buffer_size': len(self.results)}
