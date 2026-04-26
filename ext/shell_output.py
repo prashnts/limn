@@ -3,7 +3,6 @@ import logging
 
 class ShellOutputBuffer:
     def __init__(self, config):
-        self.name = config.get_name().split()[-1]
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.results = []
