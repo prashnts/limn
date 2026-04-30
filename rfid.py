@@ -77,7 +77,7 @@ def read_tag(timeout: float = 0.5, retries: int = 3):
     try:
         uid = pn532.read_passive_target(timeout=timeout)
         if uid is None:
-            print("No tag found.")
+            print("TAG>>>None<<<")
             return
 
         xb = pn532.ntag2xx_read_block(6)
@@ -94,7 +94,9 @@ def read_tag(timeout: float = 0.5, retries: int = 3):
             z=decode_num(zb),
             name=name_b.decode().strip()
         )
-        print(f"Read tag: {tag_data}")
+        # Output format optimized for gcode parsing.
+        tag_str = f"TAG>>>{tag_data.x}||{tag_data.y}||{tag_data.z}||{tag_data.name}<<<"
+        print(tag_str)
         return tag_data
     except Exception as e:
         print(f"Error reading tag: {e}")
