@@ -48,10 +48,10 @@ class ShellOutputBuffer:
 
     def get_status(self, eventtime):
         last_output = self.results[-1] if self.results else ''
-        data_pattern = re.compile(r"^(\w+)>>>(.*)<<<$")
-        match = data_pattern.match(last_output)
-        output = match.group(2) if match else last_output
-        return {'buffer_size': len(self.results), 'output': output}
+        data_pattern = re.compile(r"(\w+)>>>(.*)<<<")
+        match = data_pattern.findall(last_output)
+        tag, output = match[0] if match else ('buffer', last_output)
+        return {'buffer_size': len(self.results), 'output': output, tag: output}
 
 def load_config_prefix(config):
     return ShellOutputBuffer(config)
