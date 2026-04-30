@@ -1,5 +1,6 @@
 import subprocess
 import logging
+import re
 
 class ShellOutputBuffer:
     def __init__(self, config):
@@ -46,7 +47,11 @@ class ShellOutputBuffer:
             self.results.append(f"Exception: {e}")
 
     def get_status(self, eventtime):
-        return {'buffer_size': len(self.results), 'output': self.results[-1] if self.results else None}
+        last_output = self.results[-1] if self.results else ''
+        data_pattern = re.compile(r"^(\w+)>>>(.*)<<<$")
+        match = data_pattern.match(last_output)
+        output = match.group(2) if match else last_output
+        return {'buffer_size': len(self.results), 'output': output}
 
 def load_config_prefix(config):
     return ShellOutputBuffer(config)
