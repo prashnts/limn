@@ -2,6 +2,7 @@ import board
 import busio
 import typer
 
+from typing import Annotated
 from dataclasses import dataclass
 from itertools import batched
 from adafruit_pn532.i2c import PN532_I2C
@@ -50,7 +51,12 @@ class TagData:
 
 
 @app.command()
-def write_tag(x: float, y: float, z: float, name: str):
+def write_tag(
+    x: Annotated[float | None, typer.Option] = None,
+    y: Annotated[float | None, typer.Option] = None,
+    z: Annotated[float | None, typer.Option] = None,
+    name: Annotated[str | None, typer.Option] = None,
+):
     pn532 = get_nfc()
     try:
         uid = pn532.read_passive_target(timeout=2)
@@ -58,14 +64,18 @@ def write_tag(x: float, y: float, z: float, name: str):
             print("No tag detected.")
             return
         print(f"Writing to tag with UID: {uid.hex()}")
-        pn532.ntag2xx_write_block(6, encode_num(x))
-        pn532.ntag2xx_write_block(7, encode_num(y))
-        pn532.ntag2xx_write_block(8, encode_num(z))
-        tagname = name.ljust(20)[:20].encode()
-        blk = 11
-        for batch in batched(tagname, 4):
-            pn532.ntag2xx_write_block(blk, bytearray(batch))
-            blk += 1
+        if x is not None:
+            pn532.ntag2xx_write_block(6, encode_num(x))
+        if y is not None:
+            pn532.ntag2xx_write_block(7, encode_num(y))
+        if z is not None:
+            pn532.ntag2xx_write_block(8, encode_num(z))
+        if name is not None:
+            tagname = name.ljust(20)[:20].encode()
+            blk = 11
+            for batch in batched(tagname, 4):
+                pn532.ntag2xx_write_block(blk, bytearray(batch))
+                blk += 1
 
         print("Write ok.")
     except Exception as e:
