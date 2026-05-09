@@ -13,9 +13,9 @@ from adafruit_pn532.i2c import PN532_I2C
 app = typer.Typer()
 
 
-def get_port(portstr: str):
+def get_port(portstr: str, timeout: float):
     port, baud = portstr.split(',')
-    return serial.Serial(port, baudrate=int(baud), timeout=2)
+    return serial.Serial(port, baudrate=int(baud), timeout=timeout)
 
 
 def _parse_touch(line: str):
@@ -28,8 +28,8 @@ def _parse_touch(line: str):
 
 
 @app.command()
-def read_touch(portstr: str = '/dev/ttyUSB1,112500', max_attempts: int = 15):
-    ser = get_port(portstr)
+def read_touch(portstr: str = '/dev/ttyUSB1,112500', max_attempts: int = 15, timeout: float = 0.5):
+    ser = get_port(portstr, timeout)
     sample_count = 4
     attempt = 0
     samples = []
