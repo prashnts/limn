@@ -102,7 +102,7 @@ def read_tag(timeout: float = 0.5, retries: int = 3):
             x=decode_num(xb),
             y=decode_num(yb),
             z=decode_num(zb),
-            name=name_b.decode().strip()
+            name=name_b.decode().strip() or '<unknown>',
         )
         # Output format optimized for gcode parsing.
         tag_str = f"TAG>>>{tag_data.x}||{tag_data.y}||{tag_data.z}||{tag_data.name}<<<"
