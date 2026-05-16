@@ -52,6 +52,8 @@ class ToolTouchProbeExtension:
             "LRT_DISCONNECT",
             self.cmd_Disconnect,
             desc=self.cmd_Disconnect_Help)
+        self.gcode.register_command(
+            "LRT_PROBE", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
 
     def run_probe(self):
         self.gcode.run_script_from_command(cmd_str)
