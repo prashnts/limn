@@ -239,6 +239,13 @@ class ToolTouchProbeExtension:
             (52, 45, H_PARK),
             (55, 45, H_PARK),
             (60, 45, H_PARK),
+            (70, 45, H_PARK),
+            (45, 45, H_PARK),
+            (80, 45, H_PARK),
+            (80, 35, H_PARK),
+            (45, 55, H_PARK),
+            (62, 52, H_PARK),
+            (62, 55, H_PARK),
         ]
         coords = [*touch_coords]
         data = []
