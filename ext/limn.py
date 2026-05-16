@@ -13,6 +13,15 @@ except ImportError:
 
 SERIAL_TIMER = 0.1
 
+def avg_coords(samples):
+    if len(samples) > 12:
+        samples = samples[10:]
+    n = max(len(samples), 1)
+    avg_x = sum(s[0] for s in samples) / n
+    avg_y = sum(s[1] for s in samples) / n
+    avg_z = sum(s[2] for s in samples) / n
+    return avg_x, avg_y, avg_z
+
 
 class ToolTouchProbeExtension:
     def __init__(self, config):
@@ -55,10 +64,11 @@ class ToolTouchProbeExtension:
         self.gcode.register_command(
             "LRT_PROBE", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
 
-    def run_probe(self):
-        self.gcode.run_script_from_command(cmd_str)
+        self.printer.register_event_handler("klippy:connect", self.send_data)
 
 
+    def on_connect(self):
+        self.cmd_Connect(self.gcode)
 
     def _parse_touch(self, line: str):
         pattern = r'.*xpt2046.* Touchscreen Update \[(\d+), (\d+)\], z = (\d+)'
@@ -121,6 +131,7 @@ class ToolTouchProbeExtension:
         self.signal_disconnect = False
         logging.info("[LRT] Connecting to (%s) at (%s)" %
                      (self.serial_port, self.baud))
+        gcmd.respond_info("[LRT] Connecting")
         try:
             self.serial = serial.Serial(
                 self.serial_port, self.baud, timeout=0, write_timeout=0)
@@ -128,8 +139,8 @@ class ToolTouchProbeExtension:
             gcmd.respond_info("[LRT] Unable to connect")
             return
     
+        gcmd.respond_info("[LRT] Connected")
         self.read_timer = self.reactor.register_timer(self._read_serial, self.reactor.NOW)
-
 
     cmd_Disconnect_Help = ("Disconnect from LRT")
     def cmd_Disconnect(self, gcmd=None):
@@ -139,9 +150,7 @@ class ToolTouchProbeExtension:
             self.serial = None
 
         self.reactor.unregister_timer(self.read_timer)
-        self.reactor.unregister_timer(self.write_timer)
         self.read_timer = None
-        self.write_timer = None
         self.is_printing = False
 
 
@@ -151,23 +160,41 @@ class ToolTouchProbeExtension:
     def pull_samples(self):
         res = self.samples
         self.samples = []
-        return res
+        return res, avg_coords(res)
     
     def _move(self, coords, speed):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.manual_move(coords, speed)
     
-    def cmd_PROBE_TOOL(self, gcmd):
-        self._move(self.PARK_AT, self.TRAVEL_SPEED)
+
+    def probe_at(self, coords, gcmd):
+        self._move(coords, self.TRAVEL_SPEED)
         self.begin_sample_collection()
         probe_session = self.probe.start_probe_session(gcmd)
         probe_session.run_probe(gcmd)
+
         pos = probe_session.pull_probed_results()[0]
-        touch_pos = self.pull_samples()
+        _, touch_pos = self.pull_samples()
+
         probe_session.end_probe_session()
         gcmd.respond_info(f"[LRT] {pos=} {touch_pos=}")
-        self._move(self.PARK_AT, self.TRAVEL_SPEED)
+        self._move(coords, self.TRAVEL_SPEED)
+        return pos, touch_pos
       
+    def cmd_PROBE_TOOL(self, gcmd):
+        coords = [
+            (50, 40, 10),
+            (70, 40, 10),
+            (70, 60, 10),
+            (50, 60, 10),
+            (60, 50, 10)
+        ]
+        data = []
+        for coord in coords:
+            pos = self.probe_at(coord, gcmd)
+            data.append([coord, *pos])
+        gcmd.respond_info(f"[LRT] Probe data: {data}")
+
     def get_status(self, eventtime):
         last_output = str(self.samples)
         return {'sample_len': len(self.samples), 'samples': last_output}
