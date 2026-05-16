@@ -4,6 +4,7 @@ import re
 import serial
 import logging
 import numpy as np
+import pandas as pd
 
 from serial import SerialException
 
@@ -194,7 +195,7 @@ class ToolTouchProbeExtension:
     def pull_samples(self):
         res = self.samples
         self.samples = []
-        return res, avg_coords(res)
+        return res
     
     def _move(self, coords, speed):
         toolhead = self.printer.lookup_object('toolhead')
@@ -207,18 +208,21 @@ class ToolTouchProbeExtension:
         probe_session.run_probe(gcmd)
 
         pos = probe_session.pull_probed_results()[0]
-        samples, touch_pos = self.pull_samples()
+        samples = self.pull_samples()
 
         probe_session.end_probe_session()
 
         self._move(coords, self.TRAVEL_SPEED)
-        return pos, touch_pos, samples
+        return pos, samples
 
     def cmd_LRT_PROBE(self, gcmd):
         curr_pos = self.printer.lookup_object('toolhead').get_position()
         new_pos = bounded_pos(curr_pos[:3])
-        pos, touch_pos, samples = self.probe_at(new_pos, gcmd)
-        gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
+        pos, samples = self.probe_at(new_pos, gcmd)
+        # gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
+        df = pd.DataFrame(samples)
+        gcmd.respond_info(f"[LRT] Sample stats at {new_pos}: {df.median()}")
+
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 10
@@ -238,18 +242,6 @@ class ToolTouchProbeExtension:
             (40, 42, H_PARK),
             (42, 42, H_PARK),
         ]
-        fine_coords = []
-        # fine_coords = [
-        #     (50, 35, H_PARK),
-        #     (55, 40, H_PARK),
-        #     (60, 45, H_PARK),
-        #     (65, 50, H_PARK),
-        #     (75, 50, H_PARK),
-        #     (65, 50, H_PARK),
-        #     (69, 55, H_PARK),
-        #     (71, 50, H_PARK),
-        #     (73, 55, H_PARK),
-        # ]
         coords = [*CALIB_COORDS, *PANEL_COORDS]
         coords = [*CALIB_COORDS]
         data = []
