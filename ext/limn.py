@@ -3,6 +3,7 @@
 import re
 import serial
 import logging
+import numpy as np
 
 from serial import SerialException
 
@@ -13,13 +14,13 @@ except ImportError:
 
 SERIAL_TIMER = 0.1
 
-def avg_coords(samples, scale=100):
-    if len(samples) > 12:
-        samples = samples[10:]
-    n = max(len(samples), 1) * scale
-    avg_x = sum(s[0] for s in samples) / n
-    avg_y = sum(s[1] for s in samples) / n
-    avg_z = sum(s[2] for s in samples) / n
+def avg_coords(samples):
+    if len(samples) > 4:
+        samples = samples[5:]
+    n = len(samples)
+    avg_x = sum(s[0] for s in samples) // n
+    avg_y = sum(s[1] for s in samples) // n
+    avg_z = sum(s[2] for s in samples) // n
     return avg_x, avg_y, avg_z
 
 
@@ -180,7 +181,7 @@ class ToolTouchProbeExtension:
 
         self._move(coords, self.TRAVEL_SPEED)
         return pos, touch_pos
-      
+
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 10
         rect_coords = [
@@ -191,17 +192,18 @@ class ToolTouchProbeExtension:
             (50, 70, H_PARK),
             (50, 35, H_PARK),
         ]
-        fine_coords = [
-            (50, 35, H_PARK),
-            (55, 40, H_PARK),
-            (60, 45, H_PARK),
-            (65, 50, H_PARK),
-            (75, 50, H_PARK),
-            (65, 50, H_PARK),
-            (69, 55, H_PARK),
-            (71, 50, H_PARK),
-            (73, 55, H_PARK),
-        ]
+        fine_coords = []
+        # fine_coords = [
+        #     (50, 35, H_PARK),
+        #     (55, 40, H_PARK),
+        #     (60, 45, H_PARK),
+        #     (65, 50, H_PARK),
+        #     (75, 50, H_PARK),
+        #     (65, 50, H_PARK),
+        #     (69, 55, H_PARK),
+        #     (71, 50, H_PARK),
+        #     (73, 55, H_PARK),
+        # ]
         coords = [*rect_coords, *fine_coords]
         data = []
         for coord in coords:
