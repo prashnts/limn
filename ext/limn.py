@@ -196,12 +196,12 @@ class ToolTouchProbeExtension:
         probe_session.run_probe(gcmd)
 
         pos = probe_session.pull_probed_results()[0]
-        _, touch_pos = self.pull_samples()
+        samples, touch_pos = self.pull_samples()
 
         probe_session.end_probe_session()
 
         self._move(coords, self.TRAVEL_SPEED)
-        return pos, touch_pos
+        return pos, touch_pos, samples
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 10
@@ -237,11 +237,12 @@ class ToolTouchProbeExtension:
         coords = [*CALIB_COORDS]
         data = []
         for cx, cy, cname in coords:
-            pos, touch_pos = self.probe_at((cx, cy, H_PARK), gcmd)
+            pos, touch_pos, samples = self.probe_at((cx, cy, H_PARK), gcmd)
             tchxy = touch_pos[0], touch_pos[1]
             coords = (cx, cy)
             data.append([coords, tchxy])
             gcmd.respond_info(f"[LRT] {coords=} {tchxy=} ({cname})")
+            gcmd.respond_info(f"[LRT] Samples: {samples}")
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
