@@ -30,10 +30,11 @@ PANEL_COORDS = [
     (66, 50, 'center'),
 ]
 CALIB_COORDS = [
-    (23, 73, 'top left'),
-    (110, 74, 'top right'),
-    (23, 27, 'bottom left'),
-    (110, 27, 'bottom right'),
+    (26, 70, 'top left'),
+    (106, 70, 'top right'),
+    (26, 30, 'bottom left'),
+    (106, 30, 'bottom right'),
+    (66, 50, 'center'),
 ]
 
 
@@ -223,6 +224,7 @@ class ToolTouchProbeExtension:
         #     (73, 55, H_PARK),
         # ]
         coords = [*CALIB_COORDS, *PANEL_COORDS]
+        coords = [*CALIB_COORDS]
         data = []
         for cx, cy, cname in coords:
             pos, touch_pos = self.probe_at((cx, cy, H_PARK), gcmd)
