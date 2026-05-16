@@ -250,7 +250,7 @@ class ToolTouchProbeExtension:
             prev_cx, prev_cy = 0, 0
             if data:
                 prev_tx, prev_ty = data[-1][1]
-                prev_cx, prev_cy = data[-1][0]
+                prev_cx, prev_cy, *_ = data[-1][0]
 
             data.append((coord, (tx, ty)))
             # print delta
