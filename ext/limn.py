@@ -216,7 +216,7 @@ class ToolTouchProbeExtension:
 
     def cmd_LRT_PROBE(self, gcmd):
         curr_pos = self.printer.lookup_object('toolhead').get_position()
-        new_pos = bounded_pos(curr_pos)
+        new_pos = bounded_pos(curr_pos[:3])
         pos, touch_pos, samples = self.probe_at(new_pos, gcmd)
         gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
 
