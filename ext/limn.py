@@ -192,17 +192,17 @@ class ToolTouchProbeExtension:
             (50, 35, H_PARK),
         ]
         fine_coords = [
-            (50, 35, H_PARK)
-            (55, 40, H_PARK)
-            (60, 45, H_PARK)
-            (65, 50, H_PARK)
-            (75, 50, H_PARK)
-            (65, 50, H_PARK)
-            (69, 55, H_PARK)
-            (71, 50, H_PARK)
-            (73, 55, H_PARK)
+            (50, 35, H_PARK),
+            (55, 40, H_PARK),
+            (60, 45, H_PARK),
+            (65, 50, H_PARK),
+            (75, 50, H_PARK),
+            (65, 50, H_PARK),
+            (69, 55, H_PARK),
+            (71, 50, H_PARK),
+            (73, 55, H_PARK),
         ]
-        coords = [*rect_coords, fine_coords]
+        coords = [*rect_coords, *fine_coords]
         data = []
         for coord in coords:
             pos, touch_pos = self.probe_at(coord, gcmd)
