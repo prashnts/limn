@@ -46,6 +46,17 @@ CALIB_COORDS = [
     (56, 40, 'ye'),
     (76, 50, 'center'),
 ]
+PANEL_XRANGE = (26, 106)
+PANEL_YRANGE = (30, 70)
+PANEL_ZHOME = 9
+
+def bounded_pos(pos):
+    xmin, xmax = PANEL_XRANGE
+    ymin, ymax = PANEL_YRANGE
+    x, y, z = pos
+    x = max(xmin, min(xmax, x))
+    y = max(ymin, min(ymax, y))
+    return x, y, PANEL_ZHOME
 
 
 class ToolTouchProbeExtension:
@@ -87,7 +98,7 @@ class ToolTouchProbeExtension:
             self.disconnect,
             desc=self.disconnect_help)
         self.gcode.register_command(
-            "LRT_PROBE", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
+            "LRT_PROBE", self.cmd_LRT_PROBE, desc="Probe tool using touch probe")
 
         self.printer.register_event_handler("klippy:connect", self.on_connect)
 
@@ -202,6 +213,12 @@ class ToolTouchProbeExtension:
 
         self._move(coords, self.TRAVEL_SPEED)
         return pos, touch_pos, samples
+
+    def cmd_LRT_PROBE(self, gcmd):
+        curr_pos = self.printer.lookup_object('toolhead').get_position()
+        new_pos = bounded_pos(curr_pos)
+        pos, touch_pos, samples = self.probe_at(new_pos, gcmd)
+        gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 10
