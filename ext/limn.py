@@ -17,6 +17,7 @@ SERIAL_TIMER = 0.1
 class ToolTouchProbeExtension:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.reactor = self.printer.get_reactor()
         self.gcode = self.printer.lookup_object('gcode')
         self.probe = self.printer.lookup_object('probe')
 
