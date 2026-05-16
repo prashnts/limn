@@ -141,7 +141,7 @@ class ToolTouchProbeExtension:
 
     def get_status(self, eventtime):
         last_output = str(self.samples)
-        return {'buffer_size': len(self.results), 'samples': last_output}
+        return {'sample_len': len(self.samples), 'samples': last_output}
 
 
 def load_config(config):
