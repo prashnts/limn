@@ -29,6 +29,12 @@ PANEL_COORDS = [
     (66, 30), # bottom
     (66, 50), # center
 ]
+CALIB_COORDS = [
+    (23, 73, 'top left'),
+    (110, 74, 'top right'),
+    (23, 27, 'bottom left'),
+    (110, 27, 'bottom right'),
+]
 
 
 class ToolTouchProbeExtension:
@@ -184,7 +190,6 @@ class ToolTouchProbeExtension:
         _, touch_pos = self.pull_samples()
 
         probe_session.end_probe_session()
-        gcmd.respond_info(f"[LRT] {coords=} {touch_pos=}")
 
         self._move(coords, self.TRAVEL_SPEED)
         return pos, touch_pos
@@ -219,12 +224,14 @@ class ToolTouchProbeExtension:
         #     (71, 50, H_PARK),
         #     (73, 55, H_PARK),
         # ]
-        coords = [*PANEL_COORDS]
+        coords = [*CALIB_COORDS]
         data = []
-        for coord in coords:
-            pos, touch_pos = self.probe_at((*coord, H_PARK), gcmd)
+        for cx, cy, cname in coords:
+            pos, touch_pos = self.probe_at((cx, cy, H_PARK), gcmd)
             tchxy = touch_pos[0], touch_pos[1]
-            data.append([coord, tchxy])
+            coords = (cx, cy)
+            data.append([coords, tchxy])
+            gcmd.respond_info(f"[LRT] {coords=} {tchxy=} ({cname})")
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
