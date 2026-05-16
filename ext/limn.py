@@ -23,11 +23,11 @@ def avg_coords(samples):
     return avg_x, avg_y
 
 PANEL_COORDS = [
-    (26, 50, 'left')
-    (106, 50, 'right')
-    (66, 70, 'top')
-    (66, 30, 'bottom')
-    (66, 50, 'center')
+    (26, 50, 'left'),
+    (106, 50, 'right'),
+    (66, 70, 'top'),
+    (66, 30, 'bottom'),
+    (66, 50, 'center'),
 ]
 CALIB_COORDS = [
     (23, 73, 'top left'),
