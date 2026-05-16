@@ -86,7 +86,8 @@ class ToolTouchProbeExtension:
 
     def _parse_touch(self, line: str):
         if 'LMNRT' in line:
-            vars = map(lambda x: x.split('='), line.split(': ')[-1].split(', '))
+            line = line.split('<<<')[1]
+            vars = map(lambda x: x.split('='), line.split(', '))
             return dict((k, int(v)) for k, v in vars)
 
     def _read_serial(self, eventtime):
