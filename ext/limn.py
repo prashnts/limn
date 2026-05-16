@@ -64,7 +64,7 @@ class ToolTouchProbeExtension:
         self.gcode.register_command(
             "LRT_PROBE", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
 
-        self.printer.register_event_handler("klippy:connect", self.send_data)
+        self.printer.register_event_handler("klippy:connect", self.on_connect)
 
 
     def on_connect(self):
