@@ -18,8 +18,8 @@ def avg_coords(samples):
     if len(samples) > 4:
         samples = samples[5:]
     n = len(samples)
-    avg_x = sum(s['x'] for s in samples) // n
-    avg_y = sum(s['y'] for s in samples) // n
+    avg_x = sum(s['x_raw'] for s in samples) // n
+    avg_y = sum(s['y_raw'] for s in samples) // n
     return avg_x, avg_y
 
 PANEL_COORDS = [
@@ -30,11 +30,21 @@ PANEL_COORDS = [
     (66, 50, 'center'),
 ]
 CALIB_COORDS = [
-    (26, 70, 'top left'),
-    (106, 70, 'top right'),
-    (26, 30, 'bottom left'),
-    (106, 30, 'bottom right'),
-    (66, 50, 'center'),
+    # (26, 70, 'top left'),
+    # (106, 70, 'top right'),
+    # (26, 30, 'bottom left'),
+    # (106, 30, 'bottom right'),
+    # (66, 50, 'center'),
+    (36, 50, 'x1'),
+    (46, 50, 'x2'),
+    (76, 50, 'x2'),
+    (56, 50, 'xa'),
+    (56, 50, 'xy'),
+    (56, 55, 'yb'),
+    (56, 60, 'yc'),
+    (56, 45, 'yd'),
+    (56, 40, 'ye'),
+    (76, 50, 'center'),
 ]
 
 
