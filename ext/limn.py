@@ -21,7 +21,7 @@ def avg_coords(samples):
     avg_x = sum(s[0] for s in samples) // n
     avg_y = sum(s[1] for s in samples) // n
     avg_z = sum(s[2] for s in samples) // n
-    return avg_x, avg_y, avg_z
+    return avg_y, avg_x, avg_z
 
 
 class ToolTouchProbeExtension:
@@ -187,10 +187,18 @@ class ToolTouchProbeExtension:
         rect_coords = [
             # Rect (loop)
             (50, 35, H_PARK),
+            (50, 35, H_PARK),
             (90, 35, H_PARK),
             (90, 70, H_PARK),
             (50, 70, H_PARK),
             (50, 35, H_PARK),
+            (45, 35, H_PARK),
+            (46, 35, H_PARK),
+            (40, 35, H_PARK),
+            (40, 40, H_PARK),
+            (40, 41, H_PARK),
+            (40, 42, H_PARK),
+            (42, 42, H_PARK),
         ]
         fine_coords = []
         # fine_coords = [
@@ -209,6 +217,7 @@ class ToolTouchProbeExtension:
         for coord in coords:
             pos, touch_pos = self.probe_at(coord, gcmd)
             data.append([coord, touch_pos])
+
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
     def get_status(self, eventtime):
