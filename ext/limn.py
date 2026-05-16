@@ -19,7 +19,6 @@ class ToolTouchProbeExtension:
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.probe = self.printer.lookup_object('probe')
-        self.toolhead = self.printer.lookup_object('toolhead')
 
 
         self.serial = None
