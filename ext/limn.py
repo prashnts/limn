@@ -29,6 +29,12 @@ class ToolTouchProbeExtension:
         self.baud = config.getint("baud", default=115200)
 
 
+        self.TOUCH_MIN_X = 40
+        self.TOUCH_AT = (50, 50)
+        self.PARK_AT = (50, 50, 10)
+        self.TRAVEL_SPEED = 50
+        self.Z_SPEED = 3
+
         self.read_timer = None
         self.read_buffer = ""
         self.read_queue = Queue()
@@ -47,8 +53,10 @@ class ToolTouchProbeExtension:
             self.cmd_Disconnect,
             desc=self.cmd_Disconnect_Help)
 
-    def start_probe(self):
+    def run_probe(self):
         self.gcode.run_script_from_command(cmd_str)
+
+
 
     def _parse_touch(self, line: str):
         pattern = r'.*xpt2046.* Touchscreen Update \[(\d+), (\d+)\], z = (\d+)'
@@ -135,11 +143,29 @@ class ToolTouchProbeExtension:
         self.is_printing = False
 
 
+    def begin_sample_collection(self):
+        self.samples = []
+
     def pull_samples(self):
         res = self.samples
         self.samples = []
         return res
-
+    
+    def _move(self, coords, speed):
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.manual_move(coords, speed)
+    
+    def cmd_PROBE_TOOL(self, gcmd):
+        self._move(self.PARK_AT, self.TRAVEL_SPEED)
+        self.begin_sample_collection()
+        probe_session = self.probe.start_probe_session(gcmd)
+        probe_session.run_probe(gcmd)
+        pos = probe_session.pull_probed_results()[0]
+        touch_pos = self.pull_samples()
+        probe_session.end_probe_session()
+        gcmd.respond_info(f"[LRT] {pos=} {touch_pos=}")
+        self._move(self.PARK_AT, self.TRAVEL_SPEED)
+      
     def get_status(self, eventtime):
         last_output = str(self.samples)
         return {'sample_len': len(self.samples), 'samples': last_output}
