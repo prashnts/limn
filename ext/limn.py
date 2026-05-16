@@ -13,10 +13,10 @@ except ImportError:
 
 SERIAL_TIMER = 0.1
 
-def avg_coords(samples):
+def avg_coords(samples, scale=100):
     if len(samples) > 12:
         samples = samples[10:]
-    n = max(len(samples), 1)
+    n = max(len(samples), 1) * scale
     avg_x = sum(s[0] for s in samples) / n
     avg_y = sum(s[1] for s in samples) / n
     avg_z = sum(s[2] for s in samples) / n
@@ -56,11 +56,11 @@ class ToolTouchProbeExtension:
 
 
         self.gcode.register_command(
-            "LRT_CONNECT", self.cmd_Connect, desc=self.cmd_Connect_Help)
+            "LRT_CONNECT", self.connect, desc=self.connect_help)
         self.gcode.register_command(
             "LRT_DISCONNECT",
-            self.cmd_Disconnect,
-            desc=self.cmd_Disconnect_Help)
+            self.disconnect,
+            desc=self.disconnect_help)
         self.gcode.register_command(
             "LRT_PROBE", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
 
@@ -68,7 +68,7 @@ class ToolTouchProbeExtension:
 
 
     def on_connect(self):
-        self.cmd_Connect(self.gcode)
+        self.connect(self.gcode)
 
     def _parse_touch(self, line: str):
         pattern = r'.*xpt2046.* Touchscreen Update \[(\d+), (\d+)\], z = (\d+)'
@@ -80,7 +80,7 @@ class ToolTouchProbeExtension:
 
     def _read_serial(self, eventtime):
         if self.signal_disconnect:
-            self.cmd_Disconnect()
+            self.disconnect()
             return self.reactor.NEVER
 
         while True:
@@ -89,7 +89,7 @@ class ToolTouchProbeExtension:
                 raw_bytes = self.serial.read()
             except SerialException:
                 logging.error("Unable to communicate with the Palette 2")
-                self.cmd_Disconnect()
+                self.disconnect()
                 return self.reactor.NEVER
 
             if len(raw_bytes):
@@ -122,8 +122,8 @@ class ToolTouchProbeExtension:
 
         return eventtime + SERIAL_TIMER
 
-    cmd_Connect_Help = "Connect to LRT via serial port"
-    def cmd_Connect(self, gcmd):
+    connect_help = "Connect to LRT via serial port"
+    def connect(self, gcmd):
         if self.serial:
             gcmd.respond_info("[LRT] Already connected")
             return
@@ -142,8 +142,8 @@ class ToolTouchProbeExtension:
         gcmd.respond_info("[LRT] Connected")
         self.read_timer = self.reactor.register_timer(self._read_serial, self.reactor.NOW)
 
-    cmd_Disconnect_Help = ("Disconnect from LRT")
-    def cmd_Disconnect(self, gcmd=None):
+    disconnect_help = ("Disconnect from LRT")
+    def disconnect(self, gcmd=None):
         self.gcode.respond_info("[LRT] Disconnecting")
         if self.serial:
             self.serial.close()
@@ -165,7 +165,6 @@ class ToolTouchProbeExtension:
     def _move(self, coords, speed):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.manual_move(coords, speed)
-    
 
     def probe_at(self, coords, gcmd):
         self._move(coords, self.TRAVEL_SPEED)
@@ -177,22 +176,37 @@ class ToolTouchProbeExtension:
         _, touch_pos = self.pull_samples()
 
         probe_session.end_probe_session()
-        gcmd.respond_info(f"[LRT] {pos=} {touch_pos=}")
+        gcmd.respond_info(f"[LRT] {coords=} {touch_pos=}")
+
         self._move(coords, self.TRAVEL_SPEED)
         return pos, touch_pos
       
     def cmd_PROBE_TOOL(self, gcmd):
-        coords = [
-            (50, 40, 10),
-            (70, 40, 10),
-            (70, 60, 10),
-            (50, 60, 10),
-            (60, 50, 10)
+        H_PARK = 10
+        rect_coords = [
+            # Rect (loop)
+            (50, 35, H_PARK),
+            (90, 35, H_PARK),
+            (90, 70, H_PARK),
+            (50, 70, H_PARK),
+            (50, 35, H_PARK),
         ]
+        fine_coords = [
+            (50, 35, H_PARK)
+            (55, 40, H_PARK)
+            (60, 45, H_PARK)
+            (65, 50, H_PARK)
+            (75, 50, H_PARK)
+            (65, 50, H_PARK)
+            (69, 55, H_PARK)
+            (71, 50, H_PARK)
+            (73, 55, H_PARK)
+        ]
+        coords = [*rect_coords, fine_coords]
         data = []
         for coord in coords:
-            pos = self.probe_at(coord, gcmd)
-            data.append([coord, *pos])
+            pos, touch_pos = self.probe_at(coord, gcmd)
+            data.append([coord, touch_pos])
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
     def get_status(self, eventtime):
