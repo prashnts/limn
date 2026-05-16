@@ -18,16 +18,16 @@ def avg_coords(samples):
     if len(samples) > 4:
         samples = samples[5:]
     n = len(samples)
-    avg_x = sum(s[0] for s in samples) // n
-    avg_y = sum(s[1] for s in samples) // n
+    avg_x = sum(s['x'] for s in samples) // n
+    avg_y = sum(s['y'] for s in samples) // n
     return avg_x, avg_y
 
 PANEL_COORDS = [
-    (26, 50), # left
-    (106, 50), # right
-    (66, 70), # top
-    (66, 30), # bottom
-    (66, 50), # center
+    (26, 50, 'left')
+    (106, 50, 'right')
+    (66, 70, 'top')
+    (66, 30, 'bottom')
+    (66, 50, 'center')
 ]
 CALIB_COORDS = [
     (23, 73, 'top left'),
@@ -85,12 +85,9 @@ class ToolTouchProbeExtension:
         self.connect(self.gcode)
 
     def _parse_touch(self, line: str):
-        pattern = r'.*xpt2046.* Touchscreen Update \[(\d+), (\d+)\], z = (\d+)'
-        match = re.match(pattern, line)
-        if match:
-            x, y, z = match.groups()
-            return float(x), float(y), float(z)
-        return None
+        if 'LMNRT' in line:
+            vars = map(lambda x: x.split('='), line.split(': ')[-1].split(', '))
+            return dict((k, int(v)) for k, v in vars)
 
     def _read_serial(self, eventtime):
         if self.signal_disconnect:
@@ -224,7 +221,7 @@ class ToolTouchProbeExtension:
         #     (71, 50, H_PARK),
         #     (73, 55, H_PARK),
         # ]
-        coords = [*CALIB_COORDS]
+        coords = [*CALIB_COORDS, *PANEL_COORDS]
         data = []
         for cx, cy, cname in coords:
             pos, touch_pos = self.probe_at((cx, cy, H_PARK), gcmd)
