@@ -20,7 +20,7 @@ def avg_coords(samples):
     n = len(samples)
     avg_x = sum(s[0] for s in samples) // n
     avg_y = sum(s[1] for s in samples) // n
-    return avg_y, avg_x
+    return avg_x, avg_y
 
 
 class ToolTouchProbeExtension:
