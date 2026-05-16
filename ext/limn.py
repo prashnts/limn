@@ -101,6 +101,9 @@ class ToolTouchProbeExtension:
         self.gcode.register_command(
             "LRT_PROBE", self.cmd_LRT_PROBE, desc="Probe tool using touch probe")
 
+        self.gcode.register_command(
+            "LRT_PROBE_TOOL", self.cmd_PROBE_TOOL, desc="Probe tool using touch probe")
+
         self.printer.register_event_handler("klippy:connect", self.on_connect)
 
 
@@ -209,49 +212,53 @@ class ToolTouchProbeExtension:
 
         pos = probe_session.pull_probed_results()[0]
         samples = self.pull_samples()
+        data = [{'x': s['x'], 'y': s['y'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
 
         probe_session.end_probe_session()
 
         self._move(coords, self.TRAVEL_SPEED)
-        return pos, samples
+        return pos, pd.DataFrame(data)
 
     def cmd_LRT_PROBE(self, gcmd):
         curr_pos = self.printer.lookup_object('toolhead').get_position()
         new_pos = bounded_pos(curr_pos[:3])
-        pos, samples = self.probe_at(new_pos, gcmd)
+        pos, df = self.probe_at(new_pos, gcmd)
         # gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
-        df = pd.DataFrame(samples)
         gcmd.respond_info(f"[LRT] Sample stats at {new_pos}: {df.median()}")
 
 
     def cmd_PROBE_TOOL(self, gcmd):
-        H_PARK = 10
-        rect_coords = [
+        H_PARK = 9
+        touch_coords = [
             # Rect (loop)
-            (50, 35, H_PARK),
-            (50, 35, H_PARK),
-            (90, 35, H_PARK),
-            (90, 70, H_PARK),
-            (50, 70, H_PARK),
-            (50, 35, H_PARK),
-            (45, 35, H_PARK),
-            (46, 35, H_PARK),
-            (40, 35, H_PARK),
-            (40, 40, H_PARK),
-            (40, 41, H_PARK),
-            (40, 42, H_PARK),
-            (42, 42, H_PARK),
+            (50, 40, H_PARK),
+            (50, 41, H_PARK),
+            (50, 42, H_PARK),
+            (50, 45, H_PARK),
+            (51, 45, H_PARK),
+            (52, 45, H_PARK),
+            (55, 45, H_PARK),
+            (60, 45, H_PARK),
         ]
-        coords = [*CALIB_COORDS, *PANEL_COORDS]
-        coords = [*CALIB_COORDS]
+        coords = [*touch_coords]
         data = []
-        for cx, cy, cname in coords:
-            pos, touch_pos, samples = self.probe_at((cx, cy, H_PARK), gcmd)
-            tchxy = touch_pos[0], touch_pos[1]
-            coords = (cx, cy)
-            data.append([coords, tchxy])
-            gcmd.respond_info(f"[LRT] {coords=} {tchxy=} ({cname})")
-            gcmd.respond_info(f"[LRT] Samples: {samples}")
+        for coord in coords:
+            pos, df = self.probe_at(coord, gcmd)
+            tx, ty, *_ = df.median()
+            gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
+            prev_tx, prev_ty = 0, 0
+            prev_cx, prev_cy = 0, 0
+            if data:
+                prev_tx, prev_ty = data[-1][1]
+                prev_cx, prev_cy = data[-1][0]
+
+            data.append((coord, (tx, ty)))
+            # print delta
+            dtx = tx - prev_tx
+            dty = ty - prev_ty
+            dcx = pos[0] - prev_cx
+            dcy = pos[1] - prev_cy
+            gcmd.respond_info(f"[LRT] Delta from last point: {dtx=} {dty=} {dcx=} {dcy=}")
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
