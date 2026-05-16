@@ -20,8 +20,7 @@ def avg_coords(samples):
     n = len(samples)
     avg_x = sum(s[0] for s in samples) // n
     avg_y = sum(s[1] for s in samples) // n
-    avg_z = sum(s[2] for s in samples) // n
-    return avg_y, avg_x, avg_z
+    return avg_y, avg_x
 
 
 class ToolTouchProbeExtension:
@@ -216,7 +215,9 @@ class ToolTouchProbeExtension:
         data = []
         for coord in coords:
             pos, touch_pos = self.probe_at(coord, gcmd)
-            data.append([coord, touch_pos])
+            posxy = coord[0], coord[1]
+            tchxy = touch_pos[0], touch_pos[1]
+            data.append([posxy, tchxy])
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
