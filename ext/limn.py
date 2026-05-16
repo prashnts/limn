@@ -247,25 +247,13 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        coords = [*touch_coords]
+        coords = [*(touch_coords * 5)]
         data = []
         for coord in coords:
             pos, df = self.probe_at(coord, gcmd)
             tx, ty, *_ = df.median()
             gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
-            prev_tx, prev_ty = 0, 0
-            prev_cx, prev_cy = 0, 0
-            if data:
-                prev_tx, prev_ty = data[-1][1]
-                prev_cx, prev_cy, *_ = data[-1][0]
-
-            data.append((coord, (tx, ty)))
-            # print delta
-            dtx = tx - prev_tx
-            dty = ty - prev_ty
-            dcx = pos[0] - prev_cx
-            dcy = pos[1] - prev_cy
-            gcmd.respond_info(f"[LRT] Delta from last point: {dtx=} {dty=} {dcx=} {dcy=}")
+            data.append((coord, (tx, ty, coord[2])))
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
 
