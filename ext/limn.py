@@ -52,11 +52,21 @@ def bounded_pos(pos):
 def gen_bb_coords(inset=5):
     xmin, xmax = PANEL_XRANGE
     ymin, ymax = PANEL_YRANGE
+    ratio = (xmax - xmin) / (ymax - ymin)
+    inset_x = inset * ratio
+    inset_y = inset / ratio
+
     return [
-        (xmin + inset, ymin + inset, PANEL_ZHOME),
-        (xmax - inset, ymin + inset, PANEL_ZHOME),
-        (xmax - inset, ymax - inset, PANEL_ZHOME),
-        (xmin + inset, ymax - inset, PANEL_ZHOME),
+        # corners
+        (xmin + inset_x, ymin + inset_y, PANEL_ZHOME),
+        (xmax - inset_x, ymin + inset_y, PANEL_ZHOME),
+        (xmax - inset_x, ymax - inset_y, PANEL_ZHOME),
+        (xmin + inset_x, ymax - inset_y, PANEL_ZHOME),
+        # midways
+        (xmin + (xmax - xmin) / 2, ymin + inset_y, PANEL_ZHOME),
+        (xmin + (xmax - xmin) / 2, ymax - inset_y, PANEL_ZHOME),
+        (xmin + inset_x, ymin + (ymax - ymin) / 2, PANEL_ZHOME),
+        (xmax - inset_x, ymin + (ymax - ymin) / 2, PANEL_ZHOME),
     ]
 
 
