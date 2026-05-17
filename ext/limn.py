@@ -49,6 +49,15 @@ def bounded_pos(pos):
     y = max(ymin, min(ymax, y))
     return x, y, PANEL_ZHOME
 
+def gen_bb_grid(step=10):
+    xmin, xmax = PANEL_XRANGE
+    ymin, ymax = PANEL_YRANGE
+    coords = []
+    for x in range(xmin, xmax + 1, step):
+        for y in range(ymin, ymax + 1, step):
+            coords.append((x, y, PANEL_ZHOME))
+    return coords
+
 def gen_bb_coords(inset=5):
     xmin, xmax = PANEL_XRANGE
     ymin, ymax = PANEL_YRANGE
@@ -257,6 +266,7 @@ class ToolTouchProbeExtension:
             (62, 55, H_PARK),
         ]
         calibration_corners = [*gen_bb_coords(inset=10), *gen_bb_coords(inset=15), *gen_bb_coords(inset=22)]
+        calibration_corners = [*gen_bb_grid(step=5), *gen_bb_grid(step=10)]
         data = []
         for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
