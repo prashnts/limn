@@ -51,14 +51,44 @@ def bounded_pos(pos):
     y = max(ymin, min(ymax, y))
     return x, y, PANEL_ZHOME
 
-def gen_bb_grid(step=10):
-    xmin, xmax = PANEL_XRANGE
-    ymin, ymax = PANEL_YRANGE
-    coords = []
-    for x in range(xmin, xmax + 1, step):
-        for y in range(ymin, ymax + 1, step):
+# def gen_bb_grid(step=10):
+#     xmin, xmax = PANEL_XRANGE
+#     ymin, ymax = PANEL_YRANGE
+#     coords = []
+#     for x in range(xmin, xmax + 1, step):
+#         for y in range(ymin, ymax + 1, step):
+#             coords.append((x, y, PANEL_ZHOME))
+#     return coords
+
+PANEL_XRANGE = (26, 106)
+# PANEL_XRANGE = (45, 106)
+PANEL_YRANGE = (30, 70)
+# PANEL_YRANGE = (40, 70)
+PANEL_ZHOME = 9
+
+def gen_bb_grid(*, ox=5, oy=5, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YRANGE):
+    xmin, xmax = xrange
+    ymin, ymax = yrange
+
+    coords = [
+        (xmin, ymin, 20),
+        (xmin, ymax, 20),
+        (xmax, ymin, 20),
+        (xmax, ymax, 20),
+    ]    
+    xmin += ox
+    xmax -= ox
+    ymin += oy
+    ymax -= oy
+
+    stepx = (xmax - xmin) // (nx - 1)
+    stepy = (ymax - ymin) // (ny - 1)
+    
+    for x in range(xmin, xmax + 1, stepx):
+        for y in range(ymin, ymax + 1, stepy):
             coords.append((x, y, PANEL_ZHOME))
     return coords
+    # return pd.DataFrame(coords, columns=['x', 'y', 'z'])
 
 def gen_bb_coords(inset=5):
     xmin, xmax = PANEL_XRANGE
@@ -267,7 +297,7 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        calibration_corners = [*gen_bb_grid(step=13), *gen_bb_grid(step=19)]
+        calibration_corners = [*gen_bb_grid(nx=4, ny=3), *gen_bb_grid(nx=3, ny=3, xrange=(45, 70), yrange=(30, 60))]
         data = []
         for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
