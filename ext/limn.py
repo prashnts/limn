@@ -71,10 +71,10 @@ def gen_bb_grid(*, ox=5, oy=5, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YR
     ymin, ymax = yrange
 
     coords = [
-        (xmin, ymin, 20),
-        (xmin, ymax, 20),
-        (xmax, ymin, 20),
-        (xmax, ymax, 20),
+        (xmin, ymin, PANEL_ZHOME),
+        (xmin, ymax, PANEL_ZHOME),
+        (xmax, ymin, PANEL_ZHOME),
+        (xmax, ymax, PANEL_ZHOME),
     ]    
     xmin += ox
     xmax -= ox
