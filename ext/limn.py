@@ -236,7 +236,8 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        coords = [*(CALIB_COORDS * 3), *(touch_coords)]
+        calibration_corners = [(c[0], c[1], H_PARK) for c in CALIB_COORDS]
+        coords = [*(calibration_corners * 3), *(touch_coords)]
         data = []
         for coord in coords:
             pos, df = self.probe_at(coord, gcmd)
