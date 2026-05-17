@@ -37,8 +37,10 @@ CALIB_COORDS = [
     (106, 30, 'bottom right'),
     (66, 50, 'center'),
 ]
-PANEL_XRANGE = (26, 106)
-PANEL_YRANGE = (30, 70)
+# PANEL_XRANGE = (26, 106)
+PANEL_XRANGE = (45, 106)
+# PANEL_YRANGE = (30, 70)
+PANEL_YRANGE = (40, 70)
 PANEL_ZHOME = 9
 
 def bounded_pos(pos):
@@ -265,7 +267,7 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        calibration_corners = [*gen_bb_grid(step=25), *gen_bb_grid(step=13)]
+        calibration_corners = [*gen_bb_grid(step=13), *gen_bb_grid(step=19)]
         data = []
         for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
