@@ -49,6 +49,16 @@ def bounded_pos(pos):
     y = max(ymin, min(ymax, y))
     return x, y, PANEL_ZHOME
 
+def gen_bb_coords(inset=5):
+    xmin, xmax = PANEL_XRANGE
+    ymin, ymax = PANEL_YRANGE
+    return [
+        (xmin + inset, ymin + inset, PANEL_ZHOME),
+        (xmax - inset, ymin + inset, PANEL_ZHOME),
+        (xmax - inset, ymax - inset, PANEL_ZHOME),
+        (xmin + inset, ymax - inset, PANEL_ZHOME),
+    ]
+
 
 class ToolTouchProbeExtension:
     def __init__(self, config):
@@ -236,10 +246,9 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        calibration_corners = [(c[0], c[1], H_PARK) for c in CALIB_COORDS]
-        coords = [*(calibration_corners * 3), *(touch_coords)]
+        calibration_corners = [*gen_bb_coords(inset=10), *gen_bb_coords(inset=15), *gen_bb_coords(inset=22)]
         data = []
-        for coord in coords:
+        for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
             tx, ty, *_ = df.median()
             gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
