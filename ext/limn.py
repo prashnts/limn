@@ -233,7 +233,7 @@ class ToolTouchProbeExtension:
 
         pos = probe_session.pull_probed_results()[0]
         samples = self.pull_samples()
-        data = [{'x': s['x'], 'y': s['y'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
+        data = [{'x': s['x_raw'], 'y': s['y_raw'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
 
         probe_session.end_probe_session()
 
