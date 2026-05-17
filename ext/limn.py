@@ -31,21 +31,11 @@ PANEL_COORDS = [
     (66, 50, 'center'),
 ]
 CALIB_COORDS = [
-    # (26, 70, 'top left'),
-    # (106, 70, 'top right'),
-    # (26, 30, 'bottom left'),
-    # (106, 30, 'bottom right'),
-    # (66, 50, 'center'),
-    (36, 50, 'x1'),
-    (46, 50, 'x2'),
-    (76, 50, 'x2'),
-    (56, 50, 'xa'),
-    (56, 50, 'xy'),
-    (56, 55, 'yb'),
-    (56, 60, 'yc'),
-    (56, 45, 'yd'),
-    (56, 40, 'ye'),
-    (76, 50, 'center'),
+    (26, 70, 'top left'),
+    (106, 70, 'top right'),
+    (26, 30, 'bottom left'),
+    (106, 30, 'bottom right'),
+    (66, 50, 'center'),
 ]
 PANEL_XRANGE = (26, 106)
 PANEL_YRANGE = (30, 70)
@@ -231,23 +221,22 @@ class ToolTouchProbeExtension:
         H_PARK = 9
         touch_coords = [
             # Rect (loop)
+            (50, 50, H_PARK),
+            (55, 50, H_PARK),
+            (65, 40, H_PARK),
             (50, 40, H_PARK),
             (50, 41, H_PARK),
-            (50, 42, H_PARK),
-            (50, 45, H_PARK),
-            (51, 45, H_PARK),
-            (52, 45, H_PARK),
-            (55, 45, H_PARK),
-            (60, 45, H_PARK),
             (70, 45, H_PARK),
+            (68, 42, H_PARK),
             (45, 45, H_PARK),
             (80, 45, H_PARK),
             (80, 35, H_PARK),
+            (75, 52, H_PARK),
             (45, 55, H_PARK),
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        coords = [*(touch_coords * 5)]
+        coords = [*(CALIB_COORDS * 3), *(touch_coords)]
         data = []
         for coord in coords:
             pos, df = self.probe_at(coord, gcmd)
