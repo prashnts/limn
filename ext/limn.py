@@ -265,8 +265,7 @@ class ToolTouchProbeExtension:
             (62, 52, H_PARK),
             (62, 55, H_PARK),
         ]
-        calibration_corners = [*gen_bb_coords(inset=10), *gen_bb_coords(inset=15), *gen_bb_coords(inset=22)]
-        calibration_corners = [*gen_bb_grid(step=5), *gen_bb_grid(step=10)]
+        calibration_corners = [*gen_bb_grid(step=25), *gen_bb_grid(step=13)]
         data = []
         for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
