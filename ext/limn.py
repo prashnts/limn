@@ -68,18 +68,15 @@ PANEL_YRANGE = (40, 70)
 PANEL_ZHOME = 9
 
 def gen_bb_grid(*, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YRANGE):
-    # xmin, xmax = PANEL_XRANGE
-    # ymin, ymax = PANEL_YRANGE
-    
-    # coords = [
-    #     (xmin, ymin, PANEL_ZHOME),
-    #     (xmin, ymax, PANEL_ZHOME),
-    #     (xmax, ymin, PANEL_ZHOME),
-    #     (xmax, ymax, PANEL_ZHOME),
-    # ]
-    coords = []
     xmin, xmax = xrange
     ymin, ymax = yrange
+
+    coords = [
+        # (xmin, ymin, PANEL_ZHOME),
+        # (xmin, ymax, PANEL_ZHOME),
+        # (xmax, ymin, PANEL_ZHOME),
+        # (xmax, ymax, PANEL_ZHOME),
+    ]
 
     stepx = (xmax - xmin) // (nx - 1)
     stepy = (ymax - ymin) // (ny - 1)
@@ -287,10 +284,8 @@ class ToolTouchProbeExtension:
         H_PARK = 9
 
         calibration_corners = [
-            *gen_bb_grid(nx=2, ny=5, xrange=(60, 65), yrange=(50, 55)),
-            *gen_bb_grid(nx=5, ny=2, xrange=(70, 75), yrange=(60, 65)),
-            *gen_bb_grid(nx=3, ny=3, xrange=(60, 75), yrange=(50, 65)),
-            *gen_bb_grid(nx=3, ny=3, xrange=(80, 100), yrange=(50, 65)),
+            *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(55, 70), yrange=(48, 60)),
         ]
         data = []
         for coord in calibration_corners:
