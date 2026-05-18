@@ -60,26 +60,25 @@ def bounded_pos(pos):
 #             coords.append((x, y, PANEL_ZHOME))
 #     return coords
 
-PANEL_XRANGE = (26, 106)
+# PANEL_XRANGE = (26, 106)
 # PANEL_XRANGE = (45, 106)
-PANEL_YRANGE = (30, 70)
-# PANEL_YRANGE = (40, 70)
+PANEL_XRANGE = (45, 106)
+# PANEL_YRANGE = (30, 70)
+PANEL_YRANGE = (40, 70)
 PANEL_ZHOME = 9
 
-def gen_bb_grid(*, ox=5, oy=5, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YRANGE):
+def gen_bb_grid(*, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YRANGE):
+    xmin, xmax = PANEL_XRANGE
+    ymin, ymax = PANEL_YRANGE
+    
+    coords = [
+        (xmin, ymin, 20),
+        (xmin, ymax, 20),
+        (xmax, ymin, 20),
+        (xmax, ymax, 20),
+    ]
     xmin, xmax = xrange
     ymin, ymax = yrange
-
-    coords = [
-        (xmin, ymin, PANEL_ZHOME),
-        (xmin, ymax, PANEL_ZHOME),
-        (xmax, ymin, PANEL_ZHOME),
-        (xmax, ymax, PANEL_ZHOME),
-    ]    
-    xmin += ox
-    xmax -= ox
-    ymin += oy
-    ymax -= oy
 
     stepx = (xmax - xmin) // (nx - 1)
     stepy = (ymax - ymin) // (ny - 1)
@@ -88,7 +87,6 @@ def gen_bb_grid(*, ox=5, oy=5, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YR
         for y in range(ymin, ymax + 1, stepy):
             coords.append((x, y, PANEL_ZHOME))
     return coords
-    # return pd.DataFrame(coords, columns=['x', 'y', 'z'])
 
 def gen_bb_coords(inset=5):
     xmin, xmax = PANEL_XRANGE
@@ -141,6 +139,7 @@ class ToolTouchProbeExtension:
 
 
         self.samples = []
+        self.is_collecting_samples = False
 
 
         self.gcode.register_command(
@@ -206,7 +205,7 @@ class ToolTouchProbeExtension:
 
             coords = self._parse_touch(text_line)
 
-            if coords:
+            if coords and self.is_collecting_samples:
                 self.samples.append(coords)
 
         return eventtime + SERIAL_TIMER
@@ -244,7 +243,11 @@ class ToolTouchProbeExtension:
 
 
     def begin_sample_collection(self):
+        self.is_collecting_samples = True
         self.samples = []
+    
+    def end_sample_collection(self):
+        self.is_collecting_samples = False
 
     def pull_samples(self):
         res = self.samples
@@ -265,6 +268,7 @@ class ToolTouchProbeExtension:
         samples = self.pull_samples()
         data = [{'x': s['x_raw'], 'y': s['y_raw'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
 
+        self.end_sample_collection()
         probe_session.end_probe_session()
 
         self._move(coords, self.TRAVEL_SPEED)
@@ -280,24 +284,13 @@ class ToolTouchProbeExtension:
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
-        touch_coords = [
-            # Rect (loop)
-            (50, 50, H_PARK),
-            (55, 50, H_PARK),
-            (65, 40, H_PARK),
-            (50, 40, H_PARK),
-            (50, 41, H_PARK),
-            (70, 45, H_PARK),
-            (68, 42, H_PARK),
-            (45, 45, H_PARK),
-            (80, 45, H_PARK),
-            (80, 35, H_PARK),
-            (75, 52, H_PARK),
-            (45, 55, H_PARK),
-            (62, 52, H_PARK),
-            (62, 55, H_PARK),
+
+        calibration_corners = [
+            *gen_bb_grid(nx=2, ny=5, xrange=(60, 65), yrange=(50, 55)),
+            *gen_bb_grid(nx=5, ny=2, xrange=(70, 75), yrange=(60, 65)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(60, 75), yrange=(50, 65)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(80, 100), yrange=(50, 65)),
         ]
-        calibration_corners = [*gen_bb_grid(nx=4, ny=3), *gen_bb_grid(nx=3, ny=3, xrange=(45, 70), yrange=(30, 60))]
         data = []
         for coord in calibration_corners:
             pos, df = self.probe_at(coord, gcmd)
