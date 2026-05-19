@@ -86,6 +86,36 @@ def gen_bb_grid(*, nx=10, ny=5, xrange=PANEL_XRANGE, yrange=PANEL_YRANGE):
             coords.append((x, y, PANEL_ZHOME))
     return coords
 
+def find_affine_transform(source_points, target_points):
+    """
+    Calculates the 3D affine transformation matrix 'M' and translation 't'
+    such that: target = source @ M.T + t
+
+
+    Returns:
+        M: (3, 3) Transformation matrix
+        t: (3,) Translation vector
+        full_matrix: (4, 4) Complete matrix
+    """
+    src = np.asarray(source_points, dtype=np.float64)
+    tgt = np.asarray(target_points, dtype=np.float64)
+
+    ones = np.ones((src.shape[0], 1))
+    src_aug = np.concatenate([src, ones], axis=1)
+
+    params, _, _, _ = np.linalg.lstsq(src_aug, tgt, rcond=None)
+
+    M = params[:3, :].T
+    t = params[3, :]
+
+    full_matrix = np.eye(4)
+    full_matrix[:3, :3] = M
+    full_matrix[:3, 3] = t
+
+    return M, t, full_matrix
+
+
+
 def gen_bb_coords(inset=5):
     xmin, xmax = PANEL_XRANGE
     ymin, ymax = PANEL_YRANGE
@@ -282,21 +312,37 @@ class ToolTouchProbeExtension:
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
+        N_SAMPLES = 3
 
         calibration_corners = [
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(55, 70), yrange=(48, 60)),
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 60), yrange=(50, 60)),
-            *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
+            # *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
+            *gen_bb_grid(nx=4, ny=3, xrange=(25, 50), yrange=(65, 75)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(50, 70), yrange=(40, 55)),
         ]
         data = []
         for coord in calibration_corners:
-            pos, df = self.probe_at(coord, gcmd)
-            tx, ty, *_ = df.median()
-            gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
-            data.append((coord, (tx, ty, coord[2])))
+            for i in range(N_SAMPLES):
+                pos, df = self.probe_at(coord, gcmd)
+                tx, ty, *_ = df.median()
+                gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
+                data.append((coord, (tx, ty, coord[2])))
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
+
+    def cmd_LRT_Z_PROBE(self, gcmd):
+        self.probe.probe_offsets
+
+
+    def cmd_LRT_CALIBRATE(self, gcmd):
+        # survey the grid, 5 times/
+        coords = [
+            *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
+        ]
+
 
     def get_status(self, eventtime):
         last_output = str(self.samples)
