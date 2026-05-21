@@ -351,9 +351,12 @@ class ToolTouchProbeExtension:
         N_SAMPLES = 5
 
         points = [
-            (65, 35, PANEL_ZHOME),
-            (25, 50, PANEL_ZHOME),
-            (105, 65, PANEL_ZHOME),
+            # (65, 35, PANEL_ZHOME),
+            # (25, 50, PANEL_ZHOME),
+            # (105, 65, PANEL_ZHOME),
+            (100, 52, PANEL_ZHOME),
+            (65, 30, PANEL_ZHOME),
+            (25, 70, PANEL_ZHOME),
         ]
         data = []
         for k, coord in enumerate(points):
