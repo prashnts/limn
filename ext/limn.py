@@ -348,7 +348,7 @@ class ToolTouchProbeExtension:
         gcmd.respond_info(f"[LRT] Sample stats at {new_pos}: {df.median()}")
 
     def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
-        N_SAMPLES = 5
+        N_SAMPLES = 4
 
         points = [
             # (65, 35, PANEL_ZHOME),
@@ -374,7 +374,7 @@ class ToolTouchProbeExtension:
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
-        N_SAMPLES = 3
+        N_SAMPLES = 1
 
         if not self.touch_params:
             gcmd.respond_info("[LRT] Calibrating touch panel.")
