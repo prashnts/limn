@@ -145,12 +145,12 @@ def get_touch_transform(data):
     Xd3 = data[2][0][0]
     Yd3 = data[2][0][1]
 
-    Xt1 = data[0][1][1]
-    Yt1 = data[0][1][0]
-    Xt2 = data[1][1][1]
-    Yt2 = data[1][1][0]
-    Xt3 = data[2][1][1]
-    Yt3 = data[2][1][0]
+    Xt1 = data[0][1][0]
+    Yt1 = data[0][1][1]
+    Xt2 = data[1][1][0]
+    Yt2 = data[1][1][1]
+    Xt3 = data[2][1][0]
+    Yt3 = data[2][1][1]
 
     A = (((Xd1 * (Yt2 - Yt3)) + (Xd2 * (Yt3 - Yt1)) + (Xd3 * (Yt1 - Yt2)))
          /((Xt1 * (Yt2 - Yt3)) + (Xt2 * (Yt3 - Yt1)) + (Xt3 * (Yt1 - Yt2))))
@@ -332,7 +332,7 @@ class ToolTouchProbeExtension:
 
         pos = probe_session.pull_probed_results()[0]
         samples = self.pull_samples()
-        data = [{'x': s['x_raw'], 'y': s['y_raw'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
+        data = [{'x': s['y_raw'], 'y': s['x_raw'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
 
         self.end_sample_collection()
         probe_session.end_probe_session()
