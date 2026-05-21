@@ -322,9 +322,12 @@ class ToolTouchProbeExtension:
             # *gen_bb_grid(nx=4, ny=3, xrange=(25, 50), yrange=(65, 75)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(50, 70), yrange=(40, 55)),
-            (100, 52, PANEL_ZHOME),
-            (65, 30, PANEL_ZHOME),
-            (25, 70, PANEL_ZHOME),
+            # (100, 52, PANEL_ZHOME),
+            # (65, 30, PANEL_ZHOME),
+            # (25, 70, PANEL_ZHOME),
+            (60, 30, PANEL_ZHOME),
+            (30, 50, PANEL_ZHOME),
+            (90, 70, PANEL_ZHOME),
         ]
         data = []
         for coord in calibration_corners:
