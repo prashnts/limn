@@ -318,10 +318,13 @@ class ToolTouchProbeExtension:
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(55, 70), yrange=(48, 60)),
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 60), yrange=(50, 60)),
-            *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
+            # *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
             # *gen_bb_grid(nx=4, ny=3, xrange=(25, 50), yrange=(65, 75)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(50, 70), yrange=(40, 55)),
+            (100, 52, H_PARK),
+            (65, 37, H_PARK),
+            (30, 70, H_PARK),
         ]
         data = []
         for coord in calibration_corners:
