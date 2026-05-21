@@ -136,6 +136,33 @@ def gen_bb_coords(inset=5):
         (xmax - inset_x, ymin + (ymax - ymin) / 2, PANEL_ZHOME),
     ]
 
+def get_touch_transform(data):
+    # Taken from ATMEL application note.
+    Xd1 = data[0][0][0]
+    Yd1 = data[0][0][1]
+    Xd2 = data[1][0][0]
+    Yd2 = data[1][0][1]
+    Xd3 = data[2][0][0]
+    Yd3 = data[2][0][1]
+
+    Xt1 = data[0][1][1]
+    Yt1 = data[0][1][0]
+    Xt2 = data[1][1][1]
+    Yt2 = data[1][1][0]
+    Xt3 = data[2][1][1]
+    Yt3 = data[2][1][0]
+
+    A = ((Xd1 * (Yt2 - Yt3) + Xd2 * (Yt3 - Yt1) + Xd3 * (Yt1 - Yt2))
+         /(Xt1 * (Yt2 - Yt3) + Xt2 * (Yt3 - Yt1) + Xt3 * (Yt1 - Yt2)))
+    B = (A * (Xt3 - Xt2) + Xd2 - Xd3) / (Yt2 - Yt3)
+    C = Xd3 - (A * Xt3) - (B * Yt3)
+
+    D = ((Yd1 * (Yt2 - Yt3) + Yd2 * (Yt3 - Yt1) + Yd3 * (Yt1 - Yt2))
+         /(Xt1 * (Yt2 - Yt3) + Xt2 * (Yt3 - Yt1) + Xt3 * (Yt1 - Yt2)))
+    E = (D * (Xt3 - Xt2) + Yd2 - Yd3)/(Yt2 - Yt3)
+    F = Yd3 - (D * Xt3) - (E * Yt3)
+
+    return (A, B, C, D, E, F)
 
 class ToolTouchProbeExtension:
     def __init__(self, config):
@@ -168,6 +195,7 @@ class ToolTouchProbeExtension:
 
         self.samples = []
         self.is_collecting_samples = False
+        self.touch_params = None
 
 
         self.gcode.register_command(
@@ -285,6 +313,15 @@ class ToolTouchProbeExtension:
     def _move(self, coords, speed):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.manual_move(coords, speed)
+    
+    def _transform_touch_coords(self, x_raw, y_raw):
+        if not self.touch_params:
+            return x_raw, y_raw
+
+        A, B, C, D, E, F = self.touch_params
+        x_transformed = A * x_raw + B * y_raw + C
+        y_transformed = D * x_raw + E * y_raw + F
+        return x_transformed, y_transformed
 
     def probe_at(self, coords, gcmd):
         self._move(coords, self.TRAVEL_SPEED)
@@ -309,10 +346,34 @@ class ToolTouchProbeExtension:
         # gcmd.respond_info(f"[LRT] Probed at {new_pos}, got {samples=} {touch_pos=}")
         gcmd.respond_info(f"[LRT] Sample stats at {new_pos}: {df.median()}")
 
+    def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
+        N_SAMPLES = 5
+
+        points = [
+            (65, 35, PANEL_ZHOME),
+            (25, 52.5, PANEL_ZHOME),
+            (105, 70, PANEL_ZHOME),
+        ]
+        data = []
+        for k, coord in enumerate(points):
+            touch_samples = []
+            for i in range(N_SAMPLES):
+                _, df = self.probe_at(coord, gcmd)
+                tx, ty, *_ = df.median()
+                touch_samples.append((tx, ty))
+            touch_coord = np.median(touch_samples, axis=0)
+            data.append((coord, touch_coord))
+            gcmd.respond_info(f"[LRT] Probed [{k}/{len(points)}] at {coord}, got {touch_coord}")
+        
+        self.touch_params = get_touch_transform(data)
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
-        N_SAMPLES = 15
+        N_SAMPLES = 3
+
+        if not self.touch_params:
+            gcmd.respond_info("[LRT] Calibrating touch panel.")
+            self.cmd_LRT_TOUCH_CALIBRATE(gcmd)
 
         calibration_corners = [
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
@@ -320,20 +381,15 @@ class ToolTouchProbeExtension:
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 60), yrange=(50, 60)),
             # *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
             # *gen_bb_grid(nx=4, ny=3, xrange=(25, 50), yrange=(65, 75)),
-            # *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
+            *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
             # *gen_bb_grid(nx=3, ny=3, xrange=(50, 70), yrange=(40, 55)),
-            # (100, 52, PANEL_ZHOME),
-            # (65, 30, PANEL_ZHOME),
-            # (25, 70, PANEL_ZHOME),
-            (65, 35, PANEL_ZHOME),
-            (25, 52.5, PANEL_ZHOME),
-            (105, 70, PANEL_ZHOME),
         ]
         data = []
         for coord in calibration_corners:
             for i in range(N_SAMPLES):
                 pos, df = self.probe_at(coord, gcmd)
                 tx, ty, *_ = df.median()
+                tx, ty = self._transform_touch_coords(tx, ty)
                 gcmd.respond_info(f"[LRT] Probed [{i}/{N_SAMPLES}] at {coord}, got {tx=} {ty=}")
                 data.append((coord, (tx, ty, coord[2])))
 
