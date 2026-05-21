@@ -312,7 +312,7 @@ class ToolTouchProbeExtension:
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
-        N_SAMPLES = 8
+        N_SAMPLES = 12
 
         calibration_corners = [
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
@@ -325,9 +325,9 @@ class ToolTouchProbeExtension:
             # (100, 52, PANEL_ZHOME),
             # (65, 30, PANEL_ZHOME),
             # (25, 70, PANEL_ZHOME),
-            (60, 30, PANEL_ZHOME),
-            (30, 50, PANEL_ZHOME),
-            (90, 70, PANEL_ZHOME),
+            (65, 32, PANEL_ZHOME),
+            (25, 50, PANEL_ZHOME),
+            (100, 70, PANEL_ZHOME),
         ]
         data = []
         for coord in calibration_corners:
