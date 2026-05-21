@@ -390,8 +390,7 @@ class ToolTouchProbeExtension:
         for coord in calibration_corners:
             for i in range(N_SAMPLES):
                 pos, df = self.probe_at(coord, gcmd)
-                tx, ty, *_ = df.median()
-                tx, ty = self._transform_touch_coords(tx, ty)
+                tx, ty = self._transform_touch_coords(df)
                 gcmd.respond_info(f"[LRT] Probed [{i}/{N_SAMPLES}] at {coord}, got {tx=} {ty=}")
                 data.append((coord, (tx, ty, coord[2])))
 
