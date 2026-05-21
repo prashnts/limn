@@ -312,7 +312,7 @@ class ToolTouchProbeExtension:
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
-        N_SAMPLES = 12
+        N_SAMPLES = 15
 
         calibration_corners = [
             # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
@@ -325,16 +325,16 @@ class ToolTouchProbeExtension:
             # (100, 52, PANEL_ZHOME),
             # (65, 30, PANEL_ZHOME),
             # (25, 70, PANEL_ZHOME),
-            (65, 32, PANEL_ZHOME),
-            (25, 50, PANEL_ZHOME),
-            (100, 70, PANEL_ZHOME),
+            (65, 35, PANEL_ZHOME),
+            (25, 52.5, PANEL_ZHOME),
+            (105, 70, PANEL_ZHOME),
         ]
         data = []
         for coord in calibration_corners:
             for i in range(N_SAMPLES):
                 pos, df = self.probe_at(coord, gcmd)
                 tx, ty, *_ = df.median()
-                gcmd.respond_info(f"[LRT] Probed at {coord}, got {tx=} {ty=}")
+                gcmd.respond_info(f"[LRT] Probed [{i}/{N_SAMPLES}] at {coord}, got {tx=} {ty=}")
                 data.append((coord, (tx, ty, coord[2])))
 
         gcmd.respond_info(f"[LRT] Probe data: {data}")
