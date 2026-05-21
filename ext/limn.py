@@ -367,6 +367,7 @@ class ToolTouchProbeExtension:
             gcmd.respond_info(f"[LRT] Probed [{k}/{len(points)}] at {coord}, got {touch_coord}")
         
         self.touch_params = get_touch_transform(data)
+        gcmd.respond_info(f"[LRT] Got {self.touch_params=}")
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
