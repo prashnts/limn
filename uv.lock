@@ -862,6 +862,7 @@ dependencies = [
     { name = "adafruit-blinka" },
     { name = "adafruit-circuitpython-pn532" },
     { name = "ipython" },
+    { name = "mpremote" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyserial" },
@@ -881,6 +882,7 @@ requires-dist = [
     { name = "adafruit-blinka", specifier = ">=9.0.4" },
     { name = "adafruit-circuitpython-pn532", specifier = ">=2.4.8" },
     { name = "ipython", specifier = ">=9.12.0" },
+    { name = "mpremote", specifier = ">=1.28.0" },
     { name = "numpy", specifier = ">=2.4.4" },
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "pyserial", specifier = ">=3.5" },
@@ -987,6 +989,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ca/84/620cc3f7e3adf6f5067e10f4dbae71295d8f9e16d5d3f9ef97c40f2f592c/mistune-3.2.1.tar.gz", hash = "sha256:7c8e5501d38bac1582e067e46c8343f17d57ea1aaa735823f3aba1fd59c88a28", size = 98003, upload-time = "2026-05-03T14:33:22.312Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/7f/a946aa4f8752b37102b41e64dca18a1976ac705c3a0d1dfe74d820a02552/mistune-3.2.1-py3-none-any.whl", hash = "sha256:78cdb0ba5e938053ccf63651b352508d2efa9411dc8810bfb05f2dc5140c0048", size = 53749, upload-time = "2026-05-03T14:33:20.551Z" },
+]
+
+[[package]]
+name = "mpremote"
+version = "1.28.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "platformdirs" },
+    { name = "pyserial" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/20/1b/d008342d1b018fb60e1196bf72a164ea71a567f924db11934f0e3a0a10bc/mpremote-1.28.0.tar.gz", hash = "sha256:fdb5626be83dff4e53c0184f8950814cb519b524dba7f1f8b1668aa477257a31", size = 31412, upload-time = "2026-04-06T13:21:14.976Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0f/d7/634a63290002a9df2708e05983fc769447d64f074ac2e8d8990316c70fd0/mpremote-1.28.0-py3-none-any.whl", hash = "sha256:2df2a50f3c8098cae8c732dbf2541e7e58185e7896513b45d05196901e049334", size = 36098, upload-time = "2026-04-06T13:21:13.368Z" },
 ]
 
 [[package]]

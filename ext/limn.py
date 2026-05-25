@@ -217,8 +217,8 @@ class ToolTouchProbeExtension:
         self.connect(self.gcode)
 
     def _parse_touch(self, line: str):
-        if 'LMNRT' in line:
-            line = line.split('<<<')[1]
+        if 'RTP' in line:
+            line = line.split('>>>')[1]
             vars = map(lambda x: x.split('='), line.split(', '))
             return dict((k, int(v)) for k, v in vars)
 
