@@ -5,11 +5,10 @@
 import time
 import select
 import sys
-from machine import UART, Pin, ADC, Timer
+from machine import UART, Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
 
-# uart_in = UART(1, 115200, timeout=10)
-uart_in = sys.stdin.buffer
+wdt = WDT(timeout=1000)
 uart_out = UART(0, 115200, timeout=0, tx=Pin(12), rx=Pin(13))
 npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
@@ -27,7 +26,6 @@ def teeprint(info, line):
     line = TAG + info + '>>>' + line + ">>>"
     if _enable_debug:
         print(line)
-    # uart_in.write((line + '\n').encode())
 
 def _pulse_power_pin(pin):
     pin.on()
@@ -35,12 +33,16 @@ def _pulse_power_pin(pin):
     pin.off()
 
 def turn_on_power():
+    global POWER_STATE
     _pulse_power_pin(PIN_PWR_ON)
     teeprint("power", "turned on")
+    POWER_STATE = True
 
 def turn_off_power():
+    global POWER_STATE
     _pulse_power_pin(PIN_PWR_OFF)
     teeprint("power", "turned off")
+    POWER_STATE = False
 
 def ping(t):
     teeprint("ping", f"t={time.ticks_ms()}")
@@ -50,21 +52,27 @@ def ping(t):
     npx[0] = (0, 0, 0)
     npx.write()
 
+def cb_probe_off(t):
+    PIN_PROBE_OUT.off()
+    teeprint("probe", "turned off")
+
 
 teeprint("booting", EMBLEM)
 
 timer_hello = Timer(-1)
 timer_hello.init(period=5000, mode=Timer.PERIODIC, callback=ping)
+timer_pulse_probe = Timer(-1)
 
+touch_detected_at = 0
 
 turn_off_power()
 
 while True:
-    _c = select.select([uart_in], [], [], 0.01)
+    _c = select.select([sys.stdin.buffer], [], [], 0.01)
     if _c[0]:
         chars = ''
         while True:
-            chr = uart_in.read(1)
+            chr = sys.stdin.buffer.read(1)
             if chr == b'\r' or chr == b'\n':
                 break
             chars += chr.decode()
@@ -84,6 +92,11 @@ while True:
             npx[0] = (120, 0, 50)
             npx.write()
             print(chain_data.decode())
+
+            if b'has_touch=True' in chain_data:
+                touch_detected_at = time.ticks_ms()
+                PIN_PROBE_OUT.on()
+                timer_pulse_probe.init(period=10, mode=Timer.ONE_SHOT, callback=cb_probe_off)
     except Exception:
         teeprint("error", "failed to read from uart_out")
 
@@ -95,14 +108,12 @@ while True:
         detect_value = ADC_DETECT.read_u16()
         if detect_value > 32000 and detect_value < 33000:
             turn_on_power()
-        POWER_STATE = True
     if detect_value > 55000 and POWER_STATE:
         teeprint("probe_removed", f"{detect_value=}")
         turn_off_power()
-        POWER_STATE = False
 
-    # time.sleep_ms(50)
     npx[0] = (0, 0, 0) if not POWER_STATE else (0, 80, 20)
     npx.write()
+    wdt.feed()
 
     
