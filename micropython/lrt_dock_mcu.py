@@ -101,6 +101,7 @@ while True:
         teeprint("error", "failed to read from uart_out")
 
     detect_value = ADC_DETECT.read_u16()
+    teeprint("detect_value", f"{detect_value=}")
 
     if detect_value > 32000 and detect_value < 33000 and not POWER_STATE:
         teeprint("probe_detected", f"{detect_value=}")
