@@ -72,6 +72,7 @@ while True:
     if _c[0]:
         chars = ''
         while True:
+            print("Waiting for command...")
             chr = sys.stdin.buffer.read(1)
             if chr == b'\r' or chr == b'\n':
                 break
