@@ -14,7 +14,7 @@ npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_ON = Pin(8, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_OFF = Pin(7, Pin.OUT, Pin.PULL_DOWN)
-ADC_DETECT = ADC(Pin(29, Pin.IN))
+ADC_DETECT = ADC(Pin(29, Pin.IN))  
 
 POWER_STATE = False
 
@@ -94,9 +94,9 @@ while True:
             print(chain_data.decode())
 
             if b'has_touch=True' in chain_data:
-                touch_detected_at = time.ticks_ms()
                 PIN_PROBE_OUT.on()
-                timer_pulse_probe.init(period=10, mode=Timer.ONE_SHOT, callback=cb_probe_off)
+                time.sleep_ms(8)
+                PIN_PROBE_OUT.off()
     except Exception:
         teeprint("error", "failed to read from uart_out")
 
