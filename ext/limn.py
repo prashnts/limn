@@ -5,6 +5,7 @@ import serial
 import logging
 import numpy as np
 import pandas as pd
+import json
 
 from serial import SerialException
 
@@ -218,10 +219,13 @@ class ToolTouchProbeExtension:
 
     def _parse_touch(self, line: str):
         if 'RTP' in line:
-            line = line.split('>>>')[1]
-            vars = map(lambda x: x.split('='), line.split(', '))
-            return dict((k, int(v)) for k, v in vars)
-
+            segments = line.split('>>>')
+            if len(segments) == 5 and segments[2] == 'touch_point':
+                try:
+                    return json.loads(segments[3])
+                except json.JSONDecodeError:
+                    return None
+                
     def _read_serial(self, eventtime):
         if self.signal_disconnect:
             self.disconnect()
@@ -332,7 +336,7 @@ class ToolTouchProbeExtension:
 
         pos = probe_session.pull_probed_results()[0]
         samples = self.pull_samples()
-        data = [{'x': s['y_raw'], 'y': s['x_raw'], 'cx': pos[0], 'cy': pos[1]} for s in samples]
+        data = [{'x': s['coord'][0], 'y': s['coord'][1], 'cx': pos[0], 'cy': pos[1]} for s in samples]
 
         self.end_sample_collection()
         probe_session.end_probe_session()

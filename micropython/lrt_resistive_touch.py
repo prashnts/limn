@@ -3,14 +3,14 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-from machine import UART, Pin, ADC, reset
+import json
+from machine import UART, Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
 
 
+wdt = WDT(timeout=3000)
 PANEL_PINS = [28, 26, 27, 29]
 XP, XM, YP, YM = PANEL_PINS
-
-TOUCH_OUT_PIN = Pin(2, Pin.OUT, Pin.PULL_DOWN)
 
 uart_in = UART(0, 115200, timeout=10)
 uart_out = UART(1, 115200, timeout=10)
@@ -62,50 +62,87 @@ def get_points():
 
     return x, y, z
 
-try:
-    uart_in = UART(0, 115200, timeout=10)
-    uart_out = UART(1, 115200, timeout=10)
+uart_in = UART(0, 115200, timeout=10)
+uart_out = UART(1, 115200, timeout=10)
+timer_hello = Timer(-1)
+timer_restore_led = Timer(-1)
 
-    def teeprint(info, line):
-        line = TAG + info + '>>>' + line + ">>>"
-        if _enable_debug:
-            print(line)
-        uart_in.write((line + '\n').encode())
+# GRB
+MCU_LED_COLOR = (0x46, 0, 0x70)
+ACT_COLOR = (0x0, 0x6D, 0x70)
+LED_OFF = (0x0, 0x0, 0x0)
+TOUCH_LED_COLOR = (0x94, 0x12, 0x2F)
 
+
+def teeprint(info, line):
+    line = TAG + info + '>>>' + line + ">>>"
+    if _enable_debug:
+        print(line)
+    uart_in.write((line + '\n').encode())
+
+
+def ping(t):
+    teeprint("ping", f"t={time.ticks_ms()}")
+    # GRB
+    npx[0] = ACT_COLOR
+    npx.write()
+    time.sleep_ms(500)
+    restore_led()
+
+def restore_led(t=None):
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+
+def on_boot():
     teeprint("booting", EMBLEM)
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+    timer_hello.init(period=7141, mode=Timer.PERIODIC, callback=ping)
+    timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
+    uart_out.write(b'reset()\n')
 
-    while True:
-        cmd = uart_in.read()
-        if cmd:
-            if b'calibrate()' in cmd:
-                uart_out.write(b'calibrate()\n')
-            npx[0] = (80, 40, 10)
-            npx.write()
-        
-        chain_data = uart_out.read()
+on_boot()
+
+while True:
+    cmd = uart_in.read()
+    if cmd:
+        if b'calibrate()' in cmd:
+            uart_out.write(b'calibrate()\n')
+        if b'debug_on()' in cmd:
+            uart_out.write(b'debug_on()\n')
+            _enable_debug = True
+        if b'debug_off()' in cmd:
+            uart_out.write(b'debug_off()\n')
+            _enable_debug = False
+        if b'reset()' in cmd:
+            uart_out.write(b'reset()\n')
+            reset()
+        npx[0] = LED_OFF
+        npx.write()
+    
+    chain_data = None
+    if uart_out.any():
+        chain_data = uart_out.readline()
         if chain_data:
-            if _enable_debug:
-                print(chain_data.decode())
+            print(chain_data.decode())
             uart_in.write(chain_data)
 
-        touch_point = get_points()
-        has_touch = touch_point[2] > 5000
+    touch_point = get_points()
+    has_touch = touch_point[2] > 5000
 
-        if has_touch:
-            teeprint('touch_point', f'{has_touch=},{touch_point=}')
-            TOUCH_OUT_PIN.on()
-
-        if has_touch or chain_data:
-            npx[0] = (120, 0, 50)
-            npx.write()
-
-        time.sleep_ms(8)
-        TOUCH_OUT_PIN.off()
-        npx[0] = (10, 10, 8)
+    if has_touch:
+        payload = {
+            'has_touch': has_touch,
+            'coord': touch_point,
+        }
+        teeprint('touch_point', json.dumps(payload))
+        npx[0] = TOUCH_LED_COLOR
         npx.write()
-except Exception:
-    # Wait a few seconds and reset.
-    npx[0] = (10, 240, 100)
-    npx.write()     
-    time.sleep(2)
-    reset()
+    elif chain_data:
+        npx[0] = ACT_COLOR
+        npx.write()
+    else:
+        npx[0] = MCU_LED_COLOR
+        npx.write()
+
+    wdt.feed()
