@@ -5,11 +5,11 @@
 import time
 import select
 import sys
-from machine import UART, Pin, ADC, Timer, WDT
+from machine import UART, Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 
-wdt = WDT(timeout=1000)
-uart_out = UART(0, 115200, timeout=0, tx=Pin(12), rx=Pin(13))
+wdt = WDT(timeout=3000)
+uart_out = UART(0, 115200, timeout=30, tx=Pin(12), rx=Pin(13))
 npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_ON = Pin(8, Pin.OUT, Pin.PULL_DOWN)
@@ -36,40 +36,73 @@ def turn_on_power():
     global POWER_STATE
     _pulse_power_pin(PIN_PWR_ON)
     teeprint("power", "turned on")
-    POWER_STATE = True
 
 def turn_off_power():
     global POWER_STATE
     _pulse_power_pin(PIN_PWR_OFF)
     teeprint("power", "turned off")
-    POWER_STATE = False
-
-def ping(t):
-    teeprint("ping", f"t={time.ticks_ms()}")
-    npx[0] = (0, 80, 20)
-    npx.write()
-    time.sleep_ms(100)
-    npx[0] = (0, 0, 0)
-    npx.write()
 
 def cb_probe_off(t):
     PIN_PROBE_OUT.off()
     teeprint("probe", "turned off")
 
 
-teeprint("booting", EMBLEM)
-
 timer_hello = Timer(-1)
-timer_hello.init(period=5000, mode=Timer.PERIODIC, callback=ping)
-timer_pulse_probe = Timer(-1)
+timer_restore_led = Timer(-1)
 
-touch_detected_at = 0
+# GRB
+MCU_LED_COLOR = (0x46, 0, 0x70)
+ACT_COLOR = (0x0, 0x6D, 0x70)
+LED_OFF = (0x0, 0x0, 0x0)
+TOUCH_LED_COLOR = (0x94, 0x12, 0x2F)
 
-turn_off_power()
+def ping(t):
+    teeprint("ping", f"t={time.ticks_ms()}")
+    # GRB
+    npx[0] = ACT_COLOR
+    npx.write()
+    # time.sleep_ms(500)
+    # restore_led()
+
+def restore_led(t=None):
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+
+def on_boot():
+    teeprint("booting", EMBLEM)
+    turn_off_power()
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+    timer_hello.init(period=7141, mode=Timer.PERIODIC, callback=ping)
+    timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
+    uart_out.write(b'reset()\n')
+
+on_boot()
+
 
 in_buffer = sys.stdin.buffer
+probe_on_at = None
 
 while True:
+    try:
+        _c = select.select([uart_out], [], [], 0.01)
+        if _c[0]:
+            chain_data = uart_out.readline()
+            if b'"has_touch": true' in chain_data:
+                if probe_on_at is None:
+                    PIN_PROBE_OUT.on()
+                    probe_on_at = time.ticks_ms()
+            npx[0] = ACT_COLOR
+            npx.write()
+            print(chain_data.decode())
+
+    except Exception:
+        teeprint("error", "failed to read from uart_out")
+    
+    if probe_on_at is not None and time.ticks_ms() - probe_on_at > 8:
+        PIN_PROBE_OUT.off()
+        probe_on_at = None
+
     _c = select.select([in_buffer], [], [], 0.01)
     if _c[0]:
         chars = ''
@@ -88,23 +121,18 @@ while True:
             turn_on_power()
         if 'power_off()' in cmd:
             turn_off_power()
+        if 'debug_on()' in cmd:
+            uart_out.write(b'debug_on()\n')
+            _enable_debug = True
+        if 'debug_off()' in cmd:
+            uart_out.write(b'debug_off()\n')
+            _enable_debug = False
+        if 'reset()' in cmd:
+            uart_out.write(b'reset()\n')
+            reset()
 
-    try:
-        chain_data = uart_out.readline()
-        if chain_data:
-            npx[0] = (120, 0, 50)
-            npx.write()
-            print(chain_data.decode())
-
-            if b'has_touch=True' in chain_data:
-                PIN_PROBE_OUT.on()
-                time.sleep_ms(8)
-                PIN_PROBE_OUT.off()
-    except Exception:
-        teeprint("error", "failed to read from uart_out")
 
     detect_value = ADC_DETECT.read_u16()
-    teeprint("detect_value", f"{detect_value=}")
 
     if detect_value > 32000 and detect_value < 33000 and not POWER_STATE:
         teeprint("probe_detected", f"{detect_value=}")
@@ -112,9 +140,12 @@ while True:
         detect_value = ADC_DETECT.read_u16()
         if detect_value > 32000 and detect_value < 33000:
             turn_on_power()
-    if detect_value > 55000 and POWER_STATE:
+            print("Probe detected and power turned on")
+            POWER_STATE = True
+    elif detect_value > 55000 and POWER_STATE:
         teeprint("probe_removed", f"{detect_value=}")
         turn_off_power()
+        POWER_STATE = False
 
     npx[0] = (0, 0, 0) if not POWER_STATE else (0, 80, 20)
     npx.write()

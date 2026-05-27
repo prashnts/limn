@@ -3,10 +3,12 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-from machine import UART, Pin, ADC
+import json
+from machine import UART, Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 
 
+wdt = WDT(timeout=3000)
 FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]
 FSR_Y = [29, 28, 26, 27]
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
@@ -17,16 +19,25 @@ uart_out = UART(1, 115200, timeout=10) # not used
 npx = NeoPixel(Pin(16), 1)
 
 _adc_cutoff = 2000
-_adc_calibs = [2000 for _ in FSR_Y]
 _enable_debug = True
 TAG = ">>>FSR>>>"
 EMBLEM = "Limn - FSR Alignment v1"
 
+timer_hello = Timer(-1)
+timer_restore_led = Timer(-1)
+
+# GRB
+MCU_LED_COLOR = (0x61, 0x34, 0x24)
+ACT_COLOR = (0x0, 0x6D, 0x70)
+LED_OFF = (0x0, 0x0, 0x0)
+TOUCH_LED_COLOR = (0x46, 0, 0x70)
+
+
 def teeprint(info, line):
-    line = TAG + info + '>>>' + line + ">>>"
+    line = TAG + info + '>>>' + line + ">>>\r\n"
     if _enable_debug:
         print(line)
-    uart_in.write((line + '\n').encode())
+    uart_in.write((line).encode())
 
 def read_fsr():
     evenvalues = []
@@ -61,7 +72,7 @@ def calibrate_fsr():
     prev_samples = []
     prev_variances = []
     tolerance = 500
-    npx[0] = (0, 200, 0)
+    npx[0] = ACT_COLOR
     npx.write()
     while True:
         values, _ = read_fsr()
@@ -75,9 +86,9 @@ def calibrate_fsr():
         prev_variances.append(variance)
         if len(prev_variances) > max_samples * 10 and sum(prev_variances) / len(prev_variances) < tolerance:
             break
-        teeprint("calibrating...", f"{max_adc=},{variance=}")
+        teeprint("calibrating", f"{max_adc=}")
     _adc_cutoff = max(prev_samples) * 1.2
-    teeprint("ADC calibration complete", f"{_adc_cutoff=}")
+    teeprint("calibrated", f"{_adc_cutoff=}")
 
 
 def _debug_preview(values):
@@ -89,24 +100,46 @@ def _debug_preview(values):
     print(preview)
 
 
+def ping(t):
+    teeprint("ping", f"t={time.ticks_ms()}")
+    npx[0] = ACT_COLOR
+    npx.write()
+    time.sleep_ms(200)
+    restore_led()
 
-teeprint("booting", EMBLEM)
-calibrate_fsr()
+def restore_led(t=None):
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+
+def on_boot():
+    teeprint("booting", EMBLEM)
+    npx[0] = MCU_LED_COLOR
+    npx.write()
+    timer_hello.init(period=2571, mode=Timer.PERIODIC, callback=ping)
+    timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
+    calibrate_fsr()
+
+on_boot()
 
 while True:
     cmd = uart_in.readline()
     if cmd:
-        npx[0] = (80, 40, 10)
-        npx.write()
         if b'calibrate()' in cmd:
             calibrate_fsr()
+        if b'debug_on()' in cmd:
+            _enable_debug = True
+        if b'debug_off()' in cmd:
+            _enable_debug = False
+        if b'reset()' in cmd:
+            reset()
+        npx[0] = LED_OFF
+        npx.write()
 
     chain_data = uart_out.readline()
     if chain_data:
         if _enable_debug:
             print(chain_data.decode())
         uart_in.write(chain_data)
-
 
     sensor_values, touch_coords = read_fsr()
 
@@ -115,18 +148,22 @@ while True:
     n_touches = len(touch_coords)
 
     if n_touches != 0:
-        teeprint('sample', f'{n_touches=},{touch_coords=},{max_value=}')
+        payload = {
+            'has_touch': has_touch,
+            'n': n_touches,
+            'coords': touch_coords,
+            'max': max_value,
+        }
+        teeprint('sample', json.dumps(payload))
         if _enable_debug:
             _debug_preview(sensor_values)
     if has_touch:
-        c_red = min(255, n_touches * 10)
-        c_green = min(128, max_value // 256)
-        c_blue = min(128, sum(sum(pt) for pt in touch_coords) * 2)
-        npx[0] = (c_blue, c_red, c_green)
+        npx[0] = TOUCH_LED_COLOR
+        npx.write()
+    else:
+        npx[0] = MCU_LED_COLOR
         npx.write()
 
-    time.sleep_ms(5)
-    npx[0] = (10, 10, 8)
-    npx.write()
+    wdt.feed()
 
     
