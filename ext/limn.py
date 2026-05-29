@@ -1,6 +1,7 @@
 #
 
 import re
+import random
 import serial
 import logging
 import numpy as np
@@ -216,15 +217,34 @@ class ToolTouchProbeExtension:
 
     def on_connect(self):
         self.connect(self.gcode)
+        self.write_queue.put('debug_on()')
 
     def _parse_touch(self, line: str):
-        if 'RTP' in line:
-            segments = line.split('>>>')
-            if len(segments) == 5 and segments[2] == 'touch_point':
-                try:
-                    return json.loads(segments[3])
-                except json.JSONDecodeError:
-                    return None
+        if not '>>>' in line:
+            return None
+        # self.gcode.respond_info(line.strip())
+        segments = line.split('>>>')
+
+        try:
+            data = json.loads(segments[3])
+        except (json.JSONDecodeError, IndexError):
+            data = {}    
+
+        if segments[2] == 'touch_point':
+            return data if 'coord' in data else None
+        if segments[2] == 'sample':
+            if 'coords' in data and type(data['coords']) == list:
+                coords = [tuple(x) for x in data['coords']]
+                preview = '+-' * 8 + '+'
+                for y in range(8):
+                    preview += '\n|' + '|'.join(['*' if (x, y) in coords else ' ' for x in range(4)]) + '|'
+                preview += '\n' + '+-' * 8 + '+\n'
+                self.gcode.respond_info(line)
+                self.gcode.respond_info(preview)
+        if segments[2] == 'ping':
+            # self.gcode.respond_info(line.strip())
+            ...
+
                 
     def _read_serial(self, eventtime):
         if self.signal_disconnect:
@@ -236,7 +256,8 @@ class ToolTouchProbeExtension:
             try:
                 raw_bytes = self.serial.read()
             except SerialException:
-                logging.error("Unable to communicate with the Palette 2")
+                logging.error("Unable to communicate with LRT dock.")
+                self.gcode.respond_info("ERROR - Unable to communicate with LRT dock.")
                 self.disconnect()
                 return self.reactor.NEVER
 
@@ -270,6 +291,28 @@ class ToolTouchProbeExtension:
 
         return eventtime + SERIAL_TIMER
 
+
+    def _write_serial(self, eventtime):
+        while not self.write_queue.empty():
+            try:
+                text_line = self.write_queue.get_nowait()
+            except Empty:
+                continue
+
+            if text_line:
+                l = text_line.strip()
+                terminated_line = "%s\r\n" % (l)
+                try:
+                    self.serial.write(terminated_line.encode())
+                    self.gcode.respond_info("cmd written")
+                except SerialException:
+                    self.gcode.respond_info("ERROR - Unable to communicate with LRT dock.")
+                    logging.error("Unable to communicate with LRT")
+                    # self.signal_disconnect = True
+                    # return self.reactor.NEVER
+                return eventtime + SERIAL_TIMER
+        return eventtime + SERIAL_TIMER
+
     connect_help = "Connect to LRT via serial port"
     def connect(self, gcmd):
         if self.serial:
@@ -289,6 +332,7 @@ class ToolTouchProbeExtension:
     
         gcmd.respond_info("[LRT] Connected")
         self.read_timer = self.reactor.register_timer(self._read_serial, self.reactor.NOW)
+        self.write_timer = self.reactor.register_timer(self._write_serial, self.reactor.NOW)
 
     disconnect_help = ("Disconnect from LRT")
     def disconnect(self, gcmd=None):
@@ -300,9 +344,13 @@ class ToolTouchProbeExtension:
         self.reactor.unregister_timer(self.read_timer)
         self.read_timer = None
         self.is_printing = False
+        self.reactor.unregister_timer(self.write_timer)
+        self.write_timer = None
 
 
     def begin_sample_collection(self):
+        if not self.serial:
+            self.connect(self.gcode)
         self.is_collecting_samples = True
         self.samples = []
     
@@ -326,7 +374,7 @@ class ToolTouchProbeExtension:
         A, B, C, D, E, F = self.touch_params
         x_transformed = A * df.x + B * df.y + C
         y_transformed = D * df.x + E * df.y + F
-        return np.mean(x_transformed), np.mean(y_transformed)
+        return np.median(x_transformed), np.median(y_transformed)
 
     def probe_at(self, coords, gcmd):
         self._move(coords, self.TRAVEL_SPEED)
@@ -336,12 +384,13 @@ class ToolTouchProbeExtension:
 
         pos = probe_session.pull_probed_results()[0]
         samples = self.pull_samples()
-        data = [{'x': s['coord'][0], 'y': s['coord'][1], 'cx': pos[0], 'cy': pos[1]} for s in samples]
+        data = [{'x': s['coord'][1], 'y': s['coord'][0], 'cx': pos[0], 'cy': pos[1]} for s in samples]
+
+        self._move(coords, self.TRAVEL_SPEED)
 
         self.end_sample_collection()
         probe_session.end_probe_session()
 
-        self._move(coords, self.TRAVEL_SPEED)
         return pos, pd.DataFrame(data)
 
     def cmd_LRT_PROBE(self, gcmd):
@@ -352,14 +401,11 @@ class ToolTouchProbeExtension:
         gcmd.respond_info(f"[LRT] Sample stats at {new_pos}: {df.median()}")
 
     def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
-        N_SAMPLES = 4
+        N_SAMPLES = 2
 
         points = [
-            # (65, 35, PANEL_ZHOME),
-            # (25, 50, PANEL_ZHOME),
-            # (105, 65, PANEL_ZHOME),
             (100, 52, PANEL_ZHOME),
-            (65, 30, PANEL_ZHOME),
+            (65, 40, PANEL_ZHOME),
             (25, 70, PANEL_ZHOME),
         ]
         data = []
@@ -369,12 +415,13 @@ class ToolTouchProbeExtension:
                 _, df = self.probe_at(coord, gcmd)
                 tx, ty, *_ = df.median()
                 touch_samples.append((tx, ty))
+
             touch_coord = np.median(touch_samples, axis=0)
             data.append((coord, touch_coord))
-            gcmd.respond_info(f"[LRT] Probed [{k}/{len(points)}] at {coord}, got {touch_coord}")
+            gcmd.respond_info(f"[LRT][{k + 1}/{len(points)}] At {coord}, got {touch_coord.round(2)} ")
         
         self.touch_params = get_touch_transform(data)
-        gcmd.respond_info(f"[LRT] Got {self.touch_params=}")
+        gcmd.respond_info(f"[LRT] {self.touch_params=}")
 
     def cmd_PROBE_TOOL(self, gcmd):
         H_PARK = 9
@@ -385,36 +432,21 @@ class ToolTouchProbeExtension:
             self.cmd_LRT_TOUCH_CALIBRATE(gcmd)
 
         calibration_corners = [
-            # *gen_bb_grid(nx=4, ny=4, xrange=(50, 75), yrange=(45, 65)),
-            # *gen_bb_grid(nx=3, ny=3, xrange=(55, 70), yrange=(48, 60)),
-            # *gen_bb_grid(nx=4, ny=4, xrange=(50, 60), yrange=(50, 60)),
-            # *gen_bb_grid(nx=4, ny=4, xrange=(40, 90), yrange=(35, 65)),
-            *gen_bb_grid(nx=5, ny=4, xrange=(35, 72), yrange=(50, 65)),
-            # *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
-            # *gen_bb_grid(nx=4, ny=3, xrange=(25, 50), yrange=(65, 75)),
-            # *gen_bb_grid(nx=3, ny=3, xrange=(40, 65), yrange=(45, 60)),
-            # *gen_bb_grid(nx=3, ny=3, xrange=(50, 70), yrange=(40, 55)),
+            *gen_bb_grid(nx=4, ny=3, xrange=(35, 72), yrange=(50, 65)),
+            # *gen_bb_grid(nx=4, ny=4, xrange=(30, 100), yrange=(45, 70)), <--
         ]
         data = []
         for coord in calibration_corners:
             for i in range(N_SAMPLES):
                 pos, df = self.probe_at(coord, gcmd)
                 tx, ty = self._transform_touch_coords(df)
-                gcmd.respond_info(f"[LRT] Probed [{i}/{N_SAMPLES}] at {coord}, got {tx=} {ty=}")
+                gcmd.respond_info(f"[LRT] Probed [{i + 1}/{N_SAMPLES}] at {coord}, got {tx=} {ty=}")
                 data.append((coord, (tx, ty, coord[2])))
 
-        gcmd.respond_info(f"[LRT] Probe data: {data}")
+        gcmd.respond_info(f"lrt_data = {data}")
 
     def cmd_LRT_Z_PROBE(self, gcmd):
         self.probe.probe_offsets
-
-
-    def cmd_LRT_CALIBRATE(self, gcmd):
-        # survey the grid, 5 times/
-        coords = [
-            *gen_bb_grid(nx=6, ny=6, xrange=(30, 100), yrange=(30, 70)),
-        ]
-
 
     def get_status(self, eventtime):
         last_output = str(self.samples)
