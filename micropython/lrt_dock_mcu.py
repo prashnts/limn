@@ -70,6 +70,8 @@ def ping(t):
     # GRB
     npx[0] = ACT_COLOR
     npx.write()
+    # time.sleep_ms(500)
+    # restore_led()
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR

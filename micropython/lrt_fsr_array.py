@@ -8,7 +8,7 @@ from machine import UART, Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 
 
-wdt = WDT(timeout=3000)
+wdt = WDT(timeout=5000)
 FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]
 FSR_Y = [29, 28, 26, 27]
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
@@ -27,11 +27,15 @@ timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
 
 # GRB
-MCU_LED_COLOR = (0x61, 0x34, 0x24)
+MCU_LED_COLOR = (0x13, 0x9, 0x5)  # #091305
 ACT_COLOR = (0x0, 0x6D, 0x70)
 LED_OFF = (0x0, 0x0, 0x0)
-TOUCH_LED_COLOR = (0x46, 0, 0x70)
+TOUCH_LED_COLOR = (0x91, 0x3A, 0x1B) #3A911B
 
+
+
+def median(arr):
+    return sorted(arr)[len(arr) // 2]
 
 def teeprint(info, line):
     line = TAG + info + '>>>' + line + ">>>\r\n"
@@ -44,24 +48,29 @@ def read_fsr():
     oddvalues = []
     even_io_x = IO_X[::2]
     odd_io_x = IO_X[1::2]
+    SAMPLES = 5
 
     def read_row(x_io_pin):
         rows = []
-        for y_pin in ADC_Y:
-            x_io_pin.on()
-            rows.append(y_pin.read_u16())
-            x_io_pin.off()
+        x_io_pin.on()
+        for i, y_pin in enumerate(ADC_Y):
+            factor = 1.0
+            if FSR_Y[i] == 29:
+                factor = 1.18
+            val = [y_pin.read_u16() for _ in range(SAMPLES)]
+            val = sorted(val)[SAMPLES // 2]
+            val = int(val * factor)
+            rows.append(val)
+        x_io_pin.off()
         return rows
 
     for pin_x in even_io_x:
         evenvalues.append(read_row(pin_x))
-
     for pin_x in odd_io_x:
         oddvalues.append(read_row(pin_x))
 
     values = list(zip(*[val for pair in zip(evenvalues, oddvalues) for val in pair]))
-
-    touch_coords = [(x, y) for x, row in enumerate(values) for y, v in enumerate(row) if v > _adc_cutoff]
+    touch_coords = [(x, y, v) for x, row in enumerate(values) for y, v in enumerate(row) if v > _adc_cutoff]
 
     return values, touch_coords
 
@@ -93,9 +102,22 @@ def calibrate_fsr():
 
 def _debug_preview(values):
     preview = '+-' * len(FSR_X) + '+'
+    max_value = max(max(row) for row in values)
+    mean_value = sum(sum(row) for row in values) / (len(FSR_X) * len(FSR_Y))
+
+    def _ch(v):
+        if v <= _adc_cutoff:
+            return ' '
+        elif v == max_value:
+            return '*'
+        elif v > mean_value:
+            return 'x'
+        else:
+            return '.'
+
     for row in values:
         row = [row[len(row) - 1 - i] for i in range(len(row))]
-        preview += '\n|' + '|'.join([' ' if v <= _adc_cutoff else '*' for v in row]) + '|'
+        preview += '\n|' + '|'.join([_ch(v) for v in row]) + '|'
     preview += '\n' + '+-' * len(FSR_X) + '+\n'
     print(preview)
 
@@ -113,8 +135,8 @@ def on_boot():
     teeprint("booting", EMBLEM)
     npx[0] = MCU_LED_COLOR
     npx.write()
-    timer_hello.init(period=2571, mode=Timer.PERIODIC, callback=ping)
-    timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
+    timer_hello.init(period=8571, mode=Timer.PERIODIC, callback=ping)
+    timer_restore_led.init(period=50, mode=Timer.PERIODIC, callback=restore_led)
     calibrate_fsr()
 
 on_boot()
@@ -148,9 +170,7 @@ while True:
     if n_touches != 0:
         payload = {
             'has_touch': has_touch,
-            'n': n_touches,
             'coords': touch_coords,
-            'max': max_value,
         }
         teeprint('sample', json.dumps(payload))
         if _enable_debug:
