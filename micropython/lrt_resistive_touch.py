@@ -20,6 +20,8 @@ _enable_debug = True
 TAG = ">>>RTP>>>"
 EMBLEM = "Limn - Resistive Touch Alignment v1"
 
+def median(arr):
+    return sorted(arr)[len(arr) // 2]
 
 def get_points():
     # Referenced from https://github.com/adafruit/Adafruit_TouchScreen/blob/master/TouchScreen.cpp
@@ -36,7 +38,7 @@ def get_points():
         val = ypin.read_u16()
         xsamples.append(val)
     
-    x = 65535 - (sum(xsamples) / len(xsamples))
+    x = 65535 - (median(xsamples))
 
     xpin = ADC(Pin(XP, Pin.IN))
     xmin = ADC(Pin(XM, Pin.IN))
@@ -49,7 +51,7 @@ def get_points():
         val = xpin.read_u16()
         ysamples.append(val)
     
-    y = 65535 - (sum(ysamples) / len(ysamples))
+    y = 65535 - (median(ysamples))
 
     ypin = ADC(Pin(YP, Pin.IN))
     Pin(XP, Pin.OUT).off()
@@ -63,15 +65,15 @@ def get_points():
     return x, y, z
 
 uart_in = UART(0, 115200, timeout=10)
-uart_out = UART(1, 115200, timeout=10)
+uart_out = UART(1, 115200, timeout=20)
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
 
 # GRB
-MCU_LED_COLOR = (0x46, 0, 0x70)
+MCU_LED_COLOR = (0x0F, 0, 0x18)
 ACT_COLOR = (0x0, 0x6D, 0x70)
 LED_OFF = (0x0, 0x0, 0x0)
-TOUCH_LED_COLOR = (0x94, 0x12, 0x2F)
+TOUCH_LED_COLOR = (0x46, 0, 0x70)
 
 
 def teeprint(info, line):
@@ -97,7 +99,7 @@ def on_boot():
     teeprint("booting", EMBLEM)
     npx[0] = MCU_LED_COLOR
     npx.write()
-    timer_hello.init(period=7141, mode=Timer.PERIODIC, callback=ping)
+    timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=ping)
     timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
     uart_out.write(b'reset()\n')
 
