@@ -5,11 +5,14 @@
 import time
 import select
 import sys
+import json
+import uctypes
+import binascii
 from machine import UART, Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 
 wdt = WDT(timeout=3000)
-uart_out = UART(0, 115200, timeout=10, tx=Pin(12), rx=Pin(13))
+uart_out = UART(0, 115200, tx=Pin(12), rx=Pin(13))
 npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_ON = Pin(8, Pin.OUT, Pin.PULL_DOWN)
@@ -21,13 +24,82 @@ POWER_STATE = False
 _enable_debug = True
 _is_probing = False
 _probe_id = 0
-TAG = ">>>LRT>>>"
+TAG = "!LRT>>"
 EMBLEM = "Limn Resistive Touch Probe v1"
 
+FSR_ID_LM = 0x4
+FSR_T_COORD = {
+    'x': 0 | uctypes.UINT8,
+    'y': 1 | uctypes.UINT8,
+    'v': 2 | uctypes.UINT8,
+}
+FSR_PACKET = {
+    'id': 0 | uctypes.UINT8,
+    'n': 1 | uctypes.UINT8,
+    'state': 2 | uctypes.UINT8,
+    'touches': (3 | uctypes.ARRAY, 8, FSR_T_COORD),
+}
+
+RTP_ID_LM = 0x5
+RTP_PACKET = {
+    'id': 0 | uctypes.UINT8,
+    'n': 1 | uctypes.UINT8,
+    'state': 2 | uctypes.UINT8,
+    'touch_x': 3 | uctypes.UINT64,
+    'touch_y': 11 | uctypes.UINT64,
+    'touch_v': 19 | uctypes.UINT8,
+}
+
+PKT_TYPES = {
+    b'!FSR': FSR_PACKET,
+    b'!RTP': RTP_PACKET,
+}
+_last_pkt_at = {
+    FSR_ID_LM: 0,
+    RTP_ID_LM: 0,
+}
+_state = {
+    RTP_ID_LM: [],
+    FSR_ID_LM: []
+}
+
+
+def unpack_state(encoded, ptype):
+    global _last_pkt_at, _state
+    decoded = binascii.a2b_base64(encoded)
+
+    if len(decoded) != uctypes.sizeof(ptype):
+        print('size mismatch')
+        return state
+
+    pkt = uctypes.struct(uctypes.addressof(decoded), ptype, uctypes.LITTLE_ENDIAN)
+
+    if pkt.id == FSR_ID_LM:
+        _state[pkt.id] = [[pkt.touches[i].x, pkt.touches[i].y, pkt.touches[i].v] for i in range(pkt.n)]
+        _last_pkt_at[pkt.id] = time.ticks_ms()
+    elif pkt.id == RTP_ID_LM:
+        _state[pkt.id] = [pkt.touch_x, pkt.touch_y, pkt.touch_v]
+        _last_pkt_at[pkt.id] = time.ticks_ms()
+    
+    return _state
+
+def read_state(line):
+    if not b'>>' in line:
+        return None
+    segments = line.split(b'>>')
+    if len(segments) < 3:
+        return None
+    if segments[1] in [b'SMP', b'CLB']:
+        ptype = PKT_TYPES.get(segments[0], None)
+        if ptype:
+            pkt = unpack_state(segments[2], ptype)
+            return pkt
+    return None
+
+
 def teeprint(info, line):
-    line = TAG + info + '>>>' + line + ">>>"
-    if _enable_debug:
-        print(line)
+    line = TAG + info + '>>' + line + ">>"
+    print(line)
 
 def _pulse_power_pin(pin):
     pin.on()
@@ -94,17 +166,24 @@ probe_on_at = None
 
 while True:
     wdt.feed()
+    for pkt_id in _last_pkt_at:
+        if time.ticks_ms() - _last_pkt_at[pkt_id] > 100:
+            _state[pkt_id] = []
+
     try:
-        _c = select.select([uart_out], [], [], 0.01)
+        _c = select.select([uart_out], [], [], 0.001)
         if _c[0]:
             chain_data = uart_out.readline()
-            if b'"has_touch": true' in chain_data:
+            if b'SMP' in chain_data:
                 if probe_on_at is None:
                     PIN_PROBE_OUT.on()
                     probe_on_at = time.ticks_ms()
+
+            pkt = read_state(chain_data)
             npx[0] = ACT_COLOR
             npx.write()
-            print(chain_data.decode())
+            if pkt:
+                teeprint("SMP", json.dumps(pkt))
 
     except Exception:
         teeprint("error", "failed to read from uart_out")
@@ -138,12 +217,13 @@ while True:
         if 'debug_on()' in cmd:
             uart_out.write(b'debug_on()\n')
             _enable_debug = True
+        if 'calibrate()' in cmd:
+            uart_out.write(b'calibrate()\n')
         if 'debug_off()' in cmd:
             uart_out.write(b'debug_off()\n')
             _enable_debug = False
         if 'reset()' in cmd:
             uart_out.write(b'reset()\n')
-            reset()
         if 'begin_probe()' in cmd:
             _is_probing = True
             _probe_id += 1
