@@ -173,7 +173,7 @@ class ToolTouchProbeExtension:
                 self.touch_params = json.loads(touch_params)
                 self.ref_samples = load_values(ref_samples)
                 self.ref_z_panel = load_values(ref_z_panel)
-                self.ref_z_paper = load_values(ref_z_paper)
+                self.ref_z_paper = json.loads(ref_z_paper)
                 self.gcode.respond_info(f"[LRT] Loaded profile {prof.get_name()}")
                 break
 
@@ -419,29 +419,33 @@ class ToolTouchProbeExtension:
             gcmd.respond_info("[LRT] Calibrating touch panel.")
             self.cmd_LRT_TOUCH_CALIBRATE(gcmd)
 
-        # random.shuffle(coords)
-        # coords = coords[:8]
-        coords = [(c.mx, c.my, PANEL_ZHOME) for c in self.ref_samples]
-        samples = self._probe_tool(gcmd, coords, n_samples=3)
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+        ixs = list(range(len(self.ref_samples)))
+        random.shuffle(ixs)
+        ixs = ixs[:12]
+        ref_samples = [self.ref_samples[i] for i in ixs]
+        ref_z_panel = [self.ref_z_panel[i] for i in ixs]
+        coords = [(c.mx, c.my, PANEL_ZHOME) for c in ref_samples]
+        samples = self._probe_tool(gcmd, coords, n_samples=2)
 
         def diff_samples(ref, sample):
             return 
-        xydiff = np.round(np.median(np.array(samples) - np.array(self.ref_samples), axis=0), 3) * -1
-        zdiff = np.round(np.median(np.array(samples) - np.array(self.ref_z_panel), axis=0), 3)
+        xydiff = np.round(np.median(np.array(samples) - np.array(ref_samples), axis=0), 3) * -1
+        zdiff = np.round(np.median(np.array(samples) - np.array(ref_z_panel), axis=0), 3)
 
         gcmd.respond_info(f"[LRT] {xydiff=} {zdiff=}")
         self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={xydiff[3]} DY={xydiff[4]} DZ={zdiff[5]}")
-        do = self.ref_z_paper[2]
-        de = self.ref_z_paper[3]
+        do = self.ref_z_paper[4]
+        de = self.ref_z_paper[5]
+        self.gcode.run_script_from_command(f"_APPLY_OFFSETS MESH=lrt_paper")
         self.gcode.run_script_from_command(f"G1 F2600")
         self.gcode.run_script_from_command(f"G90")
-        self.gcode.run_script_from_command(f"G1 Z9")
-        self.gcode.run_script_from_command(f"G1 X{do.mx} Y{do.my} ALIGN0")
-        self.gcode.run_script_from_command(f"G1 Z7")
-        self.gcode.run_script_from_command(f"G1 X{do.mx} Y{do.my} ALIGN1")
-        self.gcode.run_script_from_command(f"G1 Z{do.tz} ALIGN1")
-        self.gcode.run_script_from_command(f"G1 X{de.mx} Y{de.my} Z{de.tz} ALIGN1")
-        self.gcode.run_script_from_command(f"G1 Z9 ALIGN0")
+        self.gcode.run_script_from_command(f"G1 X{do[0]} Y{do[1]}")
+        self.gcode.run_script_from_command(f"G1 ACT1")
+        self.gcode.run_script_from_command(f"G1 X{de[0]} Y{de[1]}")
+        self.gcode.run_script_from_command(f"G1 ACT2")
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+        self.gcode.run_script_from_command("UNDOCK")
 
     @property
     def is_calibrated(self):
@@ -451,10 +455,10 @@ class ToolTouchProbeExtension:
         self.write_queue.put('calibrate()')
 
     def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
-        N_SAMPLES = 3
+        N_SAMPLES = 2
         N_SAMPLES_CALIB = 4
         coords = [
-            *gen_bb_grid(nx=4, ny=4, xrange=(30, 90), yrange=(42, 65), deviation=0),
+            *gen_bb_grid(nx=4, ny=3, xrange=(30, 90), yrange=(42, 65), deviation=0),
         ]
         coords_paper = [
             *gen_bb_grid(nx=4, ny=4, xrange=(30, 90), yrange=(110, 160), deviation=0, z_park=6),
@@ -467,14 +471,18 @@ class ToolTouchProbeExtension:
 
         self.gcode.run_script_from_command("UNDOCK")
         self.gcode.run_script_from_command("G28")
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+
         self.ref_z_panel = self._probe_mesh(gcmd, coords)
         self.gcode.run_script_from_command("_BUZZ_DOOP")
-        self.ref_z_paper = self._probe_mesh(gcmd, coords_paper)
+        self.ref_z_paper = coords_paper
+        self.gcode.run_script_from_command("BED_MESH_CALIBRATE PROFILE=lrt_paper mesh_min=5,110 mesh_max=115,174")
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+
         self.gcode.run_script_from_command("_BUZZ_DOOP")
 
         gcmd.respond_info(f"[LRT] Z mesh collected")
         self.gcode.run_script_from_command("T4")
-        self.gcode.run_script_from_command("WRITE_TOOL_TAG DX=0 DY=0 DZ=0")
 
         self.gcode.run_script_from_command("SET_LED_EFFECT EFFECT=ui_alert_blink REPLACE=1")
         # Touch Panel Parameters
@@ -496,18 +504,19 @@ class ToolTouchProbeExtension:
 
         self.ref_samples = self._probe_tool(gcmd, coords, n_samples=N_SAMPLES)
 
-        z_diff = np.array(self.ref_samples) - np.array(self.ref_z_panel)
-        tool_z = np.median(z_diff[:, 5])
-        self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DZ={tool_z:.3f}")
+        tool_z = np.round(np.median(np.array(self.ref_samples) - np.array(self.ref_z_panel), axis=0), 3)[5]
+
+        self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f}")
 
         do = self.ref_z_paper[0]
         de = self.ref_z_paper[1]
-
+        self.gcode.run_script_from_command(f"_APPLY_OFFSETS")
         self.gcode.run_script_from_command(f"G1 F2000")
-        self.gcode.run_script_from_command(f"G1 X{do.mx} Y{do.my} ALIGN=1")
-        self.gcode.run_script_from_command(f"G1 Z{do.tz} ALIGN=1")
-        self.gcode.run_script_from_command(f"G1 X{de.mx} Y{de.my} Z{de.tz} ALIGN=1")
-        self.gcode.run_script_from_command(f"G1 Z9 ALIGN=1")
+        self.gcode.run_script_from_command(f"G1 X{do[0]} Y{do[1]}")
+        self.gcode.run_script_from_command(f"G1 Z1 ACT1")
+        self.gcode.run_script_from_command(f"G1 X{de[0]} Y{de[1]}")
+        self.gcode.run_script_from_command(f"G1 Z1 ACT2")
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
 
         configfile = self.printer.lookup_object('configfile')
         cfgname = self.name
