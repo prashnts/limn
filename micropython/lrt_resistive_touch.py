@@ -14,13 +14,23 @@ wdt = WDT(timeout=3000)
 PANEL_PINS = [28, 26, 27, 29]
 XP, XM, YP, YM = PANEL_PINS
 
-uart_in = UART(0, 115200, timeout=10)
-uart_out = UART(1, 115200, timeout=10)
 npx = NeoPixel(Pin(16), 1)
+uart_in = UART(0, 115200, timeout=10)
+uart_out = UART(1, 115200, timeout=20)
+timer_hello = Timer(-1)
+timer_restore_led = Timer(-1)
 
 _enable_debug = True
 TAG = "!RTP>>"
 EMBLEM = "Limn - Resistive Touch Alignment v1"
+
+# GRB
+MCU_LED_COLOR = (0x0F, 0, 0x18)
+ACT_COLOR = (0x0, 0x6D, 0x20)
+LED_OFF = (0x0, 0x0, 0x0)
+TOUCH_LED_COLOR = (0x46, 0, 0x70)
+FSR_MCU_LED_COLOR = (0x91, 0x0A, 0x0B)
+
 
 RTP_ID_LM = 0x5
 RTP_PACKET = {
@@ -94,32 +104,16 @@ def get_points():
 
     return x, y, z
 
-uart_in = UART(0, 115200, timeout=10)
-uart_out = UART(1, 115200, timeout=20)
-timer_hello = Timer(-1)
-timer_restore_led = Timer(-1)
-
-# GRB
-MCU_LED_COLOR = (0x0F, 0, 0x18)
-ACT_COLOR = (0x0, 0x6D, 0x70)
-LED_OFF = (0x0, 0x0, 0x0)
-TOUCH_LED_COLOR = (0x46, 0, 0x70)
-
-
 def teeprint(info, line):
     line = TAG + info + '>>' + line + ">>\n"
     if _enable_debug:
         print(line)
     uart_in.write((line).encode())
 
-
 def ping(t):
     teeprint("ping", f"t={time.ticks_ms()}")
-    # GRB
     npx[0] = ACT_COLOR
     npx.write()
-    time.sleep_ms(500)
-    restore_led()
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR
@@ -149,6 +143,8 @@ while True:
         if b'reset()' in cmd:
             uart_out.write(b'reset()\n')
             reset()
+        if b'ping()' in cmd:
+            ping(None)
         npx[0] = LED_OFF
         npx.write()
     
@@ -168,7 +164,7 @@ while True:
         npx[0] = TOUCH_LED_COLOR
         npx.write()
     elif chain_data:
-        npx[0] = ACT_COLOR
+        npx[0] = FSR_MCU_LED_COLOR
         npx.write()
     else:
         npx[0] = MCU_LED_COLOR
