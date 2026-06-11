@@ -30,16 +30,15 @@ def get_nfc(retries: int = 3):
         i2c = busio.I2C(board.SCL, board.SDA)
         pn532 = PN532_I2C(i2c, debug=False)
         ic, ver, rev, support = pn532.firmware_version
-        print(f"Found PN532 with firmware version: {ver}.{rev}")
+        print(f"RFID<<< PN532 - FW:{ver}.{rev}")
         pn532.SAM_configuration()
         return pn532
     except Exception as e:
-        print(f"Error initializing PN532: {e}")
         if retries > 0:
-            print("Retrying...")
+            print("RFID<<< INIT ERROR, RETRYING...")
             return get_nfc(retries - 1)
         else:
-            raise RuntimeError("Failed to initialize PN532 after multiple attempts.")
+            raise RuntimeError("RFID<<< INIT FAILED")
 
 @dataclass
 class TagData:
@@ -61,9 +60,9 @@ def write_tag(
     try:
         uid = pn532.read_passive_target(timeout=2)
         if uid is None:
-            print("No tag detected.")
+            print("RFID>>>NoTag<<<")
             return
-        print(f"Writing to tag with UID: {uid.hex()}")
+        print("RFID>>>WriteTag uid={uid.hex()}<<<")
         if x is not None:
             pn532.ntag2xx_write_block(6, encode_num(x))
         if y is not None:
@@ -77,9 +76,9 @@ def write_tag(
                 pn532.ntag2xx_write_block(blk, bytearray(batch))
                 blk += 1
 
-        print("Write ok.")
+        print("RFID>>>WriteOk<<<")
     except Exception as e:
-        print(f"Error writing tag: {e}")
+        print("RFID>>>WriteError<<<")
 
 @app.command()
 def read_tag(timeout: float = 0.5, retries: int = 3):
@@ -87,7 +86,7 @@ def read_tag(timeout: float = 0.5, retries: int = 3):
     try:
         uid = pn532.read_passive_target(timeout=timeout)
         if uid is None:
-            print("TAG>>>None<<<")
+            print("RFID>>>None<<<")
             return
 
         xb = pn532.ntag2xx_read_block(6)
@@ -102,16 +101,15 @@ def read_tag(timeout: float = 0.5, retries: int = 3):
             x=decode_num(xb),
             y=decode_num(yb),
             z=decode_num(zb),
-            name=name_b.decode().strip() or '<unknown>',
+            name=name_b.decode().strip('\x00').strip() or '<unknown>',
         )
         # Output format optimized for gcode parsing.
         tag_str = f"TAG>>>{tag_data.x}||{tag_data.y}||{tag_data.z}||{tag_data.name}<<<"
         print(tag_str)
         return tag_data
     except Exception as e:
-        print(f"Error reading tag: {e}")
         if retries > 0:
-            print("Retrying...")
+            print("RFID>>>retrying...<<<")   
             return read_tag(timeout, retries - 1)
 
 

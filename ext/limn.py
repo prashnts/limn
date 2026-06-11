@@ -20,6 +20,8 @@ SERIAL_TIMER = 0.1
 LRT_CONF_VERSION = 'v2.0'
 PANEL_XRANGE = (45, 106)
 PANEL_YRANGE = (40, 70)
+PAPER_XRANGE = (25, 100)
+PAPER_YRANGE = (120, 150)
 PANEL_ZHOME = 9
 MAX_DEV = 5
 ProbeValue = namedtuple('PV', ['mx', 'my', 'mz', 'tx', 'ty', 'tz'])
@@ -78,6 +80,14 @@ def gen_bb_coords(inset=5):
         (xmin + inset_x, ymin + (ymax - ymin) / 2, PANEL_ZHOME),
         (xmax - inset_x, ymin + (ymax - ymin) / 2, PANEL_ZHOME),
     ]
+
+def gen_draw_grid(nx=6, ny=6, xrange=PAPER_XRANGE, yrange=PAPER_YRANGE):
+    xp = np.linspace(20, 100, 5)
+    yp = np.linspace(120, 150, 5)
+    X, Y = np.meshgrid(xp, yp, indexing='xy')
+    X[1::2, :] = X[1::2, ::-1]
+    return np.concat(np.stack((X, Y), axis=2)).tolist()
+
 
 def get_touch_transform(data):
     # Taken from ATMEL application note.
@@ -138,6 +148,7 @@ class ToolTouchProbeExtension:
         self.ref_z_panel = None
         self.ref_z_paper = None
         self.debug = False
+        self._draw_grid = gen_draw_grid()
         
         self.gcode.register_command("LRT_CONNECT",
             self.connect,
@@ -435,21 +446,26 @@ class ToolTouchProbeExtension:
 
         gcmd.respond_info(f"[LRT] {xydiff=} {zdiff=}")
         self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={xydiff[3]} DY={xydiff[4]} DZ={zdiff[5]}")
-        do = self.ref_z_paper[4]
-        de = self.ref_z_paper[5]
-        self.gcode.run_script_from_command(f"_APPLY_OFFSETS MESH=lrt_paper")
-        self.gcode.run_script_from_command(f"G1 F2600")
-        self.gcode.run_script_from_command(f"G90")
-        self.gcode.run_script_from_command(f"G1 X{do[0]} Y{do[1]}")
-        self.gcode.run_script_from_command(f"G1 ACT1")
-        self.gcode.run_script_from_command(f"G1 X{de[0]} Y{de[1]}")
-        self.gcode.run_script_from_command(f"G1 ACT2")
-        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
-        self.gcode.run_script_from_command("UNDOCK")
+
+        self._draw_test_mark()
+
 
     @property
     def is_calibrated(self):
         return self.touch_params is not None and self.ref_samples is not None
+
+    def _draw_test_mark(self):
+        if len(self._draw_grid) < 2:
+            self._draw_grid = gen_draw_grid()
+        do = self._draw_grid.pop(0)
+        de = self._draw_grid[0]
+        self.gcode.run_script_from_command(f"_APPLY_OFFSETS MESH=lrt_paper")
+        self.gcode.run_script_from_command(f"G1 F2000")
+        self.gcode.run_script_from_command(f"G1 X{do[0]} Y{do[1]}")
+        self.gcode.run_script_from_command(f"G1 Z1 ACT1")
+        self.gcode.run_script_from_command(f"G1 X{de[0]} Y{de[1]}")
+        self.gcode.run_script_from_command(f"G1 Z1 ACT2")
+        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
 
     def cmd_LRT_PANEL_CALIBRATE(self, gcmd):
         self.write_queue.put('calibrate()')
@@ -508,15 +524,7 @@ class ToolTouchProbeExtension:
 
         self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f}")
 
-        do = self.ref_z_paper[0]
-        de = self.ref_z_paper[1]
-        self.gcode.run_script_from_command(f"_APPLY_OFFSETS")
-        self.gcode.run_script_from_command(f"G1 F2000")
-        self.gcode.run_script_from_command(f"G1 X{do[0]} Y{do[1]}")
-        self.gcode.run_script_from_command(f"G1 Z1 ACT1")
-        self.gcode.run_script_from_command(f"G1 X{de[0]} Y{de[1]}")
-        self.gcode.run_script_from_command(f"G1 Z1 ACT2")
-        self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+        self._draw_test_mark()
 
         configfile = self.printer.lookup_object('configfile')
         cfgname = self.name
