@@ -1,5 +1,6 @@
 import board
 import busio
+import digitalio
 import typer
 
 from typing import Annotated
@@ -38,12 +39,22 @@ def get_ioext():
 def read_dock_state():
     mcp = get_ioext()
     pins = [15, 14, 13, 12, 11]
+    tool_map = {
+        15: 41,
+        14: 42,
+        13: 45,
+        12: 43,
+        11: 44,
+    }
     values = []
     for p in pins:
         pin = mcp.get_pin(p)
         pin.switch_to_input(pullup=True)
+        pin.direction = digitalio.Direction.INPUT
+        pin.pull = digitalio.Pull.UP
         values.append(pin.value)
 
+    values = [tool_map[p] for p, v in zip(pins, values) if not v]
     print(f"DOCKSTATE>>>{values}<<<")
     return values
 
