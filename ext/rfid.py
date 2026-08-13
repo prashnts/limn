@@ -6,10 +6,11 @@ from typing import Annotated
 from dataclasses import dataclass
 from itertools import batched
 from adafruit_pn532.i2c import PN532_I2C
-
+from adafruit_mcp230xx.mcp23017 import MCP23017
 
 app = typer.Typer()
 
+i2c = busio.I2C(board.SCL, board.SDA)
 
 def encode_num(x: float):
     # Packs a float into a 4byte array.
@@ -25,9 +26,27 @@ def decode_num(val: bytearray):
      sign = '-' if val[0] == 1 else ''
      return float(f'{sign}{val[1]}.{val[2]}')
 
+def get_ioext():
+    try:
+        mcp = MCP23017(i2c)
+        print("IOEXT<<< MCP23017 OK")
+        return mcp
+    except Exception as e:
+        raise RuntimeError("IOEXT<<< INIT FAILED")
+
+@app.command()
+def read_dock_state()L
+    mcp = get_ioext()
+    pins = [15, 14, 13, 12, 11]
+    values = []
+    for p in pins:
+        pin = mcp.get_pin(p)
+        pin.switch_to_input(pullup=True)
+        values.append(pin.value)
+    return values
+
 def get_nfc(retries: int = 3):
     try:
-        i2c = busio.I2C(board.SCL, board.SDA)
         pn532 = PN532_I2C(i2c, debug=False)
         ic, ver, rev, support = pn532.firmware_version
         print(f"RFID<<< PN532 - FW:{ver}.{rev}")

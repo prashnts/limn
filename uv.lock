@@ -53,6 +53,19 @@ wheels = [
 ]
 
 [[package]]
+name = "adafruit-circuitpython-mcp230xx"
+version = "2.6.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "adafruit-blinka" },
+    { name = "adafruit-circuitpython-busdevice" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/19/67dd951a9ccd9cfc24e8512883fa9574b7c131ba9d00341e34847716a545/adafruit_circuitpython_mcp230xx-2.6.2.tar.gz", hash = "sha256:5c50bb8c326ea680c7f5784d0cdd9f3266c044db6b3d4fa93775ebe4e7485a3b", size = 31559, upload-time = "2026-04-23T21:00:32.497Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/da/a87cccc312c0fb196af0a7bf537576a7a698011dfdbf4e5ec80486a04ddc/adafruit_circuitpython_mcp230xx-2.6.2-py3-none-any.whl", hash = "sha256:7efbc8b882a56274a144832eb66b0861edc3311061c9bffae5976736072b0909", size = 18850, upload-time = "2026-04-23T21:00:31.231Z" },
+]
+
+[[package]]
 name = "adafruit-circuitpython-pn532"
 version = "2.4.9"
 source = { registry = "https://pypi.org/simple" }
@@ -860,6 +873,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "adafruit-blinka" },
+    { name = "adafruit-circuitpython-mcp230xx" },
     { name = "adafruit-circuitpython-pn532" },
     { name = "ipython" },
     { name = "mpremote" },
@@ -867,6 +881,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyserial" },
     { name = "requests" },
+    { name = "sparkfun-qwiic-button" },
     { name = "typer" },
 ]
 
@@ -880,6 +895,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "adafruit-blinka", specifier = ">=9.0.4" },
+    { name = "adafruit-circuitpython-mcp230xx", specifier = ">=2.6.2" },
     { name = "adafruit-circuitpython-pn532", specifier = ">=2.4.8" },
     { name = "ipython", specifier = ">=9.12.0" },
     { name = "mpremote", specifier = ">=1.28.0" },
@@ -887,6 +903,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "requests", specifier = ">=2.32.5" },
+    { name = "sparkfun-qwiic-button", specifier = ">=2.0.3" },
     { name = "typer", specifier = ">=0.21.1" },
 ]
 
@@ -1671,12 +1688,45 @@ wheels = [
 ]
 
 [[package]]
+name = "smbus2"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/37/b3f7b501502c4915ba3819d1dc277bf3f5fae4a9d067caa4f502aaddd889/smbus2-0.6.1.tar.gz", hash = "sha256:2b043372abf8f6029a632c3aab36b641c5d5872b1cbad599fc68e17ac4fd90a5", size = 17274, upload-time = "2026-04-09T20:37:54.821Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/f2/c78a68bd739ac8fc608747cff73a4db3b19f3135658ed4e64374f6425cbf/smbus2-0.6.1-py2.py3-none-any.whl", hash = "sha256:650feeb27ca0ed58b07db4c10201c2a662c41305b7bf6e5fab9d888056f48180", size = 11767, upload-time = "2026-04-09T20:37:53.728Z" },
+]
+
+[[package]]
 name = "soupsieve"
 version = "2.8.3"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/7b/ae/2d9c981590ed9999a0d91755b47fc74f74de286b0f5cee14c9269041e6c4/soupsieve-2.8.3.tar.gz", hash = "sha256:3267f1eeea4251fb42728b6dfb746edc9acaffc4a45b27e19450b676586e8349", size = 118627, upload-time = "2026-01-20T04:27:02.457Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/2c/1462b1d0a634697ae9e55b3cecdcb64788e8b7d63f54d923fcd0bb140aed/soupsieve-2.8.3-py3-none-any.whl", hash = "sha256:ed64f2ba4eebeab06cc4962affce381647455978ffc1e36bb79a545b91f45a95", size = 37016, upload-time = "2026-01-20T04:27:01.012Z" },
+]
+
+[[package]]
+name = "sparkfun-qwiic-button"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sparkfun-qwiic-i2c" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/7b/c141564d09ec905e6341cf176c4a625e21129cc47f9cb95ba2b0ca02407b/sparkfun_qwiic_button-2.0.3.tar.gz", hash = "sha256:943fb094e33c24844a60c0035d1b7cb234baa96f66e748fd6f8800a2761d6c57", size = 10506, upload-time = "2025-03-12T23:28:11.832Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/2c/39ff2b3021f5205ff2c1908f55e0617c3790e701ef407edff3610d125bae/sparkfun_qwiic_button-2.0.3-py3-none-any.whl", hash = "sha256:a3258e1d588e92e7668fba0683eca02b964f6210c4348fea09115d50a5e92ac9", size = 8283, upload-time = "2025-03-12T23:28:10.711Z" },
+]
+
+[[package]]
+name = "sparkfun-qwiic-i2c"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "smbus2" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/60/7d7cc46d29e92777f0f1c19ec5880f963e25224e41c232ad82a74778855f/sparkfun_qwiic_i2c-2.0.0.tar.gz", hash = "sha256:1e9567815c1c7a4c03fac0d9ca01a24b7deb1368d319b014daa45d965829fab6", size = 11811, upload-time = "2025-03-12T21:20:07.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/69/aeaea26f8e614117e8d8658bf26bb7d1612e6418fc0a315fde2452c015f6/sparkfun_qwiic_i2c-2.0.0-py3-none-any.whl", hash = "sha256:75a8f0353fbd3208780f9c0a71cc87d050c7853538d0a7198121b318c0d2ecd5", size = 16041, upload-time = "2025-03-12T21:20:06.593Z" },
 ]
 
 [[package]]
