@@ -35,7 +35,7 @@ def get_ioext():
         raise RuntimeError("IOEXT<<< INIT FAILED")
 
 @app.command()
-def read_dock_state()L
+def read_dock_state():
     mcp = get_ioext()
     pins = [15, 14, 13, 12, 11]
     values = []
