@@ -43,6 +43,8 @@ def read_dock_state():
         pin = mcp.get_pin(p)
         pin.switch_to_input(pullup=True)
         values.append(pin.value)
+
+    print(f"DOCKSTATE>>>{values}<<<")
     return values
 
 def get_nfc(retries: int = 3):
