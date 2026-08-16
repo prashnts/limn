@@ -275,7 +275,7 @@ def render_distance_grid(
             line = ""
             for t in t_vals:
                 r, g, b = _color(t)
-                line += f"\x1b[48;2;{r};{g};{b}m  "  # 2 spaces = 2x horizontal
+                line += f"\x1b[48;2;{r};{g};{b}m    "  # 2 spaces = 2x horizontal
             line += "\x1b[0m"
             lines.append(line)
 
