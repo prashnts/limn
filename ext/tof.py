@@ -210,6 +210,77 @@ def sensor_loop(sensors: dict, conf: Config, callback=None):
             print(payload)
         time.sleep(0.001)
 
+def render_distance_grid(
+    data: list[list[int | float]],
+    max_val: float | None = None,
+    min_val: float | None = None,
+) -> str:
+    """Render a 2D distance array as a 2x2-enlarged ANSI true-color grid.
+
+    kagi/ki_quick
+
+    Args:
+        data:    2D list of numeric distance values.
+        max_val: Explicit upper bound for the color scale. Defaults to max(data).
+        min_val: Explicit lower bound for the color scale. Defaults to min(data).
+
+    Returns:
+        A string of ANSI-escaped lines. print() it to see the grid.
+    """
+
+    def _lerp(a: float, b: float, t: float) -> float:
+        return a + (b - a) * t
+
+    def _color(t: float) -> tuple[int, int, int]:
+        """Map t in [0, 1] to an RGB triple via a 5-stop ramp.
+
+        Stops:  black → blue → cyan → green → yellow → red
+        (low distances = dark/blue, high = red/white)
+
+
+        """
+        t = max(0.0, min(1.0, t))
+        stops = [
+            (0.0, (0, 0, 0)),
+            (0.2, (30, 0, 120)),
+            (0.4, (0, 120, 180)),
+            (0.6, (0, 180, 80)),
+            (0.8, (220, 200, 0)),
+            (1.0, (255, 80, 0)),
+        ]
+        for i in range(len(stops) - 1):
+            t0, c0 = stops[i]
+            t1, c1 = stops[i + 1]
+            if t <= t1:
+                span = t1 - t0 if t1 != t0 else 1.0
+                local = (t - t0) / span
+                return (
+                    int(_lerp(c0[0], c1[0], local)),
+                    int(_lerp(c0[1], c1[1], local)),
+                    int(_lerp(c0[2], c1[2], local)),
+                )
+        return stops[-1][1]  # clamp
+
+    # --- normalize ----------------------------------------------------
+    flat = [v for row in data for v in row]
+    lo = min_val if min_val is not None else min(flat)
+    hi = max_val if max_val is not None else max(flat)
+    span = hi - lo if hi != lo else 1.0
+
+    # --- build output -------------------------------------------------
+    lines: list[str] = []
+    for row in data:
+        t_vals = [(v - lo) / span for v in row]
+        for _ in range(2):  # 2x vertical enlargement
+            line = ""
+            for t in t_vals:
+                r, g, b = _color(t)
+                line += f"\x1b[48;2;{r};{g};{b}m  "  # 2 spaces = 2x horizontal
+            line += "\x1b[0m"
+            lines.append(line)
+
+    return "\n".join(lines)
+
 def main():
     db = redis.Redis(host='localhost', port=6379, db=0)
     def publish(channel: str, action: str, payload: dict = {}):
@@ -217,7 +288,8 @@ def main():
 
     def callback(payload):
         publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
-        print(payload)
+        tof_render = payload['tof']['render']
+        print(render_distance_grid(tof_render, max_val=2000, min_val=0))
 
     sensor_loop(setup(Config()), Config(), callback)
 
