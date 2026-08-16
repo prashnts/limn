@@ -291,7 +291,7 @@ def main():
         tof_render = payload['tof']['render']
         print(payload['dock']['docked'])
         if tof_render:
-            print(render_distance_grid(tof_render)
+            print(render_distance_grid(tof_render))
 
     sensor_loop(setup(Config()), Config(), callback)
 
