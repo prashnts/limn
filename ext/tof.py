@@ -14,7 +14,7 @@ _here = Path(__file__).parent / 'tof_bin'
 
 sys.path.append(_here.as_posix())
 
-from ._vl53lxcx import (
+from _vl53lxcx import (
     DATA_DISTANCE_MM,
     DATA_TARGET_STATUS,
     RESOLUTION_8X8,
@@ -148,7 +148,7 @@ class DockStatusSensor:
         pins = self.pin_tool_map.keys()
 
         values = []
-        for p, tool_id in self.pin_tool_map:
+        for p, tool_id in self.pin_tool_map.items():
             pin = self.mcp.get_pin(p)
             pin.switch_to_input(pullup=True)
             pin.direction = digitalio.Direction.INPUT
