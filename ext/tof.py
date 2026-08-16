@@ -289,7 +289,8 @@ def main():
     def callback(payload):
         publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
         tof_render = payload['tof']['render']
-        print(render_distance_grid(tof_render, max_val=2000, min_val=0))
+        if tof_render:
+            print(render_distance_grid(tof_render, max_val=2000, min_val=0))
 
     sensor_loop(setup(Config()), Config(), callback)
 
