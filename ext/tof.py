@@ -17,6 +17,8 @@ sys.path.append(_here.as_posix())
 from _vl53lxcx import (
     DATA_DISTANCE_MM,
     DATA_TARGET_STATUS,
+    DATA_RANGE_SIGMA_MM,
+    DATA_REFLECTANCE,
     RESOLUTION_8X8,
     STATUS_VALID,
     VL53L5CX,
@@ -29,7 +31,6 @@ class Config(BaseModel):
 
     tof_enable: bool = True
     dock_status_enable: bool = True
-    nfc_enable: bool = True
 
     seesaw_enable: bool = True
     seesaw_address: str = '0x49'
@@ -47,6 +48,20 @@ class ToFSensor:
     update_frequency: int = 1
     _n_update: int = 0
 
+    def get_results(self) -> dict:
+        results = self.tof.get_ranging_data()
+        distance_mm = results.distance_mm
+        target_status = results.target_status
+        reflectance = list(results.reflectance)
+        range_sigma = results.range_sigma_mm
+
+        samples = []
+        for i in range(len(distance_mm)):
+            if target_status[i] != STATUS_VALID:
+                distance_mm[i] = 1000  # invalid reading
+            if reflectance[i] < 100:
+                distance_mm[i] = 1000  # low reflectance
+
     def update(self):
         if self._n_update < self.update_frequency:
             self._n_update += 1
@@ -59,9 +74,14 @@ class ToFSensor:
             results = self.tof.get_ranging_data()
             distance_mm = results.distance_mm
             target_status = results.target_status
+            reflectance = list(results.reflectance)
+            range_sigma = results.range_sigma_mm
             grid = 7
+            # print(f"[VL53L5CX] reflectance: {list(reflectance)}")
+            # print(f"[VL53L5CX] distance_mm: {distance_mm}")
+            # print(f"[VL53L5CX] range_sigma: {range_sigma}")
 
-            masked_distance_mm = [d if status == STATUS_VALID else d for d, status in zip(distance_mm, target_status)]
+            masked_distance_mm = [d if rng < 50 else 1000 for d, rng, status, r in zip(distance_mm, range_sigma, target_status, reflectance)]
 
             self.distance_mm = distance_mm
             self.masked_distance_mm = masked_distance_mm
@@ -104,10 +124,10 @@ class ToFSensor:
 
             tof.init()
             tof.resolution = RESOLUTION_8X8
-            tof.ranging_freq = 15
-            tof.integration_time_ms = 66
-            tof.sharpener_percent = 0
-            tof.start_ranging({DATA_DISTANCE_MM, DATA_TARGET_STATUS})
+            tof.ranging_freq = 30
+            tof.integration_time_ms = 10
+            tof.sharpener_percent = 40
+            tof.start_ranging({DATA_DISTANCE_MM, DATA_TARGET_STATUS, DATA_REFLECTANCE, DATA_RANGE_SIGMA_MM})
             return cls(tof, **kwargs)
         except Exception as e:
             print(f"[VL53L5CX] not found: {e}")
@@ -172,130 +192,6 @@ class DockStatusSensor:
         }
 
 
-@dataclass
-class TagData:
-    uid: str = ''
-    x: float
-    y: float
-    z: float
-    name: str
-
-@dataclass
-class NFC:
-    pn532: PN532_I2C = None
-    last_tag: TagData = None
-    updated_at: float = 0.0
-
-
-    @classmethod
-    def setup(cls, bus: board.I2C, conf: Config, **kwargs):
-        if not conf.nfc_enable:
-            return cls(**kwargs)
-        try:
-            pn532 = PN532_I2C(bus, debug=False)
-            ic, ver, rev, support = pn532.firmware_version
-            print(f"RFID<<< PN532 - FW:{ver}.{rev}")
-            pn532.SAM_configuration()
-            return cls(pn532, **kwargs)
-        except Exception as e:
-            print(f"[PN532] not found: {e}")
-            return cls(**kwargs)
-
-    def serialize(self) -> dict:
-        return {
-            'last_tag': self.last_tag.__dict__ if self.last_tag else None,
-            'updated_at': self.updated_at,
-        }
-
-    def update(self):
-        pass
-
-    def act(self, params: str, hash_: str):
-        if params == 'read_tag':
-            tag_data = self.read_tag()
-            if tag_data:
-                self.last_tag = tag_data
-        elif 'write_tag' in params:
-            try:
-                data = json.loads(params)['tag_data']
-                tag_data = TagData(**data)
-                self.write_tag(tag_data)
-                tag_data = self.read_tag()
-                if tag_data:
-                    self.last_tag = tag_data
-            except Exception as e:
-                print(f"RFID>>>WriteTagError: {e}<<<")
-        self.updated_at = time.monotonic()
-
-    def read_tag(self, timeout: float = 0.5, retries: int = 3):
-        pn532 = self.pn532
-        try:
-            uid = pn532.read_passive_target(timeout=timeout)
-            if uid is None:
-                print("RFID>>>None<<<")
-                return
-
-            xb = pn532.ntag2xx_read_block(6)
-            yb = pn532.ntag2xx_read_block(7)
-            zb = pn532.ntag2xx_read_block(8)
-            name_b = b''
-            for i in range(11, 16):
-                name_b += pn532.ntag2xx_read_block(i)
-
-            tag_data = TagData(
-                uid=uid.hex(),
-                x=self.decode_num(xb),
-                y=self.decode_num(yb),
-                z=self.decode_num(zb),
-                name=name_b.decode().strip('\x00').strip() or '<unknown>',
-            )
-            # Output format optimized for gcode parsing.
-            tag_str = f"TAG>>>{tag_data.x}||{tag_data.y}||{tag_data.z}||{tag_data.name}<<<"
-            print(tag_str)
-            return tag_data
-        except Exception as e:
-            if retries > 0:
-                print("RFID>>>retrying...<<<")   
-                return self.read_tag(timeout, retries - 1)
-
-    def write_tag(self, tag_data: TagData):
-        pn532 = self.pn532
-        try:
-            uid = pn532.read_passive_target(timeout=2)
-            if uid is None:
-                print("RFID>>>NoTag<<<")
-                return
-            print(f"RFID>>>WriteTag uid={uid.hex()}<<<")
-            if tag_data.x is not None:
-                pn532.ntag2xx_write_block(6, self.encode_num(tag_data.x))
-            if tag_data.y is not None:
-                pn532.ntag2xx_write_block(7, self.encode_num(tag_data.y))
-            if tag_data.z is not None:
-                pn532.ntag2xx_write_block(8, self.encode_num(tag_data.z))
-            if tag_data.name is not None:
-                tagname = tag_data.name.ljust(20)[:20].encode()
-                blk = 11
-                for batch in [tagname[i:i+4] for i in range(0, len(tagname), 4)]:
-                    pn532.ntag2xx_write_block(blk, bytearray(batch))
-                    blk += 1
-
-            print("RFID>>>WriteOk<<<")
-        except Exception as e:
-            print("RFID>>>WriteError<<<")
-
-    def encode_num(self, x: float):
-        # Packs a float into a 4byte array.
-        val = [
-            0 if x >= 0 else 1, # sign
-            abs(int(x)), # integer
-            abs(round((x - int(x)) * 100)), # Fraction rounded up to two digits
-            0, # reserved
-        ]
-        return bytearray(val)
-
-    def decode_num(self, val: bytearray):
-        sign = '-' if val[0] == 1 else ''
-        return float(f'{sign}{val[1]}.{val[2]}')
 
 
 def setup(conf: Config = None):
@@ -309,7 +205,6 @@ def setup(conf: Config = None):
         # 'buzzer': Buzzer.setup(i2c, conf),
         'tof': ToFSensor.setup(i2c, conf),
         'dock': DockStatusSensor.setup(i2c, conf),
-        'nfc': NFC.setup(i2c, conf),
     }
 
 def sensor_loop(sensors: dict, conf: Config, callback=None):
@@ -340,7 +235,7 @@ def sensor_loop(sensors: dict, conf: Config, callback=None):
 
 def render_distance_grid(
     data: list[list[int | float]],
-    max_val: float | None = 160,
+    max_val: float | None = 220,
     min_val: float | None = 0,
 ) -> str:
     """Render a 2D distance array as a 2x2-enlarged ANSI true-color grid.
@@ -369,12 +264,14 @@ def render_distance_grid(
         """
         t = max(0.0, min(1.0, t))
         stops = [
-            (0.0, (0, 0, 0)),
-            (0.2, (30, 0, 120)),
-            (0.4, (0, 120, 180)),
-            (0.6, (0, 180, 80)),
-            (0.8, (220, 200, 0)),
-            (1.0, (255, 80, 0)),
+            (0.0,      (43, 15, 84)),
+            (0.142857, (171, 31, 101)),
+            (0.285714, (255, 79, 105)),
+            (0.428571, (255, 247, 248)),
+            (0.571429, (255, 129, 66)),
+            (0.714286, (255, 218, 69)),
+            (0.857143, (51, 104, 220)),
+            (1.0,      (73, 231, 236)),
         ]
         for i in range(len(stops) - 1):
             t0, c0 = stops[i]
@@ -401,9 +298,9 @@ def render_distance_grid(
         t_vals = [(v - lo) / span for v in row][::-1]
         for i in range(3):  # 2x vertical enlargement
             line = ""
-            for t in t_vals:
+            for j, t in enumerate(t_vals):
                 r, g, b = _color(t)
-                label = (str(t)[:5] if i == 1 else "-").center(6)
+                label = (str(row[j])[:5] if i == 1 else str(t)[:4] if i == 2 else " ").center(6)
                 line += f"\x1b[48;2;{r};{g};{b}m{label}"  # 2 spaces = 2x horizontal
             line += "\x1b[0m"
             lines.append(line)
@@ -417,11 +314,13 @@ def main():
 
     def callback(payload):
         publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
-        tof_render = payload['tof']['render']
         # print('\033[2J')
-        if tof_render:
-            print('Tools on Dock:', payload['dock']['docked'])
-            print(render_distance_grid(tof_render))
+        if 'tof' in payload:
+            tof_render = payload['tof']['render']
+            if tof_render:
+                print(render_distance_grid(tof_render))
+        if 'dock' in payload:
+            print('Tools on Dock:', payload['dock'].get('docked'))
 
     sensor_loop(setup(Config()), Config(), callback)
 
