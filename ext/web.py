@@ -195,5 +195,4 @@ async def tof_feed():
 
 if __name__ == "__main__":
     import uvicorn
-    sensor_thread(Config())
     uvicorn.run("ext.web:app", host="0.0.0.0", port=4219, reload=True)
