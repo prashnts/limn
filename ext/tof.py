@@ -320,6 +320,7 @@ def callback(payload):
         print('Tools on Dock:', payload['dock'].get('docked'))
 
 def sensor_thread(conf: Config):
+    print("[Limn] Sensor thread starting.")
     threading.Thread(target=sensor_loop, args=(setup(conf), conf, callback), daemon=True).start()
     print("[Limn] Sensor thread started.")
 
