@@ -9,7 +9,7 @@ def process_gcode(lines):
 
     if not has_extruder_change and layer_change_index is not None:
         # Compensate for missing toolchange on default tool/first tool.
-        lines.insert(layer_change_index, 'T0 ; missing extruder')
+        lines.insert(layer_change_index, 'T0 ; change extruder')
     
     result = []
     for line in lines:
