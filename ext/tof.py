@@ -3,18 +3,20 @@ import time
 import json
 import board
 import digitalio
-import redis
+import threading
 from pathlib import Path
 from dataclasses import dataclass, field
 from pydantic import BaseModel
 from adafruit_pn532.i2c import PN532_I2C
 from adafruit_mcp230xx.mcp23017 import MCP23017
 
+from .redis import publish
+
 _here = Path(__file__).parent / 'tof_bin'
 
 sys.path.append(_here.as_posix())
 
-from _vl53lxcx import (
+from ._vl53lxcx import (
     DATA_DISTANCE_MM,
     DATA_TARGET_STATUS,
     DATA_RANGE_SIGMA_MM,
@@ -307,21 +309,21 @@ def render_distance_grid(
 
     return "\n".join(lines)
 
+def callback(payload):
+    publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
+    # print('\033[2J')
+    if 'tof' in payload:
+        tof_render = payload['tof']['render']
+        # if tof_render:
+        #     print(render_distance_grid(tof_render))
+    if 'dock' in payload:
+        print('Tools on Dock:', payload['dock'].get('docked'))
+
+def sensor_thread(conf: Config):
+    threading.Thread(target=sensor_loop, args=(setup(conf), conf, callback), daemon=True).start()
+    print("[Limn] Sensor thread started.")
+
 def main():
-    db = redis.Redis(host='localhost', port=6379, db=0)
-    def publish(channel: str, action: str, payload: dict = {}):
-        db.publish(channel, json.dumps({'_action': action, **payload}))
-
-    def callback(payload):
-        publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
-        # print('\033[2J')
-        if 'tof' in payload:
-            tof_render = payload['tof']['render']
-            if tof_render:
-                print(render_distance_grid(tof_render))
-        if 'dock' in payload:
-            print('Tools on Dock:', payload['dock'].get('docked'))
-
     sensor_loop(setup(Config()), Config(), callback)
 
 
