@@ -18,7 +18,7 @@ state = {
 def load_acts(channel_name, message: PubSubMessage):
     payload = json.loads(message.payload['data'])
     if 'tof' in payload:
-        state['tof_render'] = payload['tof']['render']
+        state['tof_render'] = np.array(payload['tof']['render'])
     if 'dock' in payload:
         state['dock_status'] = payload['dock']['docked']
 
