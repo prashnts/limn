@@ -2,6 +2,7 @@ import io
 import asyncio
 import numpy as np
 import json
+from contextlib import asynccontextmanager
 from PIL import Image
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -9,7 +10,6 @@ from fastapi.responses import StreamingResponse
 from .redis import PubSubManager, PubSubMessage
 from .tof import sensor_thread, Config
 
-app = FastAPI()
 
 state = {
     'tof_render': np.zeros((8, 8), dtype=np.uint8),
@@ -21,6 +21,13 @@ def load_acts(channel_name, message: PubSubMessage):
         state['tof_render'] = np.array(payload['tof']['render'])
     if 'dock' in payload:
         state['dock_status'] = payload['dock']['docked']
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    sensor_thread(Config())
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 
 def render_ndarray_to_image(data: np.ndarray, scale: int) -> bytes:
