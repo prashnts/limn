@@ -310,7 +310,7 @@ def render_distance_grid(
     return "\n".join(lines)
 
 def callback(payload):
-    publish('limn.telemetry', action='update', payload={'data': json.dumps(payload)})
+    publish('limn.state', action='update', payload={'data': json.dumps(payload)})
     # print('\033[2J')
     if 'tof' in payload:
         tof_render = payload['tof']['render']
