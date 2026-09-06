@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-def render_ndarray_to_image(data: np.ndarray, scale: int) -> bytes:
+def render_ndarray_to_image(data: np.ndarray, pxscale: int) -> bytes:
     """
     Convert a square integer ndarray (range [-10, MAX]) into a JPEG image.
     Each array element becomes a `scale x scale` block coloured with a
@@ -56,6 +56,7 @@ def render_ndarray_to_image(data: np.ndarray, scale: int) -> bytes:
     if data.ndim != 2 or data.shape[0] != data.shape[1]:
         raise ValueError("data must be a square 2‑D ndarray")
     N = data.shape[0]
+    scale = 3
     M = N * scale                     # final image size (pixels)
 
     # ----------------------------------------------------------------------
@@ -159,10 +160,11 @@ def render_ndarray_to_image(data: np.ndarray, scale: int) -> bytes:
     # ----------------------------------------------------------------------
     # 5. Rotate / flip as required and return JPEG bytes
     # ----------------------------------------------------------------------
-    # img = img.rotate(180)
-    img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    img = img.rotate(180)
+    # img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
     buf = io.BytesIO()
+    img = img.resize((pxscale * N, pxscale * N), Image.Resampling.LANCZOS)
     img.save(buf, format="JPEG")
     return buf.getvalue()
 
