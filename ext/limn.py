@@ -3,6 +3,7 @@
 import re
 import random
 import serial
+import time
 import logging
 import numpy as np
 import pandas as pd
@@ -149,6 +150,7 @@ class ToolTouchProbeExtension:
         self.ref_z_paper = None
         self.debug = False
         self._draw_grid = gen_draw_grid()
+        self._detected_bed = None
         
         self.gcode.register_command("LRT_CONNECT",
             self.connect,
@@ -165,9 +167,12 @@ class ToolTouchProbeExtension:
         self.gcode.register_command("LRT_DEBUG",
             self.cmd_DEBUG,
             desc="Probe tool using touch probe")
-        self.gcode.register_command("LRT_PANEL_CALIBRATE",
-            self.cmd_LRT_PANEL_CALIBRATE,
+        self.gcode.register_command("LRT_READ_BED_ID",
+            self.cmd_LRT_READ_BED_ID,
             desc="Probe tool using touch probe")
+        self.gcode.register_command("LRT_MESH_CALIBRATE",
+            self.cmd_LRT_MESH_CALIBRATE,
+            desc="Mesh Calibrate with the given Bed")
 
         self.printer.register_event_handler("klippy:connect", self.on_connect)
 
@@ -190,8 +195,7 @@ class ToolTouchProbeExtension:
 
     def on_connect(self):
         self.connect(self.gcode)
-        self.write_queue.put('power_off()')
-        self.write_queue.put('power_on()')
+        self.write_queue.put('read_bed_id()')
 
     def _parse_touch(self, line: str):
         if not '>>' in line:
@@ -226,7 +230,15 @@ class ToolTouchProbeExtension:
                 if self.debug:
                     self.gcode.respond_info(f"RTP Touch: {pkt['5']}")
                 return pkt['5']
-                
+        if segments[0] == '!LRT' and segments[1] == 'read_bed_id':
+            try:
+                pkt = json.loads(segments[2])
+            except json.JSONDecodeError:
+                return None
+            self.gcode.respond_info(f"Read bed ID: {pkt}")
+            if pkt[0]:
+                self._detected_bed = pkt[0]
+
     def _read_serial(self, eventtime):
         if self.signal_disconnect:
             self.disconnect()
@@ -263,6 +275,7 @@ class ToolTouchProbeExtension:
             except Empty:
                 pass
             coords = self._parse_touch(text_line)
+            self.gcode.respond_info(f"Parsed touch coordinates: {text_line}")
             if coords and self.is_collecting_samples:
                 self.samples.append(coords)
         return eventtime + SERIAL_TIMER
@@ -284,8 +297,8 @@ class ToolTouchProbeExtension:
                 except SerialException:
                     self.gcode.respond_info("ERROR - Unable to communicate with LRT dock.")
                     logging.error("Unable to communicate with LRT")
-                    # self.signal_disconnect = True
-                    # return self.reactor.NEVER
+                    self.signal_disconnect = True
+                    return self.reactor.NEVER
                 return eventtime + SERIAL_TIMER
         return eventtime + SERIAL_TIMER
 
@@ -467,8 +480,57 @@ class ToolTouchProbeExtension:
         self.gcode.run_script_from_command(f"G1 Z1 ACT2")
         self.gcode.run_script_from_command("_CLEAR_OFFSETS")
 
-    def cmd_LRT_PANEL_CALIBRATE(self, gcmd):
-        self.write_queue.put('calibrate()')
+    def cmd_LRT_READ_BED_ID(self, gcmd):
+        self._detected_bed = None
+        gcmd.respond_info(f"[LRT] Now Bed ID {self._detected_bed=}")
+        self.write_queue.put('read_bed_id()')
+        delay = 2
+        while self._detected_bed is None:
+            self.reactor.pause(self.reactor.monotonic() + delay)
+            gcmd.respond_info(f"[LRT] Waiting for bed detection... {self._detected_bed=}")
+        gcmd.respond_info(f"[LRT] Reading Bed ID {self._detected_bed=}")
+    
+    def cmd_LRT_MESH_CALIBRATE(self, gcmd):
+        self._detected_bed = None
+        self.write_queue.put('read_bed_id()')
+        while self._detected_bed is None:
+            self.reactor.pause(self.reactor.monotonic() + 1)
+            gcmd.respond_info(f"[LRT] Waiting for bed detect...")
+        gcmd.respond_info(f"[LRT] Read Bed ID {self._detected_bed=}")
+
+        if self._detected_bed == 'BED_3':
+            profiles = [
+                {
+                    'origin': (5, 100),
+                    'size': (110, 64),
+                    'profile': "lrt_paper",
+                    'probe_count': '3,3',
+                },
+                {
+                    'origin': (25, 35),
+                    'size': (60, 50),
+                    'profile': "lrt_panel",
+                    'probe_count': '3,3',
+                },
+                {
+                    'origin': (95, 32),
+                    'size': (20, 30),
+                    'profile': "lrt_fsr",
+                    'probe_count': '2,2',
+                },
+            ]
+        else:
+            return
+
+        for p in profiles:
+            x0, y0 = p['origin']
+            w, h = p['size']
+            mesh_min = f"{x0},{y0}"
+            mesh_max = f"{x0 + w},{y0 + h}"
+            profile = p['profile']
+            probe_count = p['probe_count']
+            gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={p}")
+            self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={profile} mesh_min={mesh_min} mesh_max={mesh_max} probe_count={probe_count}")
 
     def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
         N_SAMPLES = 2
@@ -541,6 +603,7 @@ class ToolTouchProbeExtension:
     def cmd_DEBUG(self, gcmd):
         self.debug = True
         gcmd.respond_info(f"[LRT] Debug info: {self.ref_samples=} {self.ref_z_panel=} {self.ref_z_paper=} {self.touch_params=}")
+        gcmd.respond_info(f"[LRT] Debug info: {self._detected_bed=}")
 
     def get_status(self, eventtime):
         last_output = str(self.samples)
