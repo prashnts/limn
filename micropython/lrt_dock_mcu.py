@@ -63,6 +63,25 @@ _state = {
     FSR_ID_LM: []
 }
 
+BEDS = [
+    # Reference Resistor, ADC Min, ADC Max
+    ('BED_1', 2200,  10000, 13500),
+    ('BED_2', 4700,  18000, 24000),
+    ('BED_3', 10000, 28000, 36000),
+    ('BED_4', 15000, 37000, 42000),
+    ('BED_5', 22000, 43000, 47500),
+    ('BED_6', 33000, 48000, 53000),
+]
+REMOVED_THRESHOLD = 55000
+
+def read_bed_id():
+    val = ADC_DETECT.read_u16()
+    if val > REMOVED_THRESHOLD:
+        return 'NONE', None
+    for spec in BEDS:
+        if spec[2] <= val <= spec[3]:
+            return spec[0], list(spec)
+    return 'UNKNOWN', None
 
 def unpack_state(encoded, ptype):
     global _last_pkt_at, _state
@@ -70,7 +89,7 @@ def unpack_state(encoded, ptype):
 
     if len(decoded) != uctypes.sizeof(ptype):
         print('size mismatch')
-        return state
+        return _state
 
     pkt = uctypes.struct(uctypes.addressof(decoded), ptype, uctypes.LITTLE_ENDIAN)
 
@@ -214,6 +233,9 @@ while True:
             turn_on_power()
         if 'power_off()' in cmd:
             turn_off_power()
+        if 'read_bed_id()' in cmd:
+            bed_id = read_bed_id()
+            teeprint("read_bed_id", json.dumps(list(bed_id)))
         if 'debug_on()' in cmd:
             uart_out.write(b'debug_on()\n')
             _enable_debug = True
@@ -233,18 +255,18 @@ while True:
             _is_probing = False
 
 
-    detect_value = ADC_DETECT.read_u16()
+    bed_id = read_bed_id()
 
-    if detect_value > 32000 and detect_value < 33000 and not POWER_STATE:
-        teeprint("probe_detected", f"{detect_value=}")
+    if bed_id[1] and not POWER_STATE:
+        teeprint("bed_detected", json.dumps(list(bed_id)))
         time.sleep(1)
-        detect_value = ADC_DETECT.read_u16()
-        if detect_value > 32000 and detect_value < 33000:
+        _bed_id = read_bed_id()
+        if _bed_id[0] == bed_id[0]:
             turn_on_power()
             print("Probe detected and power turned on")
             POWER_STATE = True
-    elif detect_value > 55000 and POWER_STATE:
-        teeprint("probe_removed", f"{detect_value=}")
+    if not bed_id[1] and POWER_STATE:
+        teeprint("bed_removed", json.dumps(list(bed_id)))
         turn_off_power()
         POWER_STATE = False
 
