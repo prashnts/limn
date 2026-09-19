@@ -481,22 +481,18 @@ class ToolTouchProbeExtension:
         self.gcode.run_script_from_command("_CLEAR_OFFSETS")
 
     def cmd_LRT_READ_BED_ID(self, gcmd):
-        self._detected_bed = None
-        gcmd.respond_info(f"[LRT] Now Bed ID {self._detected_bed=}")
-        self.write_queue.put('read_bed_id()')
-        delay = 2
-        while self._detected_bed is None:
-            self.reactor.pause(self.reactor.monotonic() + delay)
-            gcmd.respond_info(f"[LRT] Waiting for bed detection... {self._detected_bed=}")
-        gcmd.respond_info(f"[LRT] Reading Bed ID {self._detected_bed=}")
-    
-    def cmd_LRT_MESH_CALIBRATE(self, gcmd):
+        self._read_bed_id(gcmd)
+
+    def _read_bed_id(self, gcmd):
         self._detected_bed = None
         self.write_queue.put('read_bed_id()')
         while self._detected_bed is None:
             self.reactor.pause(self.reactor.monotonic() + 1)
             gcmd.respond_info(f"[LRT] Waiting for bed detect...")
         gcmd.respond_info(f"[LRT] Read Bed ID {self._detected_bed=}")
+
+    def cmd_LRT_MESH_CALIBRATE(self, gcmd):
+        self._read_bed_id(gcmd)
 
         if self._detected_bed == 'BED_3':
             profiles = [
@@ -519,6 +515,22 @@ class ToolTouchProbeExtension:
                     'probe_count': '3,3',
                 },
             ]
+        elif self._detected_bed == 'BED_5':
+            profiles = [
+                # {
+                #     'origin': (105, 40),
+                #     'size': (15, 30),
+                #     'profile': "lrt_fsr",
+                #     'probe_count': '3,3',
+                # },
+                {
+                    'origin': (13, 30),
+                    'size': (85, 125),
+                    'profile': "lrt_paper",
+                    'probe_count': '4,6',
+                    'probe_count': '3,3',
+                },
+            ]
         else:
             return
 
@@ -533,6 +545,11 @@ class ToolTouchProbeExtension:
             self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={profile} mesh_min={mesh_min} mesh_max={mesh_max} probe_count={probe_count}")
 
     def cmd_LRT_TOUCH_CALIBRATE(self, gcmd):
+        self._read_bed_id(gcmd)
+        if self._detected_bed != 'BED_3':
+            gcmd.respond_info(f"[LRT] Resistive Touch Bed is required. Missing BED_3")
+            return
+
         N_SAMPLES = 2
         N_SAMPLES_CALIB = 4
         coords = [
