@@ -501,8 +501,14 @@ class ToolTouchProbeExtension:
         if self._detected_bed == 'BED_3':
             profiles = [
                 {
+                    'origin': (95, 32),
+                    'size': (20, 30),
+                    'profile': "lrt_fsr",
+                    'probe_count': '3,3',
+                },
+                {
                     'origin': (5, 100),
-                    'size': (110, 64),
+                    'size': (110, 75),
                     'profile': "lrt_paper",
                     'probe_count': '3,3',
                 },
@@ -511,12 +517,6 @@ class ToolTouchProbeExtension:
                     'size': (60, 50),
                     'profile': "lrt_panel",
                     'probe_count': '3,3',
-                },
-                {
-                    'origin': (95, 32),
-                    'size': (20, 30),
-                    'profile': "lrt_fsr",
-                    'probe_count': '2,2',
                 },
             ]
         else:
