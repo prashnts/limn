@@ -1,4 +1,4 @@
-# Force Sensitive Resistor - XY Alignment
+# Force Sensitive Resistor - Z+CoarseXY Alignment
 # 
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -11,7 +11,8 @@ from neopixel import NeoPixel
 
 wdt = WDT(timeout=5000)
 FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]
-FSR_Y = [29, 28, 26, 27]
+# FSR_Y = [29, 28, 26, 27]  # BED_3
+FSR_Y = [29, 28, 27, 26]  # BED_4
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
 ADC_Y = [ADC(Pin(pin_y, Pin.IN, Pin.PULL_DOWN)) for pin_y in FSR_Y]
 
@@ -22,7 +23,7 @@ _ADC_MAX = 39000
 _adc_cutoff = 2000
 _enable_debug = True
 TAG = "!FSR>>"
-EMBLEM = "Limn - FSR Alignment v1"
+EMBLEM = "Limn - FSR Alignment v2"
 
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
@@ -63,15 +64,16 @@ def read_fsr():
     oddvalues = []
     even_io_x = IO_X[::2]
     odd_io_x = IO_X[1::2]
-    SAMPLES = 5
+    adc_io_y = ADC_Y
+    SAMPLES = 24
 
     def read_row(x_io_pin):
         rows = []
         x_io_pin.on()
-        for i, y_pin in enumerate(ADC_Y):
+        for i, y_pin in enumerate(adc_io_y):
             factor = 1.0
-            if FSR_Y[i] == 29:
-                factor = 1.18
+            if adc_io_y[i] == 29:
+                factor = 1.18   # Compensate for no series resistor
             val = [y_pin.read_u16() for _ in range(SAMPLES)]
             val = sorted(val)[SAMPLES // 2]
             val = int(val * factor)
@@ -116,8 +118,14 @@ def calibrate_fsr():
             _debug_preview(values)
         teeprint('CLB', pack_state(touch_coords, 12))
         wdt.feed()
-    _adc_cutoff = int(max(max(prev_samples) * 1.6, _ADC_MAX))
+    _adc_cutoff = int(max((sum(prev_samples) / len(prev_samples)) * 1.2, _ADC_MAX))
+    print("adc_cutoff set to", _adc_cutoff)
 
+def calculate_strength(value):
+    # Scale the raw ADC value to a 3 digit number.
+    adc_range = 65535 - _adc_cutoff
+    strength = (value - _adc_cutoff) / adc_range if value > _adc_cutoff else 0
+    return int(strength * 1000)
 
 def _debug_preview(values):
     preview = '+-' * len(FSR_X) + '+'
@@ -125,20 +133,26 @@ def _debug_preview(values):
     mean_value = sum(sum(row) for row in values) / (len(FSR_X) * len(FSR_Y))
 
     def _ch(v):
-        if v <= _adc_cutoff:
+        s = calculate_strength(v)
+        if s <= 0:
             return ' '
-        elif v == max_value:
-            return '*'
-        elif v > mean_value:
-            return 'x'
-        else:
-            return '.'
+        if s < 10:
+            return '•'
+        if s < 100:
+            return '●'
+        if s < 200:
+            return '◉'
+        if s < 300:
+            return '◼︎'
+        return '#'
 
     for row in values:
         row = [row[len(row) - 1 - i] for i in range(len(row))]
         preview += '\n|' + '|'.join([_ch(v) for v in row]) + '|'
     preview += '\n' + '+-' * len(FSR_X) + '+\n'
     print(preview)
+    print("Max value:", max_value, "Mean value:", mean_value, "Cutoff:", _adc_cutoff)
+    print("Strength:", calculate_strength(max_value))
 
 def pack_state(touch_coords, state):
     candidates = touch_coords[:8]
@@ -150,7 +164,7 @@ def pack_state(touch_coords, state):
     for i, (x, y, v) in enumerate(candidates):
         pkt.touches[i].x = x
         pkt.touches[i].y = y
-        pkt.touches[i].v = int(v / 1024)
+        pkt.touches[i].v = calculate_strength(v)
     return binascii.b2a_base64(pkt).decode().strip()
 
 def unpack_state(encoded):
