@@ -275,7 +275,6 @@ class ToolTouchProbeExtension:
             except Empty:
                 pass
             coords = self._parse_touch(text_line)
-            self.gcode.respond_info(f"Parsed touch coordinates: {text_line}")
             if coords and self.is_collecting_samples:
                 self.samples.append(coords)
         return eventtime + SERIAL_TIMER
@@ -305,21 +304,21 @@ class ToolTouchProbeExtension:
     def connect(self, gcmd):
         if self.serial:
             gcmd.respond_info("[LRT] Already connected")
-            return
+            return True
 
         self.signal_disconnect = False
         logging.info("[LRT] Connecting to (%s) at (%s)" % (self.serial_port, self.baud))
         self.gcode.respond_info("[LRT] Connecting")
         try:
-            self.serial = serial.Serial(
-                self.serial_port, self.baud, timeout=0, write_timeout=0)
+            self.serial = serial.Serial(self.serial_port, self.baud, timeout=0, write_timeout=0)
         except SerialException:
             gcmd.respond_info("[LRT] Unable to connect")
-            return
+            return False
     
         self.gcode.respond_info("[LRT] Connected")
         self.read_timer = self.reactor.register_timer(self._read_serial, self.reactor.NOW)
         self.write_timer = self.reactor.register_timer(self._write_serial, self.reactor.NOW)
+        return True
 
     def disconnect(self, gcmd=None):
         self.gcode.respond_info("[LRT] Disconnecting")
@@ -450,7 +449,7 @@ class ToolTouchProbeExtension:
         ref_samples = [self.ref_samples[i] for i in ixs]
         ref_z_panel = [self.ref_z_panel[i] for i in ixs]
         coords = [(c.mx, c.my, PANEL_ZHOME) for c in ref_samples]
-        samples = self._probe_tool(gcmd, coords, n_samples=2)
+        samples = self._probe_tool(gcmd, coords, n_samples=3)
 
         def diff_samples(ref, sample):
             return 
@@ -484,11 +483,14 @@ class ToolTouchProbeExtension:
         self._read_bed_id(gcmd)
 
     def _read_bed_id(self, gcmd):
+        if not self.connect(self.gcode):
+            gcmd.respond_info("[LRT] Failed to connect to touch panel.")
+            return
         self._detected_bed = None
         self.write_queue.put('read_bed_id()')
         while self._detected_bed is None:
             self.reactor.pause(self.reactor.monotonic() + 1)
-            gcmd.respond_info(f"[LRT] Waiting for bed detect...")
+            gcmd.respond_info(f"[LRT] reading bed ID...")
         gcmd.respond_info(f"[LRT] Read Bed ID {self._detected_bed=}")
 
     def cmd_LRT_MESH_CALIBRATE(self, gcmd):
@@ -496,12 +498,12 @@ class ToolTouchProbeExtension:
 
         if self._detected_bed == 'BED_3':
             profiles = [
-                {
-                    'origin': (95, 32),
-                    'size': (20, 30),
-                    'profile': "lrt_fsr",
-                    'probe_count': '3,3',
-                },
+                # {
+                #     'origin': (95, 32),
+                #     'size': (20, 30),
+                #     'profile': "lrt_fsr",
+                #     'probe_count': '3,3',
+                # },
                 {
                     'origin': (5, 100),
                     'size': (110, 75),
@@ -517,18 +519,17 @@ class ToolTouchProbeExtension:
             ]
         elif self._detected_bed == 'BED_5':
             profiles = [
-                # {
-                #     'origin': (105, 40),
-                #     'size': (15, 30),
-                #     'profile': "lrt_fsr",
-                #     'probe_count': '3,3',
-                # },
                 {
-                    'origin': (13, 30),
-                    'size': (85, 125),
+                    'origin': (108, 36),
+                    'size': (10, 20),
+                    'profile': "lrt_fsr",
+                    'probe_count': '4,5',
+                },
+                {
+                    'origin': (0, 30),
+                    'size': (93, 130),
                     'profile': "lrt_paper",
                     'probe_count': '4,6',
-                    'probe_count': '3,3',
                 },
             ]
         else:
