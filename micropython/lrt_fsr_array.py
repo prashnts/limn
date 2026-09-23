@@ -5,6 +5,7 @@
 import time
 import uctypes
 import binascii
+import random
 from machine import UART, Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 
@@ -14,12 +15,41 @@ FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]
 # FSR_Y = [29, 28, 26, 27]  # BED_3
 FSR_Y = [29, 28, 27, 26]  # BED_4
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
-ADC_Y = [ADC(Pin(pin_y, Pin.IN, Pin.PULL_DOWN)) for pin_y in FSR_Y]
+IO_Y = [Pin(pin_y, Pin.IN, Pin.PULL_DOWN) for pin_y in FSR_Y]
+ADC_Y = [(pin_y, ADC(pin_y)) for pin_y in IO_Y]
+ADC_DAMP_PIN = IO_Y[3]
+
+
+_NX = len(FSR_X)
+_NY = len(FSR_Y)
+BASE   = None          # [row][col] dark baseline ADC
+FULL   = None          # [row][col] full-scale ADC per cell (best-effort)
+THRESH = None          # [row][col] absolute touch threshold ADC
+_streak= None          # [row][col] consecutive frames above threshold
+
+K_SIGMA        = 18     # threshold = base + K_SIGMA*sigma (>= MIN_MARGIN)
+MIN_MARGIN     = 820    # minimum absolute gap above baseline, ADC counts
+STRONG_MIN     = 345    # strength(0..1000)
+CONFIRM_FRAMES = 10
+
+DARK_MAX_GUARD = 5500  # dark-phase: global max below this => sheet untouched
+DARK_POOL      = 50    # rolling matrices kept for dark stats (longer)
+DARK_MIN_ITERS = 40    # must sample >= this many before considering done (longer)
+DARK_STABLE    = 8     # consecutive stable windows required (longer)
+DARK_TOL       = 280   # global-max spread to call "stable" (tighter -> runs longer)
+CAL_TIMEOUT    = 60    # safety: stop after N outer iters (WDT-friendly)
+
+_min_strength  = 200    # GLOBAL force floor, 0..1000. Set via fsr_set_param(min_strength=N)
+
+READ_MATRIX = []
+for x, pin_x in enumerate(IO_X):
+    for y, pin_y in enumerate(ADC_Y):
+        READ_MATRIX.append((x, y, pin_x, pin_y))
 
 uart_in = UART(0, 115200)
 npx = NeoPixel(Pin(16), 1)
 
-_ADC_MAX = 39000
+_ADC_MAX = 65535
 _adc_cutoff = 2000
 _enable_debug = True
 TAG = "!FSR>>"
@@ -50,109 +80,178 @@ TOUCH_LED_COLOR = (0x91, 0x3A, 0x1B) #3A911B
 
 
 def median(arr):
-    return sorted(arr)[len(arr) // 2]
+    arr = sorted(arr)
+    if len(arr) % 2 == 1:
+        return arr[len(arr) // 2]
+    else:
+        mid = len(arr) // 2
+        return (arr[mid - 1] + arr[mid]) // 2
+
+def random_shuffle(arr):
+    arr = arr[:]
+    shuffled = []
+    while True:
+        if not arr:
+            break
+        ix = random.randint(0, len(arr) - 1)
+        shuffled.append(arr.pop(ix))
+    return shuffled
 
 def teeprint(info, line):
+    npx[0] = ACT_COLOR
+    npx.write()
     line = line.strip()
     line = TAG + info + '>>' + line + ">>\n"
     if _enable_debug:
         print(line)
     uart_in.write((line).encode())
 
+def _read_raw():
+    SAMPLES = 9
+
+    def read_cell(x, y, pin_x, pin_y):
+        io_y, adc_y = pin_y
+        base_val = median([adc_y.read_u16() for _ in range(SAMPLES)])
+        pin_x.value(1)
+        time.sleep_us(40)
+        factor = .8 if io_y == ADC_DAMP_PIN else 1.0
+        val = median([adc_y.read_u16() for _ in range(SAMPLES)])
+        pin_x.value(0)
+        time.sleep_us(40)
+        val = val - base_val if val > base_val else 0
+        return (x, y, int(val * factor))
+
+    # read_matrix = random_shuffle(READ_MATRIX)
+    read_matrix = READ_MATRIX
+    flat = [read_cell(*t) for t in read_matrix]
+    flat.sort(key=lambda t: (t[0], t[1]))
+    return [[v for x, y, v in flat if y == i] for i in range(_NY)]
+
+def calculate_strength(row, col, v):
+    if BASE is None:
+        rng = _ADC_MAX - _adc_cutoff
+        s = (v - _adc_cutoff) / rng if v > _adc_cutoff else 0
+        return int(s * 1000)
+    base = BASE[row][col]
+    full = FULL[row][col] if FULL else _ADC_MAX
+    span = full - base
+    if span <= 0:
+        return 0
+    s = (v - base) / span * 1000.0
+    return int(max(0, min(1000, s)))
+
 def read_fsr():
-    evenvalues = []
-    oddvalues = []
-    even_io_x = IO_X[::2]
-    odd_io_x = IO_X[1::2]
-    adc_io_y = ADC_Y
-    SAMPLES = 24
+    global _streak
+    if _streak is None:
+        _streak = [[0] * _NX for _ in range(_NY)]
+    values = _read_raw()
 
-    def read_row(x_io_pin):
-        rows = []
-        x_io_pin.on()
-        for i, y_pin in enumerate(adc_io_y):
-            factor = 1.0
-            if adc_io_y[i] == 29:
-                factor = 1.18   # Compensate for no series resistor
-            val = [y_pin.read_u16() for _ in range(SAMPLES)]
-            val = sorted(val)[SAMPLES // 2]
-            val = int(val * factor)
-            rows.append(val)
-        x_io_pin.off()
-        return rows
+    touch_coords = []
+    for row_i, row in enumerate(values):
+        for col_j, v in enumerate(row):
+            if BASE is not None:
+                thr = THRESH[row_i][col_j]
+                s   = calculate_strength(row_i, col_j, v)
+            else:
+                thr, s = _adc_cutoff, 0
+            if v > thr:
+                _streak[row_i][col_j] += 1
+            else:
+                _streak[row_i][col_j] = 0
+            st = _streak[row_i][col_j]
+            # or st >= CONFIRM_FRAMES
+            if v > thr and s >= _min_strength and (s >= STRONG_MIN):
+                touch_coords.append((row_i, col_j, v))
 
-    for pin_x in even_io_x:
-        evenvalues.append(read_row(pin_x))
-    for pin_x in odd_io_x:
-        oddvalues.append(read_row(pin_x))
-
-    values = list(zip(*[val for pair in zip(evenvalues, oddvalues) for val in pair]))
-    touch_coords = [(x, y, v) for x, row in enumerate(values) for y, v in enumerate(row) if v > _adc_cutoff]
-    touch_coords.sort(key=lambda t: t[2], reverse=True)
-
+    touch_coords.sort(key=lambda t: calculate_strength(t[0], t[1], t[2]), reverse=True)
     return values, touch_coords
 
+def _robust(arr):
+    m = median(arr)
+    mad = median([abs(a - m) for a in arr]) or 1
+    return m, (1.4826 * mad + 1e-3)
+
+def _pool_stats(pool):
+    med, sig = [[0]*_NX for _ in range(_NY)], [[0]*_NX for _ in range(_NY)]
+    for row_i in range(_NY):
+        for col_j in range(_NX):
+            m, s = _robust([mat[row_i][col_j] for mat in pool])
+            med[row_i][col_j], sig[row_i][col_j] = m, s
+    return med, sig
+
 def calibrate_fsr():
-    global _adc_cutoff
-    max_samples = 10
-    prev_max = 0
-    prev_samples = []
-    prev_variances = []
-    tolerance = 500
+    global BASE, THRESH, _streak, _adc_cutoff
     npx[0] = ACT_COLOR
     npx.write()
+
+    pool = []
+    iters = 0
+    stable = 0
     while True:
-        values, touch_coords = read_fsr()
-        max_adc = max(max(row) for row in values)
-        if max_adc > prev_max + tolerance:
-            prev_max = max_adc
-        if len(prev_samples) > max_samples:
-            prev_samples.pop(0)
-        prev_samples.append(max_adc)
-        variance = sum((max_adc - s) ** 2 for s in prev_samples) ** 0.5 / len(prev_samples)
-        prev_variances.append(variance)
+        vals = _read_raw()
+        pool.append(vals)
+        if len(pool) > DARK_POOL:
+            pool.pop(0)
 
-        if len(prev_variances) > max_samples * 10 and sum(prev_variances) / len(prev_variances) < tolerance:
+        window_max = [max(max(r) for r in m) for m in pool]
+        spread = max(window_max) - min(window_max)
+        stable += 1 if spread < DARK_TOL else 0
+
+        max_adc = max(max(r) for r in vals)
+        done = (iters >= DARK_MIN_ITERS and stable >= DARK_STABLE and max_adc < DARK_MAX_GUARD)
+        if done or iters > CAL_TIMEOUT:
             break
+
         if _enable_debug:
-            _debug_preview(values)
-        teeprint('CLB', pack_state(touch_coords, 12))
+            _debug_preview(vals)
+        teeprint('CLB', pack_state([], 12))   # calibrating (still dark)
         wdt.feed()
-    _adc_cutoff = int(max((sum(prev_samples) / len(prev_samples)) * 1.2, _ADC_MAX))
-    print("adc_cutoff set to", _adc_cutoff)
+        iters += 1
+        time.sleep_ms(40)
 
-def calculate_strength(value):
-    # Scale the raw ADC value to a 3 digit number.
-    adc_range = 65535 - _adc_cutoff
-    strength = (value - _adc_cutoff) / adc_range if value > _adc_cutoff else 0
-    return int(strength * 1000)
+    base_med, base_sig = _pool_stats(pool)
+    BASE   = [[int(base_med[r][c]) for c in range(_NX)] for r in range(_NY)]
+    THRESH = [[int(BASE[r][c] + max(K_SIGMA * base_sig[r][c], MIN_MARGIN)) for c in range(_NX)]
+              for r in range(_NY)]
 
-def _debug_preview(values):
-    preview = '+-' * len(FSR_X) + '+'
+    _streak = [[0] * _NX for _ in range(_NY)]
+    _adc_cutoff = max(max(r) for r in THRESH)   # keep sane global ref
+    teeprint('CLB', pack_state([], 14))          # calibrated done
+
+def _debug_preview(values, touch_coords=None):
     max_value = max(max(row) for row in values)
-    mean_value = sum(sum(row) for row in values) / (len(FSR_X) * len(FSR_Y))
 
-    def _ch(v):
-        s = calculate_strength(v)
-        if s <= 0:
-            return ' '
-        if s < 10:
-            return '•'
-        if s < 100:
-            return '●'
-        if s < 200:
-            return '◉'
-        if s < 300:
-            return '◼︎'
-        return '#'
+    def _ch(v, r, c):
+        s = calculate_strength(r, c, v)
+        def value_map():
+            if v == max_value:
+                return '█'
+            if s <= 0:
+                return ' '
+            if s < 10:
+                return '•'
+            if s < 100:
+                return '●'
+            if s < 200:
+                return '◉'
+            if s < 300:
+                return '◼︎'
+            return '#'
+        base = value_map()
+        if touch_coords and (r, c, v) in touch_coords:
+            color = 41 + touch_coords.index((r, c, v))
+            return f'\033[{color}m {base} \033[0m'
+        return f'\033[90m {base} \033[0m'
 
-    for row in values:
-        row = [row[len(row) - 1 - i] for i in range(len(row))]
-        preview += '\n|' + '|'.join([_ch(v) for v in row]) + '|'
-    preview += '\n' + '+-' * len(FSR_X) + '+\n'
+    preview = '  ┌' + '───┬' * (len(FSR_X) - 1) + '───┐'
+    for r, row in enumerate(values):
+        chars = [_ch(row[c], r, c) for c in range(len(row))][::-1]
+        preview += f'\n{FSR_Y[r]}├' + '┼'.join(chars) + '│'
+    preview += '\n  └' + '───┴' * (len(FSR_X) - 1) + '───┘\n'
+    preview += '    ' + '  '.join([str(x).center(2) for x in FSR_X])
     print(preview)
-    print("Max value:", max_value, "Mean value:", mean_value, "Cutoff:", _adc_cutoff)
-    print("Strength:", calculate_strength(max_value))
+    if touch_coords is not None:
+        print("Touch Coords:", touch_coords)
 
 def pack_state(touch_coords, state):
     candidates = touch_coords[:8]
@@ -164,7 +263,7 @@ def pack_state(touch_coords, state):
     for i, (x, y, v) in enumerate(candidates):
         pkt.touches[i].x = x
         pkt.touches[i].y = y
-        pkt.touches[i].v = calculate_strength(v)
+        pkt.touches[i].v = calculate_strength(x, y, v)
     return binascii.b2a_base64(pkt).decode().strip()
 
 def unpack_state(encoded):
@@ -216,7 +315,7 @@ while True:
     if has_touch:        
         teeprint('SMP', pack_state(touch_coords, 42))
         if _enable_debug:
-            _debug_preview(sensor_values)
+            _debug_preview(sensor_values, touch_coords)
         npx[0] = TOUCH_LED_COLOR
         npx.write()
     else:
