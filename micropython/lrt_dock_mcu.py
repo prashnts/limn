@@ -8,7 +8,7 @@ import rp2
 from machine import Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
 from link import load_node, from_config, unpack_data, Guard, T_CMD, T_DATA
-from link import FSR_ID_LM, RTP_ID_LM, S_SAMPLE
+from link import S_SAMPLE
 from bridge import Bridge, teeprint
 
 wdt = WDT(timeout=3000)
@@ -22,7 +22,6 @@ PIN_PWR_OFF = Pin(7, Pin.OUT, Pin.PULL_DOWN)
 ADC_DETECT = ADC(Pin(29, Pin.IN))
 
 POWER_STATE = False
-STALE_MS = 100         # forget a sensor's touches after this long
 
 # Probe trigger, see micropython/STRATEGY.md
 #   "uart":   pulse on touch samples arriving over UART (no diodes needed)
@@ -37,18 +36,10 @@ _enable_debug = True
 _armed = False
 EMBLEM = "Limn Resistive Touch Probe v1"
 
-# Commands from the host that are passed on to every node in the chain.
-CHAIN_COMMANDS = ('calibrate()', 'debug_on()', 'debug_off()', 'reset()', 'ping()', 'disarm()', 'diag()')
+# Commands only the Dock handles. Everything else is also passed on to every
+# node in the chain.
+DOCK_COMMANDS = ('power_on()', 'power_off()', 'read_bed_id()', 'stats()')
 
-# Keys are strings so that the JSON sent to klipper stays {"4": .., "5": ..}
-_last_pkt_at = {
-    str(FSR_ID_LM): 0,
-    str(RTP_ID_LM): 0,
-}
-_state = {
-    str(FSR_ID_LM): [],
-    str(RTP_ID_LM): [],
-}
 _last_seq = {}         # hop -> last seq seen
 _seq_gaps = {}         # hop -> frames missed (replaced by newer data, or damaged)
 
@@ -150,19 +141,9 @@ def on_data(frame):
         teeprint("error", "malformed data from hop %d" % frame.hop)
         return
     kind, state, values = sample
-    if kind == RTP_ID_LM:
-        x, y, z = values
-        values = [x, y, z >> 10]
-    key = str(kind)
-    _state[key] = values
-    _last_pkt_at[key] = time.ticks_ms()
-
     if TRIGGER == 'uart' and state == S_SAMPLE and values:
         start_probe_pulse()
-
-    out = dict(_state)
-    out['hop'] = frame.hop
-    teeprint("SMP", json.dumps(out))
+    bridge.show(frame)
 
 def on_chain_frame(frame):
     count_seq_gap(frame)
@@ -173,19 +154,15 @@ def on_chain_frame(frame):
     else:
         bridge.show(frame)
 
-def clear_stale_state():
-    now = time.ticks_ms()
-    for key in _last_pkt_at:
-        if time.ticks_diff(now, _last_pkt_at[key]) > STALE_MS:
-            _state[key] = []
-
-
 # Host -> dock
 def handle_host_command(cmd):
     global _enable_debug, _armed
     npx[0] = (80, 40, 10)
     npx.write()
-    if cmd in CHAIN_COMMANDS or cmd.startswith('arm('):
+    if cmd.startswith('frame('):
+        bridge.command(cmd)
+        return
+    if cmd not in DOCK_COMMANDS:
         link.send_down(T_CMD, cmd.encode())
 
     if cmd == 'power_on()':
@@ -212,10 +189,6 @@ def handle_host_command(cmd):
         stats['trigger'] = TRIGGER
         stats['armed'] = _armed
         teeprint("stats", json.dumps(stats))
-    elif bridge.command(cmd):
-        pass
-    elif cmd not in CHAIN_COMMANDS:
-        teeprint("error", "unknown command " + cmd)
 
 
 # Touch (trigger "detect") and bed detection share the DETECT line.
@@ -281,7 +254,6 @@ def step():
 
     for frame in link.poll():
         on_chain_frame(frame)
-    clear_stale_state()
 
     cmd = bridge.read_command()
     if cmd:

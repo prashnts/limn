@@ -61,7 +61,7 @@ END | type:u8 hop:u8 seq:u8 payload... crc32:u32le | END      (0xC0 and 0xDB esc
 Sensor payloads (little endian):
 - FSR: `kind=0x4, state, n, n x (row:u8, col:u8, strength:u16 0..1000)`
 - RTP: `kind=0x5, state, x:u16, y:u16, z:u32`
-- state: `12` calibrating, `13` calibration failed, `14` calibrated, `42` sample
+- state: `12` calibrating, `13` calibration failed, `14` calibrated, `42` sample, `43` matrix (all cells)
 
 ### Routing
 
@@ -83,15 +83,21 @@ Each UART has three queues, sent in this order:
 
 ### Dock <-> Klipper
 
-Unchanged line format, so `ext/limn.py` keeps working:
+One line per frame, so several nodes of the same kind stay apart (read by `ext/limn/dock.py`):
 ```
-!LRT>>SMP>>{"4": [[row, col, strength], ...], "5": [x, y, v], "hop": 2}>>
+!LRT>>data>>{"hop": 2, "kind": 4, "state": 42, "values": [[row, col, strength], ...]}>>
+!LRT>>data>>{"hop": 1, "kind": 5, "state": 42, "values": [x, y, z]}>>
 !LRT>>hello>>{"hop": 1, "role": "rtp", "emblem": "..."}>>
 !LRT>>stats>>{"down": {"rx": .., "tx": .., "bad": .., "drop": ..}, "seq_gaps": {"1": 0, "2": 12}, ..}>>
 !LRT>>frame>>{"hop": 1, "type": 5, "b64": "..."}>>
 ```
 
-Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock), and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello), `arm(<role>)`, `disarm()`, `diag()` (FSR: pull state of its sense pins).
+Host commands only the Dock handles: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock). Every other command is also sent down the chain:
+- `calibrate()`, `debug_on()`, `debug_off()`, `reset()`
+- `ping()`: every node answers with hello
+- `arm(<role>)`, `disarm()`
+- `diag()`: FSR, pull state of its sense pins
+- `matrix(on)` / `matrix(off)`: FSR, send all 32 cells every frame (state 43). To reach one node only, send it as a `frame(<hop>,2,...)`.
 
 The USB side lives in `lib/bridge.py`. Every MCU runs it, so without a Dock the first bed MCU on USB plays the Dock for the ones below it (it is hop 0). A bed node stays silent on USB until the host sends its first command; from then on it prints every frame (`hello`, `log`, `frame`, and `data` lines for sensor samples).
 

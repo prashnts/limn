@@ -34,7 +34,7 @@ uv run micropython/mcu.py update --hop 2    # one node
 uv run micropython/mcu.py info --hop 1      # full report of one node
 uv run micropython/mcu.py stats             # link counters
 uv run micropython/mcu.py send 'calibrate()'
-uv run micropython/mcu.py monitor --kind SMP
+uv run micropython/mcu.py monitor --kind data
 uv run micropython/mcu.py send 'diag()'     # FSR sense pins: are the pull-downs on
 ```
 

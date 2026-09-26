@@ -133,8 +133,12 @@ class UART:
         return data
 
     def write(self, data):
-        self.sock.setblocking(True)
-        self.sock.sendall(data)
+        # Like a real UART: never stuck, bytes nobody reads are lost.
+        self.sock.settimeout(0.05)
+        try:
+            self.sock.sendall(data)
+        except (socket.timeout, BlockingIOError):
+            pass
         self.sock.setblocking(False)
         return len(data)
 
