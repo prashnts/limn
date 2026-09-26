@@ -9,6 +9,7 @@
 #
 # This file also runs on CPython so that it can be tested on a PC:
 #   python3 micropython/tests/test_link.py
+import json
 import struct
 import time
 import binascii
@@ -22,6 +23,7 @@ T_HELLO = 1     # up:   node announces itself, payload b'<role>>><emblem>'
 T_CMD   = 2     # down: command text, eg. b'calibrate()'
 T_LOG   = 3     # up:   text for humans
 T_DATA  = 4     # up:   sensor sample, see pack_fsr() / pack_rtp()
+T_OTA   = 5     # both: firmware update request / reply, see lib/ota.py
 
 # Downstream frames carry the number of hops left to the target.
 # Upstream frames carry the number of hops travelled, which the Dock reads as
@@ -36,7 +38,7 @@ ESC     = b'\xdb'
 ESC_END = b'\xdb\xdc'
 ESC_ESC = b'\xdb\xdd'
 
-MAX_FRAME   = 512   # encoded bytes; anything longer without an END is noise
+MAX_FRAME   = 1024  # encoded bytes; anything longer without an END is noise
 TX_BATCH    = 128   # bytes handed to the UART per pump, keeps priorities useful
 CONTROL_MAX = 32    # queued frames per priority before dropping the oldest
 BULK_MAX    = 8
@@ -84,7 +86,24 @@ def decode(raw):
 
 def open_uart(uart_id, baud=BAUD, **pins):
     from machine import UART
-    return UART(uart_id, baud, txbuf=1024, rxbuf=1024, **pins)
+    return UART(uart_id, baud, txbuf=1024, rxbuf=2048, **pins)
+
+def load_node(root=''):
+    '''This MCU's node.json: role, app, UARTs and pins. See micropython/nodes/.'''
+    with open(root + 'node.json') as fp:
+        return json.load(fp)
+
+def from_config(node):
+    '''Link with the UARTs described in node.json, eg.
+    "up": {"id": 0}, "down": {"id": 0, "tx": 12, "rx": 13}'''
+    def port(key):
+        spec = node.get(key)
+        if not spec:
+            return None
+        from machine import Pin
+        pins = {k: Pin(spec[k]) for k in ('tx', 'rx') if k in spec}
+        return open_uart(spec['id'], node.get('baud', BAUD), **pins)
+    return Link(up=port('up'), down=port('down'))
 
 
 class Port:
@@ -182,9 +201,12 @@ def _priority(ftype, hop, payload):
 class Link:
     '''Routes frames for one node. Only the Dock has no `up` UART.'''
 
-    def __init__(self, up=None, down=None):
+    def __init__(self, up=None, down=None, root=''):
         self.up = Port(up) if up else None
         self.down = Port(down) if down else None
+        self.root = root        # where files live, only differs in tests
+        self.quiet = False      # set during updates: no sensor data or logs
+        self.ota = None
         self._seq = 0
 
     def poll(self):
@@ -202,15 +224,32 @@ class Link:
         if self.up:
             for f in self.up.frames():
                 if f.hop == BROADCAST:
-                    mine.append(f)
                     self._forward_down(f, BROADCAST)
-                elif f.hop <= 1:
-                    mine.append(f)
-                else:
+                elif f.hop > 1:
                     self._forward_down(f, f.hop - 1)
+                    continue
+                if f.type == T_OTA:
+                    self.send(T_OTA, self.handle_ota(f.payload))
+                    self.after_ota()
+                else:
+                    mine.append(f)
 
         self.pump()
         return mine
+
+    def handle_ota(self, payload):
+        '''Runs an update request meant for this node, returns the reply.'''
+        if self.ota is None:
+            import ota
+            self.ota = ota.Receiver(self)
+        return self.ota.handle(payload)
+
+    def after_ota(self):
+        '''Resets once the reply to a commit is on the wire.'''
+        if self.ota and self.ota.reset_pending:
+            self.flush()
+            import ota
+            ota.reset()
 
     def _forward_down(self, f, hop):
         if self.down:
@@ -222,6 +261,8 @@ class Link:
 
     def send(self, ftype, payload=b''):
         '''Sends a frame from this node towards the Dock.'''
+        if self.quiet and ftype in (T_DATA, T_LOG):
+            return
         if self.up:
             self.up.queue(encode(ftype, 0, self._next_seq(), payload),
                           *_priority(ftype, 0, payload))
