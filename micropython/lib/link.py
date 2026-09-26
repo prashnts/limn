@@ -293,11 +293,47 @@ class Link:
         return {name: p.stats for name, p in (('up', self.up), ('down', self.down)) if p}
 
 
+class Guard:
+    '''Keeps a main loop going through an occasional error: reports it with
+    `log(text)` and carries on. After `limit` errors in a row it re-raises, and
+    main.py falls back to the rescue loop, which still takes updates.
+
+        while True:
+            try:
+                step()
+                guard.ok()
+            except Exception as e:
+                guard.error(e)
+    '''
+
+    def __init__(self, log, limit=20):
+        self.log = log
+        self.limit = limit
+        self.errors = 0
+        self.total = 0
+
+    def ok(self):
+        self.errors = 0
+
+    def error(self, e):
+        self.errors += 1
+        self.total += 1
+        try:
+            import sys
+            sys.print_exception(e)
+        except AttributeError:
+            print(repr(e))
+        self.log('error>>' + repr(e))
+        if self.errors >= self.limit:
+            raise e
+
+
 # Sensor payloads, carried in T_DATA frames.
 FSR_ID_LM = 0x4
 RTP_ID_LM = 0x5
 
 S_CALIBRATING = 12
+S_CAL_FAILED  = 13      # kept the previous baseline (or a doubtful one), see the log
 S_CALIBRATED  = 14
 S_SAMPLE      = 42
 

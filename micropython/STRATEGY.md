@@ -59,7 +59,7 @@ END | type:u8 hop:u8 seq:u8 payload... crc32:u32le | END      (0xC0 and 0xDB esc
 Sensor payloads (little endian):
 - FSR: `kind=0x4, state, n, n x (row:u8, col:u8, strength:u16 0..1000)`
 - RTP: `kind=0x5, state, x:u16, y:u16, z:u32`
-- state: `12` calibrating, `14` calibrated, `42` sample
+- state: `12` calibrating, `13` calibration failed, `14` calibrated, `42` sample
 
 ### Routing
 
@@ -77,6 +77,7 @@ Each UART has three queues, sent in this order:
 - Frames go out in batches of 128 bytes, only once the previous batch left the UART. Nothing blocks.
 - Timers only set flags; all UART writes happen in the main loop.
 - A node forwards `reset()` down (`link.flush()`) before resetting itself.
+- Main loops run under `link.Guard`: an error is logged up the chain (`log` line with `error>>`) and the loop carries on. 20 in a row and the app gives up; `main.py` then runs the rescue loop, which still takes updates.
 
 ### Dock <-> Klipper
 
@@ -88,7 +89,9 @@ Unchanged line format, so `ext/limn.py` keeps working:
 !LRT>>frame>>{"hop": 1, "type": 5, "b64": "..."}>>
 ```
 
-Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock), and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello), `arm(<role>)`, `disarm()`.
+Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock), and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello), `arm(<role>)`, `disarm()`, `diag()` (FSR: pull state of its sense pins).
+
+In Klipper, `LRT_CHAIN` shows the hellos and link counters without stopping Klipper. Error lines from any MCU are always shown.
 
 ### Baud
 
@@ -132,5 +135,9 @@ lrt_*.py       the app
 - [x] RTP: same 1ms settle time for X, Y and Z (was 10ms for X, none for Y and Z)
 - [ ] Hardware test: `mcu.py stats` per link, raise baud
 - [ ] Diodes on the bed, then `"trigger": "detect"` in `nodes/dock.json` and `mcu.py update --hop 0 --config dock`
-- [ ] Tune `touch_threshold` and `SETTLE_US` on the real panel
-- [ ] FSR: pull-downs and thresholds, touch IRQ
+- [x] FSR: calibration that times out is reported (state 13, log), keeps the previous baseline; dead knobs removed, same touch rule
+- [x] RTP: samples taken while the pen lands or lifts (spread > `max_spread`) are not sent; panel released between reads
+- [x] Errors in a main loop are reported and survived (`Guard`)
+- [ ] Tune `touch_threshold`, `SETTLE_US` and `max_spread` on the real panel
+- [ ] FSR pull-downs: `mcu.py send 'diag()'`. If `pull_down=0`, try `"fsr_pull_down": true` in node.json and re-tune the thresholds
+- [ ] FSR touch IRQ

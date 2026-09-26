@@ -10,7 +10,7 @@ import binascii
 import rp2
 from machine import Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
-from link import load_node, from_config, unpack_data, T_CMD, T_HELLO, T_LOG, T_DATA, T_OTA
+from link import load_node, from_config, unpack_data, Guard, T_CMD, T_HELLO, T_LOG, T_DATA, T_OTA
 from link import FSR_ID_LM, RTP_ID_LM, S_SAMPLE
 
 wdt = WDT(timeout=3000)
@@ -40,7 +40,7 @@ TAG = "!LRT>>"
 EMBLEM = "Limn Resistive Touch Probe v1"
 
 # Commands from the host that are passed on to every node in the chain.
-CHAIN_COMMANDS = ('calibrate()', 'debug_on()', 'debug_off()', 'reset()', 'ping()', 'disarm()')
+CHAIN_COMMANDS = ('calibrate()', 'debug_on()', 'debug_off()', 'reset()', 'ping()', 'disarm()', 'diag()')
 
 # Keys are strings so that the JSON sent to klipper stays {"4": .., "5": ..}
 _last_pkt_at = {
@@ -80,6 +80,9 @@ def read_bed_id(val=None):
 def teeprint(info, line):
     line = TAG + info + '>>' + line + ">>"
     print(line)
+
+def log(text):
+    teeprint("log", json.dumps({'hop': 0, 'text': text}))
 
 def _pulse_power_pin(pin):
     pin.on()
@@ -320,10 +323,7 @@ def on_boot():
     timer_restore_led.init(period=1000, mode=Timer.PERIODIC, callback=restore_led)
     link.send_down(T_CMD, b'reset()')
 
-on_boot()
-
-
-while True:
+def step():
     wdt.feed()
 
     detect = ADC_DETECT.read_u16()
@@ -341,3 +341,13 @@ while True:
 
     npx[0] = (0, 0, 0) if not POWER_STATE else (0, 80, 20)
     npx.write()
+
+guard = Guard(log)
+on_boot()
+
+while True:
+    try:
+        step()
+        guard.ok()
+    except Exception as e:
+        guard.error(e)
