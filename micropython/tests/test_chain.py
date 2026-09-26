@@ -110,8 +110,8 @@ def check(name, ok):
 
 def main():
     install('dock', 'dock', trigger='detect')
-    install('rtp', 'rtp')
-    install('fsr', 'fsr')
+    install('rtp', 'rtp', touch_pin=2)      # as if the diodes were fitted
+    install('fsr', 'fsr', touch_pin=2)
     dock_rtp = socket.socketpair()
     rtp_fsr = socket.socketpair()
     procs = [
@@ -148,6 +148,21 @@ def main():
         check('fsr touch while rtp is armed -> no pulse', pulses() == [])
         dock.command('disarm()', 'armed')
 
+        # Without touch_pin (no diode yet) arming is ignored, samples still flow.
+        node = json.loads((SIM / 'rtp' / 'node.json').read_text())
+        node.pop('touch_pin')
+        src_config = SIM / 'rtp_no_diode.json'
+        src_config.write_text(json.dumps(node))
+        mcu.run_update(dock, [1], config=src_config)
+        (SIM / 'pulses').unlink(missing_ok=True)
+        dock.command('arm(rtp)', 'armed')
+        time.sleep(0.3)
+        (SIM / 'stim_rtp').touch()
+        samples = [d for k, d in dock.lines(1) if k == 'SMP' and d['5']]
+        (SIM / 'stim_rtp').unlink()
+        dock.command('disarm()', 'armed')
+        check('no touch_pin: no pulse, samples still arrive', pulses() == [] and len(samples) > 0)
+
         # Updates
         rtp_app = (mcu.HERE / 'lrt_resistive_touch.py').read_text() + '\n# updated\n'
         src = source_with({'lrt_resistive_touch.py': rtp_app})
@@ -183,11 +198,12 @@ def main():
               and not info['pending'])
 
         # Errors are reported and the loop keeps going
+        wait_for(lambda: 2 in dock.hellos(), what='fsr back after the dock update')
         bad = mcu.binascii.b2a_base64(b'arm(\xff)').decode().strip()
-        dock.send(f'frame(1,{T_CMD},{bad})')
-        logs = [d for k, d in dock.lines(1.5) if k == 'log' and d['hop'] == 1]
+        dock.send(f'frame(2,{T_CMD},{bad})')
+        logs = [d for k, d in dock.lines(1.5) if k == 'log' and d['hop'] == 2]
         check('node error is reported', any('error>>' in d['text'] for d in logs))
-        check('node keeps running after an error', wait_for(lambda: 1 in dock.hellos(), what='rtp hello'))
+        check('node keeps running after an error', wait_for(lambda: 2 in dock.hellos(), what='fsr hello'))
 
         dock.send('diag()')
         logs = [d['text'] for k, d in dock.lines(1.5) if k == 'log' and d['hop'] == 2]
