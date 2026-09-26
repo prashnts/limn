@@ -3,11 +3,9 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-import json
-import uctypes
-import binascii
-from machine import UART, Pin, ADC, reset, Timer, WDT
+from machine import Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
+from link import Link, open_uart, pack_rtp, T_CMD, T_HELLO, T_DATA, S_SAMPLE
 
 
 wdt = WDT(timeout=3000)
@@ -15,13 +13,13 @@ PANEL_PINS = [28, 26, 27, 29]
 XP, XM, YP, YM = PANEL_PINS
 
 npx = NeoPixel(Pin(16), 1)
-uart_in = UART(0, 115200, timeout=10)
-uart_out = UART(1, 115200, timeout=20)
+link = Link(up=open_uart(0), down=open_uart(1))
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
+_hello_due = False
 
 _enable_debug = True
-TAG = "!RTP>>"
+ROLE = "rtp"
 EMBLEM = "Limn - Resistive Touch Alignment v1"
 
 # GRB
@@ -30,34 +28,6 @@ ACT_COLOR = (0x0, 0x6D, 0x20)
 LED_OFF = (0x0, 0x0, 0x0)
 TOUCH_LED_COLOR = (0x46, 0, 0x70)
 FSR_MCU_LED_COLOR = (0x91, 0x0A, 0x0B)
-
-
-RTP_ID_LM = 0x5
-RTP_PACKET = {
-    'id': 0 | uctypes.UINT8,
-    'n': 1 | uctypes.UINT8,
-    'state': 2 | uctypes.UINT8,
-    'touch_x': 3 | uctypes.UINT64,
-    'touch_y': 11 | uctypes.UINT64,
-    'touch_v': 19 | uctypes.UINT8,
-}
-
-def pack_state(touch_coord, state):
-    _alloc = b'\0' * (uctypes.sizeof(RTP_PACKET))
-    pkt = uctypes.struct(uctypes.addressof(_alloc), RTP_PACKET)
-    pkt.id = RTP_ID_LM
-    pkt.state = state
-    pkt.n = 1
-    pkt.touch_x = touch_coord[0]
-    pkt.touch_y = touch_coord[1]
-    pkt.touch_v = int(touch_coord[2] / 1024)
-
-    return binascii.b2a_base64(pkt).decode().strip()
-
-def unpack_state(encoded):
-    decoded = binascii.a2b_base64(encoded.strip())
-    pkt = uctypes.struct(uctypes.addressof(decoded), RTP_PACKET)
-    return pkt
 
 
 def median(arr):
@@ -104,66 +74,67 @@ def get_points():
 
     return x, y, z
 
-def teeprint(info, line):
-    line = TAG + info + '>>' + line + ">>\n"
-    if _enable_debug:
-        print(line)
-    uart_in.write((line).encode())
-
-def ping(t):
-    teeprint("ping", f"t={time.ticks_ms()}")
+def hello():
     npx[0] = ACT_COLOR
     npx.write()
+    link.send(T_HELLO, (ROLE + '>>' + EMBLEM).encode())
+
+def on_hello_timer(t):
+    # Only flag it: all UART writes happen in the main loop.
+    global _hello_due
+    _hello_due = True
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR
     npx.write()
 
+def handle(frame):
+    # Broadcast commands (eg. calibrate()) are already forwarded down by link.
+    global _enable_debug
+    if frame.type != T_CMD:
+        return
+    cmd = frame.payload
+    if cmd == b'debug_on()':
+        _enable_debug = True
+    elif cmd == b'debug_off()':
+        _enable_debug = False
+    elif cmd == b'reset()':
+        link.flush()   # let the reset reach the nodes below first
+        reset()
+    elif cmd == b'ping()':
+        hello()
+    npx[0] = LED_OFF
+    npx.write()
+
 def on_boot():
-    teeprint("booting", EMBLEM)
+    hello()
     npx[0] = MCU_LED_COLOR
     npx.write()
-    timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=ping)
+    timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=on_hello_timer)
     timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
-    uart_out.write(b'ping()\n')
 
 on_boot()
 
 while True:
-    cmd = uart_in.read()
-    if cmd:
-        if b'calibrate()' in cmd:
-            uart_out.write(b'calibrate()\n')
-        if b'debug_on()' in cmd:
-            uart_out.write(b'debug_on()\n')
-            _enable_debug = True
-        if b'debug_off()' in cmd:
-            uart_out.write(b'debug_off()\n')
-            _enable_debug = False
-        if b'reset()' in cmd:
-            uart_out.write(b'reset()\n')
-            reset()
-        if b'ping()' in cmd:
-            ping(None)
-        npx[0] = LED_OFF
-        npx.write()
-    
-    chain_data = None
-    if uart_out.any():
-        chain_data = uart_out.readline()
-        if chain_data:
-            uart_in.write(chain_data)
-            print(chain_data.strip().decode())
+    relayed = link.down.stats['rx']
+    for frame in link.poll():
+        handle(frame)
+    relayed = link.down.stats['rx'] != relayed
+
+    if _hello_due:
+        _hello_due = False
+        hello()
 
     touch_point = get_points()
     has_touch = touch_point[2] > 5000
 
     if has_touch:
-        pkt = pack_state(touch_point, 42)
-        teeprint('SMP', pkt)
+        link.send(T_DATA, pack_rtp(S_SAMPLE, *touch_point))
+        if _enable_debug:
+            print('SMP', touch_point)
         npx[0] = TOUCH_LED_COLOR
         npx.write()
-    elif chain_data:
+    elif relayed:
         npx[0] = FSR_MCU_LED_COLOR
         npx.write()
     else:
