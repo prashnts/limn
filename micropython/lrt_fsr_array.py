@@ -3,11 +3,11 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-import uctypes
-import binascii
 import random
-from machine import UART, Pin, ADC, Timer, WDT, reset
+from machine import Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
+from link import Link, open_uart, pack_fsr, T_CMD, T_HELLO, T_DATA
+from link import S_CALIBRATING, S_CALIBRATED, S_SAMPLE
 
 
 wdt = WDT(timeout=5000)
@@ -46,30 +46,19 @@ for x, pin_x in enumerate(IO_X):
     for y, pin_y in enumerate(ADC_Y):
         READ_MATRIX.append((x, y, pin_x, pin_y))
 
-uart_in = UART(0, 115200)
+link = Link(up=open_uart(0))
 npx = NeoPixel(Pin(16), 1)
 
 _ADC_MAX = 65535
 _adc_cutoff = 2000
 _enable_debug = True
-TAG = "!FSR>>"
+ROLE = "fsr"
 EMBLEM = "Limn - FSR Alignment v2"
 
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
-
-ID_LM = 0x4
-T_COORD = {
-    'x': 0 | uctypes.UINT8,
-    'y': 1 | uctypes.UINT8,
-    'v': 2 | uctypes.UINT8,
-}
-PACKET = {
-    'id': 0 | uctypes.UINT8,
-    'n': 1 | uctypes.UINT8,
-    'state': 2 | uctypes.UINT8,
-    'touches': (3 | uctypes.ARRAY, 8, T_COORD),
-}
+_hello_due = False
+_inbox = []            # frames for this node, kept while busy calibrating
 
 # GRB
 MCU_LED_COLOR = (0x13, 0x9, 0x5)  # #091305
@@ -97,14 +86,16 @@ def random_shuffle(arr):
         shuffled.append(arr.pop(ix))
     return shuffled
 
-def teeprint(info, line):
+def send_state(state, touch_coords=()):
     npx[0] = ACT_COLOR
     npx.write()
-    line = line.strip()
-    line = TAG + info + '>>' + line + ">>\n"
-    if _enable_debug:
-        print(line)
-    uart_in.write((line).encode())
+    touches = [(r, c, calculate_strength(r, c, v)) for r, c, v in touch_coords]
+    link.send(T_DATA, pack_fsr(state, touches))
+
+def hello():
+    npx[0] = ACT_COLOR
+    npx.write()
+    link.send(T_HELLO, (ROLE + '>>' + EMBLEM).encode())
 
 def _read_raw():
     SAMPLES = 9
@@ -204,7 +195,8 @@ def calibrate_fsr():
 
         if _enable_debug:
             _debug_preview(vals)
-        teeprint('CLB', pack_state([], 12))   # calibrating (still dark)
+        send_state(S_CALIBRATING)
+        _inbox.extend(link.poll())
         wdt.feed()
         iters += 1
         time.sleep_ms(40)
@@ -216,7 +208,7 @@ def calibrate_fsr():
 
     _streak = [[0] * _NX for _ in range(_NY)]
     _adc_cutoff = max(max(r) for r in THRESH)   # keep sane global ref
-    teeprint('CLB', pack_state([], 14))          # calibrated done
+    send_state(S_CALIBRATED)
 
 def _debug_preview(values, touch_coords=None):
     max_value = max(max(row) for row in values)
@@ -253,67 +245,59 @@ def _debug_preview(values, touch_coords=None):
     if touch_coords is not None:
         print("Touch Coords:", touch_coords)
 
-def pack_state(touch_coords, state):
-    candidates = touch_coords[:8]
-    _alloc = b'\0' * (uctypes.sizeof(PACKET))
-    pkt = uctypes.struct(uctypes.addressof(_alloc), PACKET)
-    pkt.id = ID_LM
-    pkt.state = state
-    pkt.n = len(candidates)
-    for i, (x, y, v) in enumerate(candidates):
-        pkt.touches[i].x = x
-        pkt.touches[i].y = y
-        pkt.touches[i].v = calculate_strength(x, y, v)
-    return binascii.b2a_base64(pkt).decode().strip()
-
-def unpack_state(encoded):
-    decoded = binascii.a2b_base64(encoded.strip())
-    pkt = uctypes.struct(uctypes.addressof(decoded), PACKET)
-    return pkt
-
-
-def ping(t):
-    teeprint("PING", pack_state([], 10))
-    npx[0] = ACT_COLOR
-    npx.write()
+def on_hello_timer(t):
+    # Only flag it: all UART writes happen in the main loop.
+    global _hello_due
+    _hello_due = True
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR
     npx.write()
 
+def handle(frame):
+    global _enable_debug
+    if frame.type != T_CMD:
+        return
+    cmd = frame.payload
+    if cmd == b'calibrate()':
+        calibrate_fsr()
+    elif cmd == b'debug_on()':
+        _enable_debug = True
+    elif cmd == b'debug_off()':
+        _enable_debug = False
+    elif cmd == b'reset()':
+        reset()
+    elif cmd == b'ping()':
+        hello()
+    npx[0] = LED_OFF
+    npx.write()
+
 def on_boot():
-    teeprint("BOOT", EMBLEM)
+    hello()
     npx[0] = MCU_LED_COLOR
     npx.write()
-    timer_hello.init(period=12345, mode=Timer.PERIODIC, callback=ping)
+    timer_hello.init(period=12345, mode=Timer.PERIODIC, callback=on_hello_timer)
     timer_restore_led.init(period=50, mode=Timer.PERIODIC, callback=restore_led)
     calibrate_fsr()
 
 on_boot()
 
 while True:
-    cmd = uart_in.readline()
-    if cmd:
-        if b'calibrate()' in cmd:
-            calibrate_fsr()
-        if b'debug_on()' in cmd:
-            _enable_debug = True
-        if b'debug_off()' in cmd:
-            _enable_debug = False
-        if b'reset()' in cmd:
-            reset()
-        if b'ping()' in cmd:
-            ping(None)
-        npx[0] = LED_OFF
-        npx.write()
+    _inbox.extend(link.poll())
+    while _inbox:
+        handle(_inbox.pop(0))
+
+    if _hello_due:
+        _hello_due = False
+        hello()
 
     sensor_values, touch_coords = read_fsr()
 
     n_touches = len(touch_coords)
     has_touch = n_touches > 0
 
-    if has_touch:        
-        teeprint('SMP', pack_state(touch_coords, 42))
+    if has_touch:
+        send_state(S_SAMPLE, touch_coords)
         if _enable_debug:
             _debug_preview(sensor_values, touch_coords)
         npx[0] = TOUCH_LED_COLOR

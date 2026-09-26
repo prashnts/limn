@@ -1,67 +1,46 @@
 # Limn Resistive Touch Probe
-# 
+#
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
 import select
 import sys
 import json
-import uctypes
-import binascii
-from machine import UART, Pin, ADC, Timer, WDT, reset
+from machine import Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
+from link import Link, open_uart, unpack_data, T_CMD, T_HELLO, T_LOG, T_DATA
+from link import FSR_ID_LM, RTP_ID_LM, S_SAMPLE
 
 wdt = WDT(timeout=3000)
-uart_out = UART(0, 115200, tx=Pin(12), rx=Pin(13))
+link = Link(down=open_uart(0, tx=Pin(12), rx=Pin(13)))
 npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_ON = Pin(8, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_OFF = Pin(7, Pin.OUT, Pin.PULL_DOWN)
-ADC_DETECT = ADC(Pin(29, Pin.IN))  
+ADC_DETECT = ADC(Pin(29, Pin.IN))
 
 POWER_STATE = False
+PROBE_PULSE_MS = 10    # BLTouch style pulse
+STALE_MS = 100         # forget a sensor's touches after this long
 
 _enable_debug = True
-_is_probing = False
-_probe_id = 0
 TAG = "!LRT>>"
 EMBLEM = "Limn Resistive Touch Probe v1"
 
-FSR_ID_LM = 0x4
-FSR_T_COORD = {
-    'x': 0 | uctypes.UINT8,
-    'y': 1 | uctypes.UINT8,
-    'v': 2 | uctypes.UINT8,
-}
-FSR_PACKET = {
-    'id': 0 | uctypes.UINT8,
-    'n': 1 | uctypes.UINT8,
-    'state': 2 | uctypes.UINT8,
-    'touches': (3 | uctypes.ARRAY, 8, FSR_T_COORD),
-}
+# Commands from the host that are passed on to every node in the chain.
+CHAIN_COMMANDS = ('calibrate()', 'debug_on()', 'debug_off()', 'reset()', 'ping()')
 
-RTP_ID_LM = 0x5
-RTP_PACKET = {
-    'id': 0 | uctypes.UINT8,
-    'n': 1 | uctypes.UINT8,
-    'state': 2 | uctypes.UINT8,
-    'touch_x': 3 | uctypes.UINT64,
-    'touch_y': 11 | uctypes.UINT64,
-    'touch_v': 19 | uctypes.UINT8,
-}
-
-PKT_TYPES = {
-    b'!FSR': FSR_PACKET,
-    b'!RTP': RTP_PACKET,
-}
+# Keys are strings so that the JSON sent to klipper stays {"4": .., "5": ..}
 _last_pkt_at = {
-    FSR_ID_LM: 0,
-    RTP_ID_LM: 0,
+    str(FSR_ID_LM): 0,
+    str(RTP_ID_LM): 0,
 }
 _state = {
-    RTP_ID_LM: [],
-    FSR_ID_LM: []
+    str(FSR_ID_LM): [],
+    str(RTP_ID_LM): [],
 }
+_last_seq = {}         # hop -> last seq seen
+_seq_gaps = {}         # hop -> frames missed (replaced by newer data, or damaged)
 
 BEDS = [
     # Reference Resistor, ADC Min, ADC Max
@@ -73,6 +52,7 @@ BEDS = [
     ('BED_6', 33000, 48000, 53000),
 ]
 REMOVED_THRESHOLD = 55000
+BED_CONFIRM_MS = 1000
 
 def read_bed_id():
     val = ADC_DETECT.read_u16()
@@ -82,38 +62,6 @@ def read_bed_id():
         if spec[2] <= val <= spec[3]:
             return spec[0], list(spec)
     return 'UNKNOWN', None
-
-def unpack_state(encoded, ptype):
-    global _last_pkt_at, _state
-    decoded = binascii.a2b_base64(encoded)
-
-    if len(decoded) != uctypes.sizeof(ptype):
-        print('size mismatch')
-        return _state
-
-    pkt = uctypes.struct(uctypes.addressof(decoded), ptype, uctypes.LITTLE_ENDIAN)
-
-    if pkt.id == FSR_ID_LM:
-        _state[pkt.id] = [[pkt.touches[i].x, pkt.touches[i].y, pkt.touches[i].v] for i in range(pkt.n)]
-        _last_pkt_at[pkt.id] = time.ticks_ms()
-    elif pkt.id == RTP_ID_LM:
-        _state[pkt.id] = [pkt.touch_x, pkt.touch_y, pkt.touch_v]
-        _last_pkt_at[pkt.id] = time.ticks_ms()
-    
-    return _state
-
-def read_state(line):
-    if not b'>>' in line:
-        return None
-    segments = line.split(b'>>')
-    if len(segments) < 3:
-        return None
-    if segments[1] in [b'SMP', b'CLB']:
-        ptype = PKT_TYPES.get(segments[0], None)
-        if ptype:
-            pkt = unpack_state(segments[2], ptype)
-            return pkt
-    return None
 
 
 def teeprint(info, line):
@@ -126,29 +74,16 @@ def _pulse_power_pin(pin):
     pin.off()
 
 def turn_on_power():
-    global POWER_STATE
     _pulse_power_pin(PIN_PWR_ON)
     teeprint("power", "turned on")
 
 def turn_off_power():
-    global POWER_STATE
     _pulse_power_pin(PIN_PWR_OFF)
     teeprint("power", "turned off")
-
-def cb_probe_off(t):
-    PIN_PROBE_OUT.off()
-    teeprint("probe", "turned off")
-
-def cb_clear_probe(pid):
-    def _cb(t, pid=pid):
-        if pid == _probe_id:
-            _probe_id = 0
-    return _cb
 
 
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
-timer_end_probing = Timer(-1)
 
 # GRB
 MCU_LED_COLOR = (0x46, 0, 0x70)
@@ -161,12 +96,146 @@ def ping(t):
     # GRB
     npx[0] = ACT_COLOR
     npx.write()
-    # time.sleep_ms(500)
-    # restore_led()
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR
     npx.write()
+
+
+# Probe output
+_probe_on_at = None
+
+def start_probe_pulse():
+    global _probe_on_at
+    if _probe_on_at is None:
+        PIN_PROBE_OUT.on()
+        _probe_on_at = time.ticks_ms()
+
+def end_probe_pulse():
+    global _probe_on_at
+    if _probe_on_at is not None and time.ticks_diff(time.ticks_ms(), _probe_on_at) >= PROBE_PULSE_MS:
+        PIN_PROBE_OUT.off()
+        _probe_on_at = None
+
+
+# Chain -> host
+def count_seq_gap(frame):
+    last = _last_seq.get(frame.hop)
+    if last is not None:
+        gap = (frame.seq - last - 1) & 0xFF
+        _seq_gaps[frame.hop] = _seq_gaps.get(frame.hop, 0) + gap
+    _last_seq[frame.hop] = frame.seq
+
+def on_data(frame):
+    sample = unpack_data(frame.payload)
+    if sample is None:
+        teeprint("error", "malformed data from hop %d" % frame.hop)
+        return
+    kind, state, values = sample
+    if kind == RTP_ID_LM:
+        x, y, z = values
+        values = [x, y, z >> 10]
+    key = str(kind)
+    _state[key] = values
+    _last_pkt_at[key] = time.ticks_ms()
+
+    if state == S_SAMPLE and values:
+        start_probe_pulse()
+
+    out = dict(_state)
+    out['hop'] = frame.hop
+    teeprint("SMP", json.dumps(out))
+
+def on_chain_frame(frame):
+    count_seq_gap(frame)
+    npx[0] = ACT_COLOR
+    npx.write()
+    if frame.type == T_DATA:
+        on_data(frame)
+    elif frame.type == T_HELLO:
+        role, emblem = (frame.payload.decode().split('>>', 1) + [''])[:2]
+        teeprint("hello", json.dumps({'hop': frame.hop, 'role': role, 'emblem': emblem}))
+    elif frame.type == T_LOG:
+        teeprint("log", json.dumps({'hop': frame.hop, 'text': frame.payload.decode()}))
+
+def clear_stale_state():
+    now = time.ticks_ms()
+    for key in _last_pkt_at:
+        if time.ticks_diff(now, _last_pkt_at[key]) > STALE_MS:
+            _state[key] = []
+
+
+# Host -> dock
+_poller = select.poll()
+_poller.register(sys.stdin, select.POLLIN)
+_cmd_buffer = ''
+
+def read_host_command():
+    '''Returns one complete command line, or None. Never blocks.'''
+    global _cmd_buffer
+    while _poller.poll(0):
+        ch = sys.stdin.read(1)
+        if ch in ('\r', '\n'):
+            cmd, _cmd_buffer = _cmd_buffer.strip(), ''
+            if cmd:
+                return cmd
+        elif len(_cmd_buffer) < 64:
+            _cmd_buffer += ch
+    return None
+
+def handle_host_command(cmd):
+    global _enable_debug
+    npx[0] = (80, 40, 10)
+    npx.write()
+    if cmd in CHAIN_COMMANDS:
+        link.send_down(T_CMD, cmd.encode())
+
+    if cmd == 'power_on()':
+        turn_on_power()
+    elif cmd == 'power_off()':
+        turn_off_power()
+    elif cmd == 'read_bed_id()':
+        teeprint("read_bed_id", json.dumps(list(read_bed_id())))
+    elif cmd == 'debug_on()':
+        _enable_debug = True
+    elif cmd == 'debug_off()':
+        _enable_debug = False
+    elif cmd == 'ping()':
+        ping(None)
+    elif cmd == 'stats()':
+        stats = link.stats()
+        stats['seq_gaps'] = _seq_gaps
+        teeprint("stats", json.dumps(stats))
+    elif cmd not in CHAIN_COMMANDS:
+        teeprint("error", "unknown command " + cmd)
+
+
+# Bed detection
+_bed_candidate = None
+_bed_seen_at = 0
+
+def check_bed():
+    '''Powers the bed once the same bed id is read for BED_CONFIRM_MS.'''
+    global POWER_STATE, _bed_candidate, _bed_seen_at
+    bed_id = read_bed_id()
+
+    if bed_id[1] and not POWER_STATE:
+        if _bed_candidate != bed_id[0]:
+            teeprint("bed_detected", json.dumps(list(bed_id)))
+            _bed_candidate = bed_id[0]
+            _bed_seen_at = time.ticks_ms()
+        elif time.ticks_diff(time.ticks_ms(), _bed_seen_at) >= BED_CONFIRM_MS:
+            turn_on_power()
+            print("Probe detected and power turned on")
+            POWER_STATE = True
+
+    if not bed_id[1]:
+        _bed_candidate = None
+        if POWER_STATE:
+            teeprint("bed_removed", json.dumps(list(bed_id)))
+            turn_off_power()
+            POWER_STATE = False
+
 
 def on_boot():
     teeprint("booting", EMBLEM)
@@ -175,102 +244,24 @@ def on_boot():
     npx.write()
     timer_hello.init(period=7141, mode=Timer.PERIODIC, callback=ping)
     timer_restore_led.init(period=1000, mode=Timer.PERIODIC, callback=restore_led)
-    uart_out.write(b'reset()\n')
+    link.send_down(T_CMD, b'reset()')
 
 on_boot()
 
 
-in_buffer = sys.stdin.buffer
-probe_on_at = None
-
 while True:
     wdt.feed()
-    for pkt_id in _last_pkt_at:
-        if time.ticks_ms() - _last_pkt_at[pkt_id] > 100:
-            _state[pkt_id] = []
 
-    try:
-        _c = select.select([uart_out], [], [], 0.001)
-        if _c[0]:
-            chain_data = uart_out.readline()
-            if b'SMP' in chain_data:
-                if probe_on_at is None:
-                    PIN_PROBE_OUT.on()
-                    probe_on_at = time.ticks_ms()
+    for frame in link.poll():
+        on_chain_frame(frame)
+    clear_stale_state()
+    end_probe_pulse()
 
-            pkt = read_state(chain_data)
-            npx[0] = ACT_COLOR
-            npx.write()
-            if pkt:
-                teeprint("SMP", json.dumps(pkt))
+    cmd = read_host_command()
+    if cmd:
+        handle_host_command(cmd)
 
-    except Exception:
-        teeprint("error", "failed to read from uart_out")
-    
-    if probe_on_at is not None and time.ticks_ms() - probe_on_at > 5:
-        PIN_PROBE_OUT.off()
-        probe_on_at = None
-    
-    if _is_probing:
-        continue
-
-    _c = select.select([in_buffer], [], [], 0.01)
-    if _c[0]:
-        chars = ''
-        while True:
-            print("Waiting for command...")
-            chr = in_buffer.read(1)
-            wdt.feed()
-            if chr == b'\r' or chr == b'\n':
-                break
-            chars += chr.decode()
-        cmd = chars.strip()
-        print(f"Received command: {cmd}")
-
-        npx[0] = (80, 40, 10)
-        npx.write()
-        if 'power_on()' in cmd:
-            turn_on_power()
-        if 'power_off()' in cmd:
-            turn_off_power()
-        if 'read_bed_id()' in cmd:
-            bed_id = read_bed_id()
-            teeprint("read_bed_id", json.dumps(list(bed_id)))
-        if 'debug_on()' in cmd:
-            uart_out.write(b'debug_on()\n')
-            _enable_debug = True
-        if 'calibrate()' in cmd:
-            uart_out.write(b'calibrate()\n')
-        if 'debug_off()' in cmd:
-            uart_out.write(b'debug_off()\n')
-            _enable_debug = False
-        if 'reset()' in cmd:
-            uart_out.write(b'reset()\n')
-        if 'begin_probe()' in cmd:
-            _is_probing = True
-            _probe_id += 1
-            timer_hello.init(period=12000, mode=Timer.ONE_SHOT, callback=cb_clear_probe(_probe_id))
-            teeprint("probe", f"started with id {_probe_id}")
-        if 'end_probe()' in cmd:
-            _is_probing = False
-
-
-    bed_id = read_bed_id()
-
-    if bed_id[1] and not POWER_STATE:
-        teeprint("bed_detected", json.dumps(list(bed_id)))
-        time.sleep(1)
-        _bed_id = read_bed_id()
-        if _bed_id[0] == bed_id[0]:
-            turn_on_power()
-            print("Probe detected and power turned on")
-            POWER_STATE = True
-    if not bed_id[1] and POWER_STATE:
-        teeprint("bed_removed", json.dumps(list(bed_id)))
-        turn_off_power()
-        POWER_STATE = False
+    check_bed()
 
     npx[0] = (0, 0, 0) if not POWER_STATE else (0, 80, 20)
     npx.write()
-
-    
