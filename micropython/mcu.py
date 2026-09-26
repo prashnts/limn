@@ -355,7 +355,7 @@ def send(
 
 @app.command()
 def monitor(
-    kind: Annotated[list[str] | None, typer.Option(help="Only these line kinds, eg. --kind SMP --kind hello.")] = None,
+    kind: Annotated[list[str] | None, typer.Option(help="Only these line kinds, eg. --kind data --kind hello.")] = None,
     port: PortOption = None,
 ):
     '''Print everything the Dock says, one JSON object per line. Ctrl-C to stop.'''

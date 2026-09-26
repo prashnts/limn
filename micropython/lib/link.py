@@ -341,12 +341,13 @@ S_CALIBRATING = 12
 S_CAL_FAILED  = 13      # kept the previous baseline (or a doubtful one), see the log
 S_CALIBRATED  = 14
 S_SAMPLE      = 42
+S_MATRIX      = 43      # FSR matrix mode: every cell, touched or not
 
 FSR_MAX_TOUCHES = 8
 
-def pack_fsr(state, touches):
+def pack_fsr(state, touches, limit=FSR_MAX_TOUCHES):
     '''touches: [(row, col, strength 0..1000)], strongest first.'''
-    touches = touches[:FSR_MAX_TOUCHES]
+    touches = touches[:limit]
     out = struct.pack('<BBB', FSR_ID_LM, state, len(touches))
     for row, col, strength in touches:
         out += struct.pack('<BBH', row, col, strength)

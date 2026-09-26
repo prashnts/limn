@@ -135,7 +135,7 @@ def main():
         time.sleep(0.3)
         (SIM / 'stim_rtp').touch()
         wait_for(pulses, 3, 'a probe pulse')
-        samples = [d for k, d in dock.lines(0.5) if k == 'SMP' and d['5']]
+        samples = [d for k, d in dock.lines(0.5) if k == 'data' and d['kind'] == 5]
         (SIM / 'stim_rtp').unlink()
         time.sleep(0.3)
         check('armed rtp touch -> one 10ms pulse', [p.split()[1] for p in pulses()] == ['999'])
@@ -158,10 +158,17 @@ def main():
         dock.command('arm(rtp)', 'armed')
         time.sleep(0.3)
         (SIM / 'stim_rtp').touch()
-        samples = [d for k, d in dock.lines(1) if k == 'SMP' and d['5']]
+        samples = [d for k, d in dock.lines(1) if k == 'data' and d['kind'] == 5]
         (SIM / 'stim_rtp').unlink()
         dock.command('disarm()', 'armed')
         check('no touch_pin: no pulse, samples still arrive', pulses() == [] and len(samples) > 0)
+
+        # FSR matrix mode: every cell every frame, tagged with the FSR's hop
+        dock.send('matrix(on)')
+        frames = [d for k, d in dock.lines(1) if k == 'data' and d['kind'] == 4 and d['state'] == 43]
+        dock.send('matrix(off)')
+        time.sleep(0.3)
+        check('matrix mode: 32 cells from hop 2', frames and all(len(d['values']) == 32 and d['hop'] == 2 for d in frames))
 
         # Updates
         rtp_app = (mcu.HERE / 'lrt_resistive_touch.py').read_text() + '\n# updated\n'

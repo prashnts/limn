@@ -35,6 +35,8 @@ class Bridge:
         '''Returns one complete command line from the host, or None. Never blocks.'''
         while self._poller.poll(0):
             ch = sys.stdin.read(1)
+            if not ch:
+                return None     # nothing to read after all (closed stdin)
             if ch in ('\r', '\n'):
                 cmd, self._buffer = self._buffer.strip(), ''
                 if cmd:

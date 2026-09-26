@@ -7,7 +7,7 @@ import machine
 from machine import Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
 from link import load_node, from_config, pack_fsr, Guard, T_CMD, T_HELLO, T_LOG, T_DATA
-from link import S_CALIBRATING, S_CAL_FAILED, S_CALIBRATED, S_SAMPLE
+from link import S_CALIBRATING, S_CAL_FAILED, S_CALIBRATED, S_SAMPLE, S_MATRIX
 from touch import TouchLine
 from bridge import Bridge
 
@@ -67,6 +67,7 @@ EMBLEM = "Limn - FSR Alignment v2"
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
 _hello_due = False
+_matrix = False        # matrix(on): send every cell every frame, for the host's own thresholds
 _inbox = []            # frames for this node, kept while busy calibrating
 
 # GRB
@@ -84,6 +85,10 @@ def median(arr):
     else:
         mid = len(arr) // 2
         return (arr[mid - 1] + arr[mid]) // 2
+
+def send_matrix(values):
+    cells = [(r, c, calculate_strength(r, c, v)) for r, row in enumerate(values) for c, v in enumerate(row)]
+    link.send(T_DATA, pack_fsr(S_MATRIX, cells, limit=len(cells)))
 
 def send_state(state, touch_coords=()):
     npx[0] = ACT_COLOR
@@ -254,7 +259,7 @@ def restore_led(t=None):
     npx.write()
 
 def handle(frame):
-    global _enable_debug
+    global _enable_debug, _matrix
     if frame.type != T_CMD:
         return
     cmd = frame.payload
@@ -272,6 +277,10 @@ def handle(frame):
         hello()
     elif cmd == b'diag()':
         diag()
+    elif cmd == b'matrix(on)':
+        _matrix = True
+    elif cmd == b'matrix(off)':
+        _matrix = False
     npx[0] = LED_OFF
     npx.write()
 
@@ -303,8 +312,11 @@ def step():
     has_touch = n_touches > 0
     touch.update(has_touch)
 
-    if has_touch:
+    if _matrix:
+        send_matrix(sensor_values)
+    elif has_touch:
         send_state(S_SAMPLE, touch_coords)
+    if has_touch:
         if _enable_debug:
             _debug_preview(sensor_values, touch_coords)
         npx[0] = TOUCH_LED_COLOR
