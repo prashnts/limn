@@ -24,6 +24,8 @@ The Dock picks the trigger with `"trigger"` in its `node.json`:
 - `"uart"` (default until the diodes are in): pulse on touch samples arriving over UART, not armed. Same as the old firmware, slower.
 - `"detect"`: everything below.
 
+A bed node only arms when its `node.json` has `"touch_pin": 2`, which means its diode is fitted. Without it, `arm()` is ignored and the node behaves as before (the RTP keeps measuring all the time). The configs in `nodes/` leave it out for now.
+
 - The Dock has a 10k pull-up on DETECT; the bed has the ID resistor to GND.
 - Each bed MCU gets a Schottky diode from a spare GPIO (GPIO 2 or 3) to the DETECT net. Silicon diodes drop too much for BED_6.
   - Idle / unpowered: diode is off, the bed ID reads as before (the Dock reads it before powering the bed).
@@ -134,7 +136,9 @@ lrt_*.py       the app
 - [x] Firmware update over the chain, `mcu.py`, `tests/test_chain.py`
 - [x] RTP: same 1ms settle time for X, Y and Z (was 10ms for X, none for Y and Z)
 - [ ] Hardware test: `mcu.py stats` per link, raise baud
-- [ ] Diodes on the bed, then `"trigger": "detect"` in `nodes/dock.json` and `mcu.py update --hop 0 --config dock`
+- [ ] Diodes on the bed, then:
+  - `"touch_pin": 2` in `nodes/rtp.json` and `nodes/fsr.json`, `mcu.py update --hop N --config rtp` (and fsr)
+  - `"trigger": "detect"` in `nodes/dock.json`, `mcu.py update --hop 0 --config dock`
 - [x] FSR: calibration that times out is reported (state 13, log), keeps the previous baseline; dead knobs removed, same touch rule
 - [x] RTP: samples taken while the pen lands or lifts (spread > `max_spread`) are not sent; panel released between reads
 - [x] Errors in a main loop are reported and survived (`Guard`)

@@ -300,6 +300,11 @@ def install(
     mpremote(port, *args)
     print(f"{port}: done")
 
+@app.command()
+def console(port: PortOption = None):
+    '''Watch one board's own output over USB (Ctrl-] to leave). Works without the Dock.'''
+    mpremote(find_port(port), 'repl', check=False)
+
 def mpremote(port, *args, check=True):
     return subprocess.run([sys.executable, '-m', 'mpremote', 'connect', port, *args], check=check)
 

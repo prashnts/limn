@@ -21,6 +21,8 @@ uv run micropython/mcu.py install fsr  --port ...     # fsr_bed3 for BED_3
 
 `--port` can be left out when only one board is connected, or set once with `export LIMN_PORT=...`.
 
+Without the Dock, watch a board's own output (debug prints, errors): `uv run micropython/mcu.py console`.
+
 
 ## Everything else, through the Dock
 

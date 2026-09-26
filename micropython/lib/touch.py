@@ -6,6 +6,9 @@
 # Each bed MCU has a Schottky diode from `touch_pin` (node.json) to the DETECT
 # net. Raising the pin lifts DETECT above every bed ID, and the Dock turns that
 # edge into the probe pulse. See micropython/STRATEGY.md.
+#
+# Without `touch_pin` (no diode fitted yet) the node never arms, and the RTP
+# keeps measuring all the time instead of waiting in pen detect mode.
 import time
 from machine import Pin
 
@@ -27,7 +30,7 @@ class TouchLine:
         if cmd == b'disarm()':
             self.armed = False
         elif cmd.startswith(b'arm(') and cmd.endswith(b')'):
-            self.armed = cmd[4:-1].decode() in (self.role, 'all')
+            self.armed = self.pin is not None and cmd[4:-1].decode() in (self.role, 'all')
         else:
             return False
         self.latched = False

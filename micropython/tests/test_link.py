@@ -90,6 +90,16 @@ def test_noise_without_end_is_discarded():
     a.write(encode(T_LOG, 0, 1, b'hi'))
     assert [f.payload for f in port.frames()] == [b'hi']
 
+def test_old_firmware_lines_are_dropped():
+    # What an FSR with the old firmware sends, until it is updated.
+    a, b = wire()
+    port = Port(b)
+    for _ in range(40):
+        a.write(b'!FSR>>SMP>>BAEqAQIBWQAAAAAAAAAAAAAAAAAAAAAAAAAA>>\n')
+        assert port.frames() == []
+    a.write(encode(T_DATA, 0, 1, link.pack_fsr(42, [(1, 2, 500)])))
+    assert [f.type for f in port.frames()] == [T_DATA]
+
 def chain():
     '''Dock <-> n1 <-> n2'''
     d_down, n1_up = wire()
