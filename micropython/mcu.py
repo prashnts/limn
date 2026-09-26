@@ -9,7 +9,8 @@
 #   uv run micropython/mcu.py update
 #
 # `install` talks to one board over USB (mpremote). Everything else talks to
-# the Dock over USB, and through it to the whole chain. Klipper must not hold
+# the Dock over USB, and through it to the whole chain. Without a Dock, any
+# board on USB does the same for the boards below it (it is hop 0). Klipper must not hold
 # the Dock's port meanwhile (on the Pi: sudo systemctl stop klipper).
 import os
 import sys
@@ -31,7 +32,7 @@ import ota
 from link import T_OTA, BROADCAST
 
 NODES = HERE / 'nodes'
-COMMON = ['main.py', 'lib/link.py', 'lib/ota.py', 'lib/touch.py']
+COMMON = ['main.py', 'lib/link.py', 'lib/ota.py', 'lib/touch.py', 'lib/bridge.py']
 CHUNK = 192
 RP2040_VID = 0x2E8A
 BAUD = 115200
@@ -314,7 +315,7 @@ def topology(port: PortOption = None):
     dock = Dock.open(find_port(port))
     hellos = dock.hellos()
     print(f"{'hop':>3}  {'role':<14} {'uid':<17} files")
-    for hop in [0] + sorted(hellos):
+    for hop in sorted(set(hellos) | {0}):
         try:
             info = dock.info(hop)
         except (TimeoutError, RuntimeError) as e:
@@ -376,7 +377,7 @@ def update(
     if config and (not hop or len(hop) != 1):
         raise typer.BadParameter("--config needs exactly one --hop")
     dock = Dock.open(find_port(port))
-    targets = hop or sorted(dock.hellos(), reverse=True) + [0]
+    targets = hop or sorted(set(dock.hellos()) | {0})
     run_update(dock, targets, force=force, config=config_path, dry_run=dry_run)
 
 def run_update(dock, targets, source=HERE, force=False, config=None, dry_run=False):

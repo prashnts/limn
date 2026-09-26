@@ -7,6 +7,7 @@ from machine import Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
 from link import load_node, from_config, pack_rtp, Guard, T_CMD, T_HELLO, T_LOG, T_DATA, S_SAMPLE
 from touch import TouchLine
+from bridge import Bridge
 
 
 wdt = WDT(timeout=3000)
@@ -21,6 +22,7 @@ MAX_SPREAD = NODE.get('max_spread', 4000)   # samples of one read further apart:
 npx = NeoPixel(Pin(16), 1)
 link = from_config(NODE)
 touch = TouchLine(NODE)
+bridge = Bridge(link)     # only used when a host talks to this node over USB
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
 _hello_due = False
@@ -160,6 +162,10 @@ def step():
     for frame in link.poll():
         handle(frame)
     relayed = link.down and link.down.stats['rx'] != relayed
+
+    cmd = bridge.read_command()
+    if cmd:
+        bridge.from_host(cmd, handle)
 
     if _hello_due:
         _hello_due = False

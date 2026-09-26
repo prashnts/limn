@@ -3,19 +3,18 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-import select
-import sys
 import json
-import binascii
 import rp2
 from machine import Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
-from link import load_node, from_config, unpack_data, Guard, T_CMD, T_HELLO, T_LOG, T_DATA, T_OTA
+from link import load_node, from_config, unpack_data, Guard, T_CMD, T_DATA
 from link import FSR_ID_LM, RTP_ID_LM, S_SAMPLE
+from bridge import Bridge, teeprint
 
 wdt = WDT(timeout=3000)
 NODE = load_node()
 link = from_config(NODE)
+bridge = Bridge(link)
 npx = NeoPixel(Pin(16), 1)
 PIN_PROBE_OUT = Pin(11, Pin.OUT, Pin.PULL_DOWN)
 PIN_PWR_ON = Pin(8, Pin.OUT, Pin.PULL_DOWN)
@@ -36,7 +35,6 @@ REMOVED_MS = 250       # DETECT must read "no bed" this long to count as removed
 
 _enable_debug = True
 _armed = False
-TAG = "!LRT>>"
 EMBLEM = "Limn Resistive Touch Probe v1"
 
 # Commands from the host that are passed on to every node in the chain.
@@ -76,10 +74,6 @@ def read_bed_id(val=None):
             return spec[0], list(spec)
     return 'UNKNOWN', None
 
-
-def teeprint(info, line):
-    line = TAG + info + '>>' + line + ">>"
-    print(line)
 
 def log(text):
     teeprint("log", json.dumps({'hop': 0, 'text': text}))
@@ -170,24 +164,14 @@ def on_data(frame):
     out['hop'] = frame.hop
     teeprint("SMP", json.dumps(out))
 
-def print_frame(hop, ftype, payload):
-    '''Frames the host tools handle themselves (updates), as base64.'''
-    b64 = binascii.b2a_base64(payload).decode().strip()
-    teeprint("frame", json.dumps({'hop': hop, 'type': ftype, 'b64': b64}))
-
 def on_chain_frame(frame):
     count_seq_gap(frame)
     npx[0] = ACT_COLOR
     npx.write()
     if frame.type == T_DATA:
         on_data(frame)
-    elif frame.type == T_HELLO:
-        role, emblem = (frame.payload.decode().split('>>', 1) + [''])[:2]
-        teeprint("hello", json.dumps({'hop': frame.hop, 'role': role, 'emblem': emblem}))
-    elif frame.type == T_LOG:
-        teeprint("log", json.dumps({'hop': frame.hop, 'text': frame.payload.decode()}))
-    elif frame.type == T_OTA:
-        print_frame(frame.hop, frame.type, frame.payload)
+    else:
+        bridge.show(frame)
 
 def clear_stale_state():
     now = time.ticks_ms()
@@ -197,37 +181,6 @@ def clear_stale_state():
 
 
 # Host -> dock
-_poller = select.poll()
-_poller.register(sys.stdin, select.POLLIN)
-_cmd_buffer = ''
-
-def read_host_command():
-    '''Returns one complete command line, or None. Never blocks.'''
-    global _cmd_buffer
-    while _poller.poll(0):
-        ch = sys.stdin.read(1)
-        if ch in ('\r', '\n'):
-            cmd, _cmd_buffer = _cmd_buffer.strip(), ''
-            if cmd:
-                return cmd
-        elif len(_cmd_buffer) < 1024:
-            _cmd_buffer += ch
-    return None
-
-def send_frame(args):
-    '''frame(<hop>,<type>,<base64 payload>): hop 0 is the Dock itself.'''
-    hop, ftype, b64 = args.split(',')
-    hop, ftype = int(hop), int(ftype)
-    payload = binascii.a2b_base64(b64)
-    if hop != 0:
-        link.send_down(ftype, payload, hop)
-    elif ftype == T_OTA:
-        print_frame(0, T_OTA, link.handle_ota(payload))
-        if link.ota.reset_pending:
-            time.sleep_ms(100)      # let the reply reach the host
-            import ota
-            ota.reset()
-
 def handle_host_command(cmd):
     global _enable_debug, _armed
     npx[0] = (80, 40, 10)
@@ -259,11 +212,8 @@ def handle_host_command(cmd):
         stats['trigger'] = TRIGGER
         stats['armed'] = _armed
         teeprint("stats", json.dumps(stats))
-    elif cmd.startswith('frame(') and cmd.endswith(')'):
-        try:
-            send_frame(cmd[6:-1])
-        except (ValueError, TypeError) as e:
-            teeprint("error", "bad frame: " + repr(e))
+    elif bridge.command(cmd):
+        pass
     elif cmd not in CHAIN_COMMANDS:
         teeprint("error", "unknown command " + cmd)
 
@@ -333,7 +283,7 @@ def step():
         on_chain_frame(frame)
     clear_stale_state()
 
-    cmd = read_host_command()
+    cmd = bridge.read_command()
     if cmd:
         handle_host_command(cmd)
 
