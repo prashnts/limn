@@ -174,6 +174,12 @@ def reset():
 
 machine.Pin, machine.ADC, machine.UART, machine.Timer, machine.WDT = Pin, ADC, UART, Timer, WDT
 machine.reset = reset
+
+class Mem32(dict):
+    '''Pad registers read as after ADC(): input and pulls off.'''
+    def __missing__(self, addr):
+        return 0
+machine.mem32 = Mem32()
 machine.unique_id = lambda: NAME.encode().ljust(8, b'\0')[:8]
 sys.modules['machine'] = machine
 

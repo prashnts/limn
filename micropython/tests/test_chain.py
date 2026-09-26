@@ -18,6 +18,7 @@ sys.path.insert(0, str(HERE.parent))
 import mcu
 import ota
 import typer
+from link import T_CMD
 
 SIM = Path(tempfile.mkdtemp(prefix='limn-sim-'))
 SIM_MCU = HERE / 'sim_mcu.py'
@@ -180,6 +181,24 @@ def main():
         check('update the dock itself',
               info['files']['lrt_dock_mcu.py'] == mcu.file_hash(src / 'lrt_dock_mcu.py')
               and not info['pending'])
+
+        # Errors are reported and the loop keeps going
+        bad = mcu.binascii.b2a_base64(b'arm(\xff)').decode().strip()
+        dock.send(f'frame(1,{T_CMD},{bad})')
+        logs = [d for k, d in dock.lines(1.5) if k == 'log' and d['hop'] == 1]
+        check('node error is reported', any('error>>' in d['text'] for d in logs))
+        check('node keeps running after an error', wait_for(lambda: 1 in dock.hellos(), what='rtp hello'))
+
+        dock.send('diag()')
+        logs = [d['text'] for k, d in dock.lines(1.5) if k == 'log' and d['hop'] == 2]
+        check('diag reports the fsr pads', sum('diag>>gpio' in t for t in logs) == 4)
+
+        (SIM / 'stim_fsr').touch()
+        dock.send('calibrate()')
+        logs = [d['text'] for k, d in dock.lines(8) if k == 'log' and d['hop'] == 2]
+        (SIM / 'stim_fsr').unlink()
+        check('calibration with the sheet pressed keeps the old baseline',
+              any('timed out' in t for t in logs) and any('keeping the previous' in t for t in logs))
 
         stats = dock.command('stats()', 'stats')
         check('no damaged frames: %s' % json.dumps(stats['down']), stats['down']['bad'] == 0)

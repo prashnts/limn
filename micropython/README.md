@@ -33,7 +33,10 @@ uv run micropython/mcu.py info --hop 1      # full report of one node
 uv run micropython/mcu.py stats             # link counters
 uv run micropython/mcu.py send 'calibrate()'
 uv run micropython/mcu.py monitor --kind SMP
+uv run micropython/mcu.py send 'diag()'     # FSR sense pins: are the pull-downs on
 ```
+
+From the Klipper console, without stopping it: `LRT_CHAIN`.
 
 `main.py` and `lib/ota.py` are only replaced with `update --force`: a broken copy needs a USB install to fix.
 

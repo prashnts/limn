@@ -151,6 +151,7 @@ class ToolTouchProbeExtension:
         self.debug = False
         self._draw_grid = gen_draw_grid()
         self._detected_bed = None
+        self._chain_report_until = 0
         
         self.gcode.register_command("LRT_CONNECT",
             self.connect,
@@ -173,6 +174,9 @@ class ToolTouchProbeExtension:
         self.gcode.register_command("LRT_MESH_CALIBRATE",
             self.cmd_LRT_MESH_CALIBRATE,
             desc="Mesh Calibrate with the given Bed")
+        self.gcode.register_command("LRT_CHAIN",
+            self.cmd_LRT_CHAIN,
+            desc="Show the MCUs on the chain and the link counters")
 
         self.printer.register_event_handler("klippy:connect", self.on_connect)
 
@@ -230,6 +234,11 @@ class ToolTouchProbeExtension:
                 if self.debug:
                     self.gcode.respond_info(f"RTP Touch: {pkt['5']}")
                 return pkt['5']
+        if segments[0] == '!LRT' and segments[1] in ('hello', 'stats'):
+            if self.reactor.monotonic() < self._chain_report_until:
+                self.gcode.respond_info(f"[LRT] {segments[1]}: {segments[2]}")
+        if segments[0] == '!LRT' and segments[1] in ('error', 'log') and 'error' in line:
+            self.gcode.respond_info(f"[LRT] {segments[1]}: {segments[2]}")
         if segments[0] == '!LRT' and segments[1] == 'read_bed_id':
             try:
                 pkt = json.loads(segments[2])
@@ -620,6 +629,14 @@ class ToolTouchProbeExtension:
 
     def cmd_LRT_Z_PROBE(self, gcmd):
         self.probe.probe_offsets
+
+    def cmd_LRT_CHAIN(self, gcmd):
+        if not self.connect(self.gcode):
+            gcmd.respond_info("[LRT] Failed to connect to touch panel.")
+            return
+        self._chain_report_until = self.reactor.monotonic() + 2
+        self.write_queue.put('ping()')
+        self.write_queue.put('stats()')
 
     def cmd_DEBUG(self, gcmd):
         self.debug = True

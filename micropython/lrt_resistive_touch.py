@@ -5,7 +5,7 @@
 import time
 from machine import Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
-from link import load_node, from_config, pack_rtp, T_CMD, T_HELLO, T_DATA, S_SAMPLE
+from link import load_node, from_config, pack_rtp, Guard, T_CMD, T_HELLO, T_LOG, T_DATA, S_SAMPLE
 from touch import TouchLine
 
 
@@ -16,6 +16,7 @@ XP, XM, YP, YM = PANEL_PINS
 N_SAMPLES = 10
 SETTLE_US = 1000       # after every drive change; was 10ms for X only
 TOUCH_Z = 5000
+MAX_SPREAD = NODE.get('max_spread', 4000)   # samples of one read further apart: not settled
 
 npx = NeoPixel(Pin(16), 1)
 link = from_config(NODE)
@@ -36,16 +37,26 @@ TOUCH_LED_COLOR = (0x46, 0, 0x70)
 FSR_MCU_LED_COLOR = (0x91, 0x0A, 0x0B)
 
 
-def median(arr):
-    return sorted(arr)[len(arr) // 2]
-
 def _sense(pin_id):
     return ADC(Pin(pin_id, Pin.IN))
 
 def _drive(pin_id, value):
     Pin(pin_id, Pin.OUT, value=value)
 
+def _settled(samples):
+    '''Median, and how far apart the middle samples are.'''
+    samples = sorted(samples)
+    quarter = len(samples) // 4
+    return samples[len(samples) // 2], samples[-quarter - 1] - samples[quarter]
+
+def release_panel():
+    # Nothing driven between reads: no current through a pressed panel.
+    for pin_id in PANEL_PINS:
+        Pin(pin_id, Pin.IN)
+
 def get_points():
+    '''-> x, y, z, spread. A large spread means the pen was landing or
+    lifting during the read.'''
     # Referenced from https://github.com/adafruit/Adafruit_TouchScreen/blob/master/TouchScreen.cpp
     # X: drive the X plate, read the position off the Y plate.
     ypin = _sense(YP)
@@ -53,7 +64,8 @@ def get_points():
     _drive(XP, 1)
     _drive(XM, 0)
     time.sleep_us(SETTLE_US)
-    x = 65535 - median([ypin.read_u16() for _ in range(N_SAMPLES)])
+    x, x_spread = _settled([ypin.read_u16() for _ in range(N_SAMPLES)])
+    x = 65535 - x
 
     # Y: drive the Y plate, read the X plate.
     xpin = _sense(XP)
@@ -61,7 +73,8 @@ def get_points():
     _drive(YP, 1)
     _drive(YM, 0)
     time.sleep_us(SETTLE_US)
-    y = 65535 - median([xpin.read_u16() for _ in range(N_SAMPLES)])
+    y, y_spread = _settled([xpin.read_u16() for _ in range(N_SAMPLES)])
+    y = 65535 - y
 
     # Z (pressure): X+ low, Y- high, read X- and Y+.
     ypin = _sense(YP)
@@ -71,8 +84,9 @@ def get_points():
     z1 = xmin.read_u16()
     z2 = ypin.read_u16()
     z = 65535 - z2 + z1
+    release_panel()
 
-    return x, y, z
+    return x, y, z, max(x_spread, y_spread)
 
 def pen_detect_on():
     '''Y plate grounded, X plate pulled up: a touch pulls X+ low and fires
@@ -124,6 +138,11 @@ def handle(frame):
     npx[0] = LED_OFF
     npx.write()
 
+def log(text):
+    if _enable_debug:
+        print(text)
+    link.send(T_LOG, text.encode())
+
 def on_boot():
     hello()
     npx[0] = MCU_LED_COLOR
@@ -131,19 +150,23 @@ def on_boot():
     timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=on_hello_timer)
     timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
 
-on_boot()
-
 has_touch = False
 detecting = False
-while True:
-    relayed = link.down.stats['rx']
+rejected = 0            # touching, but not settled: not sent
+
+def step():
+    global _hello_due, has_touch, detecting, rejected
+    relayed = link.down.stats['rx'] if link.down else 0
     for frame in link.poll():
         handle(frame)
-    relayed = link.down.stats['rx'] != relayed
+    relayed = link.down and link.down.stats['rx'] != relayed
 
     if _hello_due:
         _hello_due = False
         hello()
+        if rejected:
+            log('rtp>>%d touch samples not settled (spread > %d), not sent' % (rejected, MAX_SPREAD))
+            rejected = 0
 
     if touch.armed and not has_touch:
         # Idle while armed: wait in pen detect mode, only measure once touched.
@@ -155,13 +178,13 @@ while True:
         touch.update(down)
         if not (down or touch.latched):
             wdt.feed()
-            continue
+            return
     if detecting:
         pen_detect_off()
         detecting = False
 
-    touch_point = get_points()
-    has_touch = touch_point[2] > TOUCH_Z
+    x, y, z, spread = get_points()
+    has_touch = z > TOUCH_Z
     if touch.armed:
         if has_touch:
             touch.fire()
@@ -169,10 +192,16 @@ while True:
     else:
         touch.update(has_touch)
 
-    if has_touch:
-        link.send(T_DATA, pack_rtp(S_SAMPLE, *touch_point))
+    if has_touch and spread > MAX_SPREAD:
+        rejected += 1
         if _enable_debug:
-            print('SMP', touch_point)
+            print('not settled', x, y, z, spread)
+    elif has_touch:
+        link.send(T_DATA, pack_rtp(S_SAMPLE, x, y, z))
+        if _enable_debug:
+            print('SMP', x, y, z, spread)
+
+    if has_touch:
         npx[0] = TOUCH_LED_COLOR
         npx.write()
     elif relayed:
@@ -183,3 +212,13 @@ while True:
         npx.write()
 
     wdt.feed()
+
+guard = Guard(log)
+on_boot()
+
+while True:
+    try:
+        step()
+        guard.ok()
+    except Exception as e:
+        guard.error(e)
