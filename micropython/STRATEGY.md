@@ -101,6 +101,8 @@ Host commands only the Dock handles: `power_on()`, `power_off()`, `read_bed_id()
 
 The USB side lives in `lib/bridge.py`. Every MCU runs it, so without a Dock the first bed MCU on USB plays the Dock for the ones below it (it is hop 0). A bed node stays silent on USB until the host sends its first command; from then on it prints every frame (`hello`, `log`, `frame`, and `data` lines for sensor samples).
 
+On the Klipper side, `ext/limn/dock.py` reads these lines; `ext/limn/fsr.py` switches the arrays to matrix mode (one hop at a time, as `frame(<hop>,2,..)`) while it measures.
+
 In Klipper, `LRT_CHAIN` shows the hellos and link counters without stopping Klipper. Error lines from any MCU are always shown.
 
 ### Baud
