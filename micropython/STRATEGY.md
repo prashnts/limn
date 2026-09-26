@@ -93,6 +93,8 @@ Unchanged line format, so `ext/limn.py` keeps working:
 
 Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock), and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello), `arm(<role>)`, `disarm()`, `diag()` (FSR: pull state of its sense pins).
 
+The USB side lives in `lib/bridge.py`. Every MCU runs it, so without a Dock the first bed MCU on USB plays the Dock for the ones below it (it is hop 0). A bed node stays silent on USB until the host sends its first command; from then on it prints every frame (`hello`, `log`, `frame`, and `data` lines for sensor samples).
+
 In Klipper, `LRT_CHAIN` shows the hellos and link counters without stopping Klipper. Error lines from any MCU are always shown.
 
 ### Baud

@@ -9,6 +9,7 @@ from neopixel import NeoPixel
 from link import load_node, from_config, pack_fsr, Guard, T_CMD, T_HELLO, T_LOG, T_DATA
 from link import S_CALIBRATING, S_CAL_FAILED, S_CALIBRATED, S_SAMPLE
 from touch import TouchLine
+from bridge import Bridge
 
 
 wdt = WDT(timeout=5000)
@@ -54,6 +55,7 @@ for x, pin_x in enumerate(IO_X):
 
 link = from_config(NODE)
 touch = TouchLine(NODE)
+bridge = Bridge(link)     # only used when a host talks to this node over USB
 npx = NeoPixel(Pin(16), 1)
 
 _ADC_MAX = 65535
@@ -286,6 +288,10 @@ def step():
     _inbox.extend(link.poll())
     while _inbox:
         handle(_inbox.pop(0))
+
+    cmd = bridge.read_command()
+    if cmd:
+        bridge.from_host(cmd, handle)
 
     if _hello_due:
         _hello_due = False

@@ -3,7 +3,7 @@
 Firmware for the Dock and the bed MCUs (resistive panel, FSR array), and `mcu.py` to install and update them.
 
 - `main.py`: bootloader, runs the app named in `node.json`, rolls back bad updates.
-- `lib/`: shared by all MCUs. `link.py` (UART chain), `ota.py` (updates), `touch.py` (touch line).
+- `lib/`: shared by all MCUs. `link.py` (UART chain), `ota.py` (updates), `touch.py` (touch line), `bridge.py` (USB host).
 - `lrt_*.py`: the apps.
 - `nodes/`: `node.json` for each kind of MCU (role, app, UART and pins).
 - `STRATEGY.md`: how it all fits together.
@@ -39,6 +39,13 @@ uv run micropython/mcu.py send 'diag()'     # FSR sense pins: are the pull-downs
 ```
 
 From the Klipper console, without stopping it: `LRT_CHAIN`.
+
+No Dock at hand (bed on the bench)? Plug in the first bed MCU instead: it becomes hop 0 and does the same for the MCUs below it.
+```
+uv run micropython/mcu.py topology --port <rtp port>                      # rtp at hop 0, fsr at hop 1
+uv run micropython/mcu.py monitor  --port <rtp port>                      # includes the fsr's data
+uv run micropython/mcu.py update --hop 1 --config fsr_bed3 --port <rtp port>
+```
 
 `main.py` and `lib/ota.py` are only replaced with `update --force`: a broken copy needs a USB install to fix.
 

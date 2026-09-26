@@ -207,6 +207,7 @@ class Link:
         self.root = root        # where files live, only differs in tests
         self.quiet = False      # set during updates: no sensor data or logs
         self.ota = None
+        self.tap = None         # tap(frame): sees frames from below and our own, for a USB host
         self._seq = 0
 
     def poll(self):
@@ -215,6 +216,8 @@ class Link:
         if self.down:
             for f in self.down.frames():
                 hop = min(f.hop + 1, MAX_HOP)
+                if self.tap:
+                    self.tap(Frame(f.type, hop, f.seq, f.payload))
                 if self.up:
                     self.up.queue(encode(f.type, hop, f.seq, f.payload),
                                   *_priority(f.type, hop, f.payload))
@@ -263,9 +266,11 @@ class Link:
         '''Sends a frame from this node towards the Dock.'''
         if self.quiet and ftype in (T_DATA, T_LOG):
             return
+        seq = self._next_seq()
+        if self.tap:
+            self.tap(Frame(ftype, 0, seq, payload))
         if self.up:
-            self.up.queue(encode(ftype, 0, self._next_seq(), payload),
-                          *_priority(ftype, 0, payload))
+            self.up.queue(encode(ftype, 0, seq, payload), *_priority(ftype, 0, payload))
 
     def send_down(self, ftype, payload=b'', hop=BROADCAST):
         '''Sends a frame to the node `hop` positions below, or to all.'''

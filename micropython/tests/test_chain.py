@@ -221,7 +221,36 @@ def main():
     finally:
         for p in procs:
             p.kill()
-        print('logs in', SIM)
+    bench()
+    print('logs in', SIM)
+
+def bench():
+    '''RTP -> FSR on the bench: no Dock, the host on the RTP's USB.'''
+    install('bench_rtp', 'rtp')
+    install('bench_fsr', 'fsr')
+    wire = socket.socketpair()
+    nothing = socket.socketpair()           # the RTP's up UART, not connected
+    procs = [
+        start('bench_fsr', {0: wire[1]}),
+        start('bench_rtp', {0: nothing[0], 1: wire[0]}, stdin=subprocess.PIPE, stdout=subprocess.PIPE),
+    ]
+    rtp = mcu.Dock(PipeSerial(procs[-1]))
+    try:
+        hellos = wait_for(lambda: (h := rtp.hellos()) and 1 in h and h, what='fsr through the rtp')
+        check('bench: rtp is hop 0, fsr hop 1', {hop: h['role'] for hop, h in hellos.items()} == {0: 'rtp', 1: 'fsr'})
+
+        (SIM / 'stim_fsr').touch()
+        data = [d for k, d in rtp.lines(1) if k == 'data' and d['hop'] == 1]
+        (SIM / 'stim_fsr').unlink()
+        check('bench: fsr data shows up on the rtp usb', len(data) > 0 and data[0]['kind'] == 4)
+
+        mcu.run_update(rtp, [1], config=mcu.NODES / 'fsr_bed3.json')
+        info = rtp.info(1)
+        check('bench: fsr switched to fsr_bed3 through the rtp',
+              info['files']['node.json'] == mcu.file_hash(mcu.NODES / 'fsr_bed3.json') and not info['pending'])
+    finally:
+        for p in procs:
+            p.kill()
 
 
 if __name__ == '__main__':
