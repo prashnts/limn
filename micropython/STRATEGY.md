@@ -18,17 +18,22 @@ Klipper host ──USB── Dock ──UART── node 1 ──UART── node 
 - **Data path** (UART): touch coordinates, FSR frames, commands, logs, firmware updates. Not time critical, but should be efficient and never block.
 
 
-## Trigger path (planned)
+## Trigger path
+
+The Dock picks the trigger with `"trigger"` in its `node.json`:
+- `"uart"` (default until the diodes are in): pulse on touch samples arriving over UART, not armed. Same as the old firmware, slower.
+- `"detect"`: everything below.
 
 - The Dock has a 10k pull-up on DETECT; the bed has the ID resistor to GND.
 - Each bed MCU gets a Schottky diode from a spare GPIO (GPIO 2 or 3) to the DETECT net. Silicon diodes drop too much for BED_6.
   - Idle / unpowered: diode is off, the bed ID reads as before (the Dock reads it before powering the bed).
   - Touch: GPIO high, DETECT goes to ~3.0V (~59k counts), above every bed ID (max 53k).
-- Nodes raise the line only when armed, hold it ~3ms, and lock out until the touch is released.
-- Nodes detect touch with a hard pin IRQ where possible (RTP: pen-down detect like the XPT2046 does it).
-- Dock reads the ADC every loop; a rising edge above ~56k while armed starts a 10ms pulse (PIO, so the loop keeps running).
-- Bed removal = DETECT high for more than 250ms. A removal during a probe move triggers the probe, which is the safe outcome.
-- Host sends `arm(role)` / `disarm()` around probe sessions, so an FSR touch cannot fire a pen probe.
+- Nodes raise the line only when armed, hold it 3ms, and lock out until the touch is released (`lib/touch.py`).
+- RTP: while armed and idle it waits in pen detect mode (Y plate grounded, X+ pulled up, hard IRQ on X+ falling, like the XPT2046). The IRQ raises the line directly, then the RTP measures. Only lifting the pen re-arms it.
+- FSR: raises the line from its scan loop (~25ms), no IRQ yet.
+- Dock reads the ADC every loop; a rising edge above 56k (`touch_threshold`) while armed starts a 10ms pulse (PIO, so the loop keeps running), then ignores touches for 50ms.
+- Bed removal = DETECT reads "no bed" for more than 250ms. A removal during a probe move triggers the probe, which is the safe outcome.
+- Host sends `arm(rtp)` / `disarm()` around every probe (`ext/limn.py`, `probe_at`), so an FSR touch cannot fire a pen probe. `arm(all)` arms every node.
 - Budget: node IRQ (<0.1ms) + Dock polling (<0.2ms, a few ms during GC) ≈ 1ms typ, 3ms worst.
 
 
@@ -49,6 +54,7 @@ END | type:u8 hop:u8 seq:u8 payload... crc32:u32le | END      (0xC0 and 0xDB esc
 | `T_CMD`   | down      | command text, eg. `b'calibrate()'`        |
 | `T_LOG`   | up        | text                                      |
 | `T_DATA`  | up        | `pack_fsr()` / `pack_rtp()`               |
+| `T_OTA`   | both      | update request / reply, see `lib/ota.py`  |
 
 Sensor payloads (little endian):
 - FSR: `kind=0x4, state, n, n x (row:u8, col:u8, strength:u16 0..1000)`
@@ -78,43 +84,53 @@ Unchanged line format, so `ext/limn.py` keeps working:
 ```
 !LRT>>SMP>>{"4": [[row, col, strength], ...], "5": [x, y, v], "hop": 2}>>
 !LRT>>hello>>{"hop": 1, "role": "rtp", "emblem": "..."}>>
-!LRT>>stats>>{"down": {"rx": .., "tx": .., "bad": .., "drop": ..}, "seq_gaps": {"1": 0, "2": 12}}>>
+!LRT>>stats>>{"down": {"rx": .., "tx": .., "bad": .., "drop": ..}, "seq_gaps": {"1": 0, "2": 12}, ..}>>
+!LRT>>frame>>{"hop": 1, "type": 5, "b64": "..."}>>
 ```
 
-Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello).
+Host commands: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock), and these, which are also sent down the chain: `calibrate()`, `debug_on()`, `debug_off()`, `reset()`, `ping()` (every node answers with hello), `arm(<role>)`, `disarm()`.
 
 ### Baud
 
 `BAUD` in `lib/link.py`, 115200 for now. Between bed MCUs (5-15cm, twisted) 921600 should be fine; the pogo pin link probably 460800. Raise it while `stats()` shows `bad: 0`.
 
 
-## Firmware update over the chain (planned)
+## Firmware update over the chain
 
 Files on each MCU:
 ```
-boot.py        rollback + rescue, rarely changed
-main.py        reads node.json, imports the app
-node.json      role, pin map (BED_3 / BED_4), baud
-lib/link.py    link + update receiver
-app_*.py       dock / rtp / fsr
-rescue.py      link relay + update receiver only, never updated automatically
+main.py        bootloader: runs the app from node.json, rolls back, rescue loop
+node.json      role, app, UARTs, pins (eg. BED_3 / BED_4 FSR rows), trigger
+lib/link.py    UART chain
+lib/ota.py     update receiver, rollback, rescue loop
+lib/touch.py   touch line
+lrt_*.py       the app
 ```
 
-Update, driven by `tools/chain_flash.py` through the Dock's USB (Klipper disconnected):
-1. `ping()`: each node answers with role, `unique_id` and sha256 of its files. Only changed files are sent.
-2. `QUIET` broadcast: nodes stop streaming. The RP2040 stalls during flash writes and would drop UART bytes.
-3. `OTA_BEGIN(path, size, sha256)` -> `OTA_DATA(offset, <=192B)` with an ACK per chunk after it is written -> `OTA_END` checks sha256.
-4. `OTA_COMMIT`: `x -> x.bak`, `x.new -> x`, write `pending`, reset.
-5. The app confirms after ~10s of healthy link. `boot.py` rolls back after 3 unconfirmed boots, and runs `rescue.py` if the app does not import.
+`mcu.py install` puts these on a board over USB once. After that `mcu.py update` goes through the Dock:
+1. `ping()`, then `INFO` per hop: role, app, `unique_id`, sha256 of every file. Only files that differ are sent.
+2. `QUIET` broadcast: nodes stop sending data and logs. The RP2040 stalls during flash writes and would drop UART bytes.
+3. `BEGIN(path, size, sha256)` -> `DATA(offset, 192B)`, each acked once written -> `END` checks size and sha256.
+4. `COMMIT`: `x -> x.bak`, `x.new -> x`, write `ota_pending.json`, reset.
+5. `mcu.py` waits for the node, checks the hashes and sends `CONFIRM`, which drops the `.bak` files.
+   - The app does not import: `main.py` rolls back and resets.
+   - No confirm within 60s, or 3 boots without one: rolled back.
+   - No update pending and the app does not import: rescue loop (link + updates only).
+6. Farthest node first, the Dock last (it re-opens its USB port after the reset).
 
-Each bed MCU needs one USB flash to get `boot.py` + `rescue.py`, then everything goes over the chain.
+`main.py` and `lib/ota.py` are only replaced with `--force`. The rest, including `lib/link.py`, is covered by the rollback.
+
+`tests/test_chain.py` runs Dock, RTP and FSR as processes (`tests/sim_mcu.py`, fake `machine`) and goes through arming, updates, a broken update and a Dock update with `mcu.py` itself.
 
 
 ## Status
 
 - [x] `lib/link.py`: framing, routing, queues, tests (`tests/test_link.py`)
 - [x] Dock, RTP, FSR moved onto the link
-- [ ] Hardware test: `stats()` per link, raise baud
-- [ ] Trigger path: diodes, node touch IRQ, Dock ADC edge + PIO pulse, arming, removal debounce
-- [ ] Sensor fixes: RTP settle times, FSR pull-downs and thresholds
-- [ ] Firmware update over the chain
+- [x] Trigger path in firmware: touch line, RTP pen-down IRQ, Dock ADC edge + PIO pulse, arming, removal debounce
+- [x] Firmware update over the chain, `mcu.py`, `tests/test_chain.py`
+- [x] RTP: same 1ms settle time for X, Y and Z (was 10ms for X, none for Y and Z)
+- [ ] Hardware test: `mcu.py stats` per link, raise baud
+- [ ] Diodes on the bed, then `"trigger": "detect"` in `nodes/dock.json` and `mcu.py update --hop 0 --config dock`
+- [ ] Tune `touch_threshold` and `SETTLE_US` on the real panel
+- [ ] FSR: pull-downs and thresholds, touch IRQ

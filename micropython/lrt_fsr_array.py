@@ -6,14 +6,15 @@ import time
 import random
 from machine import Pin, ADC, Timer, WDT, reset
 from neopixel import NeoPixel
-from link import Link, open_uart, pack_fsr, T_CMD, T_HELLO, T_DATA
+from link import load_node, from_config, pack_fsr, T_CMD, T_HELLO, T_DATA
 from link import S_CALIBRATING, S_CALIBRATED, S_SAMPLE
+from touch import TouchLine
 
 
 wdt = WDT(timeout=5000)
+NODE = load_node()
 FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]
-# FSR_Y = [29, 28, 26, 27]  # BED_3
-FSR_Y = [29, 28, 27, 26]  # BED_4
+FSR_Y = NODE.get('fsr_y', [29, 28, 27, 26])  # BED_3: [29, 28, 26, 27]
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
 IO_Y = [Pin(pin_y, Pin.IN, Pin.PULL_DOWN) for pin_y in FSR_Y]
 ADC_Y = [(pin_y, ADC(pin_y)) for pin_y in IO_Y]
@@ -46,7 +47,8 @@ for x, pin_x in enumerate(IO_X):
     for y, pin_y in enumerate(ADC_Y):
         READ_MATRIX.append((x, y, pin_x, pin_y))
 
-link = Link(up=open_uart(0))
+link = from_config(NODE)
+touch = TouchLine(NODE)
 npx = NeoPixel(Pin(16), 1)
 
 _ADC_MAX = 65535
@@ -259,7 +261,9 @@ def handle(frame):
     if frame.type != T_CMD:
         return
     cmd = frame.payload
-    if cmd == b'calibrate()':
+    if touch.command(cmd):
+        pass
+    elif cmd == b'calibrate()':
         calibrate_fsr()
     elif cmd == b'debug_on()':
         _enable_debug = True
@@ -295,6 +299,7 @@ while True:
 
     n_touches = len(touch_coords)
     has_touch = n_touches > 0
+    touch.update(has_touch)
 
     if has_touch:
         send_state(S_SAMPLE, touch_coords)

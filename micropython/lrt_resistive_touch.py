@@ -5,15 +5,21 @@
 import time
 from machine import Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
-from link import Link, open_uart, pack_rtp, T_CMD, T_HELLO, T_DATA, S_SAMPLE
+from link import load_node, from_config, pack_rtp, T_CMD, T_HELLO, T_DATA, S_SAMPLE
+from touch import TouchLine
 
 
 wdt = WDT(timeout=3000)
-PANEL_PINS = [28, 26, 27, 29]
+NODE = load_node()
+PANEL_PINS = NODE.get('panel_pins', [28, 26, 27, 29])
 XP, XM, YP, YM = PANEL_PINS
+N_SAMPLES = 10
+SETTLE_US = 1000       # after every drive change; was 10ms for X only
+TOUCH_Z = 5000
 
 npx = NeoPixel(Pin(16), 1)
-link = Link(up=open_uart(0), down=open_uart(1))
+link = from_config(NODE)
+touch = TouchLine(NODE)
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
 _hello_due = False
@@ -33,46 +39,56 @@ FSR_MCU_LED_COLOR = (0x91, 0x0A, 0x0B)
 def median(arr):
     return sorted(arr)[len(arr) // 2]
 
+def _sense(pin_id):
+    return ADC(Pin(pin_id, Pin.IN))
+
+def _drive(pin_id, value):
+    Pin(pin_id, Pin.OUT, value=value)
+
 def get_points():
     # Referenced from https://github.com/adafruit/Adafruit_TouchScreen/blob/master/TouchScreen.cpp
-    N_SAMPLES = 10
-    ypin = ADC(Pin(YP, Pin.IN))
-    ADC(Pin(YM, Pin.IN))
-    Pin(XP, Pin.OUT).on()
-    Pin(XM, Pin.OUT).off()
-    time.sleep_ms(10)
+    # X: drive the X plate, read the position off the Y plate.
+    ypin = _sense(YP)
+    _sense(YM)
+    _drive(XP, 1)
+    _drive(XM, 0)
+    time.sleep_us(SETTLE_US)
+    x = 65535 - median([ypin.read_u16() for _ in range(N_SAMPLES)])
 
-    xsamples = []
+    # Y: drive the Y plate, read the X plate.
+    xpin = _sense(XP)
+    xmin = _sense(XM)
+    _drive(YP, 1)
+    _drive(YM, 0)
+    time.sleep_us(SETTLE_US)
+    y = 65535 - median([xpin.read_u16() for _ in range(N_SAMPLES)])
 
-    for _ in range(N_SAMPLES):
-        val = ypin.read_u16()
-        xsamples.append(val)
-    
-    x = 65535 - (median(xsamples))
-
-    xpin = ADC(Pin(XP, Pin.IN))
-    xmin = ADC(Pin(XM, Pin.IN))
-    Pin(YP, Pin.OUT).on()
-    Pin(YM, Pin.OUT).off()
-
-    ysamples = []
-
-    for _ in range(N_SAMPLES):
-        val = xpin.read_u16()
-        ysamples.append(val)
-    
-    y = 65535 - (median(ysamples))
-
-    ypin = ADC(Pin(YP, Pin.IN))
-    Pin(XP, Pin.OUT).off()
-    Pin(YM, Pin.OUT).on()
-
+    # Z (pressure): X+ low, Y- high, read X- and Y+.
+    ypin = _sense(YP)
+    _drive(XP, 0)
+    _drive(YM, 1)
+    time.sleep_us(SETTLE_US)
     z1 = xmin.read_u16()
     z2 = ypin.read_u16()
-
     z = 65535 - z2 + z1
 
     return x, y, z
+
+def pen_detect_on():
+    '''Y plate grounded, X plate pulled up: a touch pulls X+ low and fires
+    the touch line straight from the IRQ.'''
+    _sense(XM)
+    _sense(YP)
+    _drive(YM, 0)
+    pin = Pin(XP, Pin.IN, Pin.PULL_UP)
+    pin.irq(touch.fire, Pin.IRQ_FALLING, hard=True)
+
+def pen_detect_off():
+    # Measuring toggles X+, which must not look like a touch.
+    Pin(XP).irq(handler=None)
+
+def pen_is_down():
+    return Pin(XP).value() == 0
 
 def hello():
     npx[0] = ACT_COLOR
@@ -94,7 +110,9 @@ def handle(frame):
     if frame.type != T_CMD:
         return
     cmd = frame.payload
-    if cmd == b'debug_on()':
+    if touch.command(cmd):
+        pass
+    elif cmd == b'debug_on()':
         _enable_debug = True
     elif cmd == b'debug_off()':
         _enable_debug = False
@@ -115,6 +133,8 @@ def on_boot():
 
 on_boot()
 
+has_touch = False
+detecting = False
 while True:
     relayed = link.down.stats['rx']
     for frame in link.poll():
@@ -125,8 +145,29 @@ while True:
         _hello_due = False
         hello()
 
+    if touch.armed and not has_touch:
+        # Idle while armed: wait in pen detect mode, only measure once touched.
+        # Only lifting the pen re-arms the line, a light contact does not.
+        if not detecting:
+            pen_detect_on()
+            detecting = True
+        down = pen_is_down()
+        touch.update(down)
+        if not (down or touch.latched):
+            wdt.feed()
+            continue
+    if detecting:
+        pen_detect_off()
+        detecting = False
+
     touch_point = get_points()
-    has_touch = touch_point[2] > 5000
+    has_touch = touch_point[2] > TOUCH_Z
+    if touch.armed:
+        if has_touch:
+            touch.fire()
+        touch.tick()
+    else:
+        touch.update(has_touch)
 
     if has_touch:
         link.send(T_DATA, pack_rtp(S_SAMPLE, *touch_point))

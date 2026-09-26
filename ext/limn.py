@@ -362,6 +362,8 @@ class ToolTouchProbeExtension:
         return dft
 
     def probe_at(self, coords, gcmd):
+        # Only the resistive panel may trigger the probe (Dock trigger "detect").
+        self.write_queue.put('arm(rtp)')
         self._move(coords, self.TRAVEL_SPEED)
         self.begin_sample_collection()
         probe_session = self.probe.start_probe_session(gcmd)
@@ -375,6 +377,7 @@ class ToolTouchProbeExtension:
 
         self.end_sample_collection()
         probe_session.end_probe_session()
+        self.write_queue.put('disarm()')
 
         return pos, pd.DataFrame(data, columns=['x', 'y', 'cx', 'cy', 'pz'])
 
