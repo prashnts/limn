@@ -3,25 +3,32 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
-import json
-import uctypes
-import binascii
-from machine import UART, Pin, ADC, reset, Timer, WDT
+from machine import Pin, ADC, reset, Timer, WDT
 from neopixel import NeoPixel
+from link import load_node, from_config, pack_rtp, Guard, T_CMD, T_HELLO, T_LOG, T_DATA, S_SAMPLE
+from touch import TouchLine
+from bridge import Bridge
 
 
 wdt = WDT(timeout=3000)
-PANEL_PINS = [28, 26, 27, 29]
+NODE = load_node()
+PANEL_PINS = NODE.get('panel_pins', [28, 26, 27, 29])
 XP, XM, YP, YM = PANEL_PINS
+N_SAMPLES = 10
+SETTLE_US = 1000       # after every drive change; was 10ms for X only
+TOUCH_Z = 5000
+MAX_SPREAD = NODE.get('max_spread', 4000)   # samples of one read further apart: not settled
 
 npx = NeoPixel(Pin(16), 1)
-uart_in = UART(0, 115200, timeout=10)
-uart_out = UART(1, 115200, timeout=20)
+link = from_config(NODE)
+touch = TouchLine(NODE)
+bridge = Bridge(link)     # only used when a host talks to this node over USB
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)
+_hello_due = False
 
 _enable_debug = True
-TAG = "!RTP>>"
+ROLE = "rtp"
 EMBLEM = "Limn - Resistive Touch Alignment v1"
 
 # GRB
@@ -32,138 +39,178 @@ TOUCH_LED_COLOR = (0x46, 0, 0x70)
 FSR_MCU_LED_COLOR = (0x91, 0x0A, 0x0B)
 
 
-RTP_ID_LM = 0x5
-RTP_PACKET = {
-    'id': 0 | uctypes.UINT8,
-    'n': 1 | uctypes.UINT8,
-    'state': 2 | uctypes.UINT8,
-    'touch_x': 3 | uctypes.UINT64,
-    'touch_y': 11 | uctypes.UINT64,
-    'touch_v': 19 | uctypes.UINT8,
-}
+def _sense(pin_id):
+    return ADC(Pin(pin_id, Pin.IN))
 
-def pack_state(touch_coord, state):
-    _alloc = b'\0' * (uctypes.sizeof(RTP_PACKET))
-    pkt = uctypes.struct(uctypes.addressof(_alloc), RTP_PACKET)
-    pkt.id = RTP_ID_LM
-    pkt.state = state
-    pkt.n = 1
-    pkt.touch_x = touch_coord[0]
-    pkt.touch_y = touch_coord[1]
-    pkt.touch_v = int(touch_coord[2] / 1024)
+def _drive(pin_id, value):
+    Pin(pin_id, Pin.OUT, value=value)
 
-    return binascii.b2a_base64(pkt).decode().strip()
+def _settled(samples):
+    '''Median, and how far apart the middle samples are.'''
+    samples = sorted(samples)
+    quarter = len(samples) // 4
+    return samples[len(samples) // 2], samples[-quarter - 1] - samples[quarter]
 
-def unpack_state(encoded):
-    decoded = binascii.a2b_base64(encoded.strip())
-    pkt = uctypes.struct(uctypes.addressof(decoded), RTP_PACKET)
-    return pkt
-
-
-def median(arr):
-    return sorted(arr)[len(arr) // 2]
+def release_panel():
+    # Nothing driven between reads: no current through a pressed panel.
+    for pin_id in PANEL_PINS:
+        Pin(pin_id, Pin.IN)
 
 def get_points():
+    '''-> x, y, z, spread. A large spread means the pen was landing or
+    lifting during the read.'''
     # Referenced from https://github.com/adafruit/Adafruit_TouchScreen/blob/master/TouchScreen.cpp
-    N_SAMPLES = 10
-    ypin = ADC(Pin(YP, Pin.IN))
-    ADC(Pin(YM, Pin.IN))
-    Pin(XP, Pin.OUT).on()
-    Pin(XM, Pin.OUT).off()
-    time.sleep_ms(10)
+    # X: drive the X plate, read the position off the Y plate.
+    ypin = _sense(YP)
+    _sense(YM)
+    _drive(XP, 1)
+    _drive(XM, 0)
+    time.sleep_us(SETTLE_US)
+    x, x_spread = _settled([ypin.read_u16() for _ in range(N_SAMPLES)])
+    x = 65535 - x
 
-    xsamples = []
+    # Y: drive the Y plate, read the X plate.
+    xpin = _sense(XP)
+    xmin = _sense(XM)
+    _drive(YP, 1)
+    _drive(YM, 0)
+    time.sleep_us(SETTLE_US)
+    y, y_spread = _settled([xpin.read_u16() for _ in range(N_SAMPLES)])
+    y = 65535 - y
 
-    for _ in range(N_SAMPLES):
-        val = ypin.read_u16()
-        xsamples.append(val)
-    
-    x = 65535 - (median(xsamples))
-
-    xpin = ADC(Pin(XP, Pin.IN))
-    xmin = ADC(Pin(XM, Pin.IN))
-    Pin(YP, Pin.OUT).on()
-    Pin(YM, Pin.OUT).off()
-
-    ysamples = []
-
-    for _ in range(N_SAMPLES):
-        val = xpin.read_u16()
-        ysamples.append(val)
-    
-    y = 65535 - (median(ysamples))
-
-    ypin = ADC(Pin(YP, Pin.IN))
-    Pin(XP, Pin.OUT).off()
-    Pin(YM, Pin.OUT).on()
-
+    # Z (pressure): X+ low, Y- high, read X- and Y+.
+    ypin = _sense(YP)
+    _drive(XP, 0)
+    _drive(YM, 1)
+    time.sleep_us(SETTLE_US)
     z1 = xmin.read_u16()
     z2 = ypin.read_u16()
-
     z = 65535 - z2 + z1
+    release_panel()
 
-    return x, y, z
+    return x, y, z, max(x_spread, y_spread)
 
-def teeprint(info, line):
-    line = TAG + info + '>>' + line + ">>\n"
-    if _enable_debug:
-        print(line)
-    uart_in.write((line).encode())
+def pen_detect_on():
+    '''Y plate grounded, X plate pulled up: a touch pulls X+ low and fires
+    the touch line straight from the IRQ.'''
+    _sense(XM)
+    _sense(YP)
+    _drive(YM, 0)
+    pin = Pin(XP, Pin.IN, Pin.PULL_UP)
+    pin.irq(touch.fire, Pin.IRQ_FALLING, hard=True)
 
-def ping(t):
-    teeprint("ping", f"t={time.ticks_ms()}")
+def pen_detect_off():
+    # Measuring toggles X+, which must not look like a touch.
+    Pin(XP).irq(handler=None)
+
+def pen_is_down():
+    return Pin(XP).value() == 0
+
+def hello():
     npx[0] = ACT_COLOR
     npx.write()
+    link.send(T_HELLO, (ROLE + '>>' + EMBLEM).encode())
+
+def on_hello_timer(t):
+    # Only flag it: all UART writes happen in the main loop.
+    global _hello_due
+    _hello_due = True
 
 def restore_led(t=None):
     npx[0] = MCU_LED_COLOR
     npx.write()
 
+def handle(frame):
+    # Broadcast commands (eg. calibrate()) are already forwarded down by link.
+    global _enable_debug
+    if frame.type != T_CMD:
+        return
+    cmd = frame.payload
+    if touch.command(cmd):
+        pass
+    elif cmd == b'debug_on()':
+        _enable_debug = True
+    elif cmd == b'debug_off()':
+        _enable_debug = False
+    elif cmd == b'reset()':
+        link.flush()   # let the reset reach the nodes below first
+        reset()
+    elif cmd == b'ping()':
+        hello()
+    npx[0] = LED_OFF
+    npx.write()
+
+def log(text):
+    if _enable_debug:
+        print(text)
+    link.send(T_LOG, text.encode())
+
 def on_boot():
-    teeprint("booting", EMBLEM)
+    hello()
     npx[0] = MCU_LED_COLOR
     npx.write()
-    timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=ping)
+    timer_hello.init(period=12141, mode=Timer.PERIODIC, callback=on_hello_timer)
     timer_restore_led.init(period=100, mode=Timer.PERIODIC, callback=restore_led)
-    uart_out.write(b'ping()\n')
 
-on_boot()
+has_touch = False
+detecting = False
+rejected = 0            # touching, but not settled: not sent
 
-while True:
-    cmd = uart_in.read()
+def step():
+    global _hello_due, has_touch, detecting, rejected
+    relayed = link.down.stats['rx'] if link.down else 0
+    for frame in link.poll():
+        handle(frame)
+    relayed = link.down and link.down.stats['rx'] != relayed
+
+    cmd = bridge.read_command()
     if cmd:
-        if b'calibrate()' in cmd:
-            uart_out.write(b'calibrate()\n')
-        if b'debug_on()' in cmd:
-            uart_out.write(b'debug_on()\n')
-            _enable_debug = True
-        if b'debug_off()' in cmd:
-            uart_out.write(b'debug_off()\n')
-            _enable_debug = False
-        if b'reset()' in cmd:
-            uart_out.write(b'reset()\n')
-            reset()
-        if b'ping()' in cmd:
-            ping(None)
-        npx[0] = LED_OFF
-        npx.write()
-    
-    chain_data = None
-    if uart_out.any():
-        chain_data = uart_out.readline()
-        if chain_data:
-            uart_in.write(chain_data)
-            print(chain_data.strip().decode())
+        bridge.from_host(cmd, handle)
 
-    touch_point = get_points()
-    has_touch = touch_point[2] > 5000
+    if _hello_due:
+        _hello_due = False
+        hello()
+        if rejected:
+            log('rtp>>%d touch samples not settled (spread > %d), not sent' % (rejected, MAX_SPREAD))
+            rejected = 0
+
+    if touch.armed and not has_touch:
+        # Idle while armed: wait in pen detect mode, only measure once touched.
+        # Only lifting the pen re-arms the line, a light contact does not.
+        if not detecting:
+            pen_detect_on()
+            detecting = True
+        down = pen_is_down()
+        touch.update(down)
+        if not (down or touch.latched):
+            wdt.feed()
+            return
+    if detecting:
+        pen_detect_off()
+        detecting = False
+
+    x, y, z, spread = get_points()
+    has_touch = z > TOUCH_Z
+    if touch.armed:
+        if has_touch:
+            touch.fire()
+        touch.tick()
+    else:
+        touch.update(has_touch)
+
+    if has_touch and spread > MAX_SPREAD:
+        rejected += 1
+        if _enable_debug:
+            print('not settled', x, y, z, spread)
+    elif has_touch:
+        link.send(T_DATA, pack_rtp(S_SAMPLE, x, y, z))
+        if _enable_debug:
+            print('SMP', x, y, z, spread)
 
     if has_touch:
-        pkt = pack_state(touch_point, 42)
-        teeprint('SMP', pkt)
         npx[0] = TOUCH_LED_COLOR
         npx.write()
-    elif chain_data:
+    elif relayed:
         npx[0] = FSR_MCU_LED_COLOR
         npx.write()
     else:
@@ -171,3 +218,13 @@ while True:
         npx.write()
 
     wdt.feed()
+
+guard = Guard(log)
+on_boot()
+
+while True:
+    try:
+        step()
+        guard.ok()
+    except Exception as e:
+        guard.error(e)

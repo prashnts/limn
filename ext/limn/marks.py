@@ -1,0 +1,53 @@
+# Limn - the test marks on the paper, after a tool is calibrated
+#
+# Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
+# This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# Each mark is two corners (geometry.mark_strokes): └ where the previous tool
+# left its ┐, which makes a +, and ┐ at the next point, for the next tool. Two
+# pens that disagree show it in the +: a step in its vertical line is X, a step
+# in its horizontal line Y.
+#
+# The pen travels raw at PANEL_ZHOME, over the beds, and only comes down over
+# the mark, with the tool's offsets and the lrt_paper mesh applied. The caller
+# checks the mesh is of this bed; problems() the rest.
+from .beds import PANEL_ZHOME, MARKS_MAX_X, TOOL_MAX_DXY, TOOL_DZ
+
+DRAW_FEED = 2000
+
+
+def problems(strokes, offsets, bounds):
+    '''Why these strokes can't be drawn with a tool of `offsets` (dx, dy, dz) on
+    a paper mesh of `bounds` ((min_x, min_y), (max_x, max_y)); [] when they can.'''
+    dx, dy, dz = offsets
+    why = []
+    if abs(dx) > TOOL_MAX_DXY or abs(dy) > TOOL_MAX_DXY:
+        why.append(f"the tool's offsets dx={dx} dy={dy} are over {TOOL_MAX_DXY}mm")
+    if not TOOL_DZ[0] <= dz <= TOOL_DZ[1]:
+        why.append(f"the tool's dz={dz} is outside {TOOL_DZ}")
+    (x0, y0), (x1, y1) = bounds
+    for x, y in (p for stroke in strokes for p in stroke):
+        # Where the carriage travels to (raw), and where the pen draws
+        for px, py in ((x, y), (x + dx, y + dy)):
+            if not (x0 <= px <= x1 and y0 <= py <= y1) or px > MARKS_MAX_X:
+                why.append(f"({px:.1f}, {py:.1f}) is off the paper mesh or past X{MARKS_MAX_X}")
+                return why
+    return why
+
+
+def draw(machine, strokes):
+    run = machine.gcode_run
+    x, y = strokes[0][0]
+    machine.move(z=max(machine.position()[2], PANEL_ZHOME))
+    machine.move(x=x)                   # away from the holders and the tag reader first
+    machine.move(y=y)
+    run("_APPLY_OFFSETS MESH=lrt_paper")
+    run(f"G1 F{DRAW_FEED}")
+    for stroke in strokes:
+        (sx, sy), rest = stroke[0], stroke[1:]
+        run(f"G1 X{sx} Y{sy}")
+        run("G1 Z1 ACT1")
+        for px, py in rest:
+            run(f"G1 X{px} Y{py}")
+        run("G1 Z1 ACT3")
+    run("_CLEAR_OFFSETS")
