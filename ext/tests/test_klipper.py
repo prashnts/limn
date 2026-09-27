@@ -70,6 +70,8 @@ class FakeGcmd:
 
 
 class FakeGcode:
+    error = GcodeError
+
     def __init__(self):
         self.commands = {}
         self.said = []
@@ -121,6 +123,21 @@ class FakeLedEffect:
 
 LED_NAMES = ['ui_tool_sweep', 'ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert'] \
     + [f'{kind}_{t}' for kind in ('holder', 'ui_tool') for t in (41, 42, 43, 44, 45)]
+
+
+class FakeMacro:
+    '''gcode_macro: only the variables it declares can be set.'''
+
+    def __init__(self, **variables):
+        self.variables = variables
+        self.sets = 0
+
+    def cmd_SET_GCODE_VARIABLE(self, gcmd):
+        key = gcmd.get('VARIABLE')
+        if key not in self.variables:
+            raise gcmd.error(f"Unknown gcode_macro variable '{key}'")
+        self.variables = {**self.variables, key: ast.literal_eval(gcmd.get('VALUE'))}
+        self.sets += 1
 
 
 class FakeToolhead:
@@ -203,6 +220,7 @@ def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
     mcp, nfc = FakeMCP23017(low), FakePN532(pages)
     ext._attach_holder(ToolHolder(printer.reactor, FakeBus(mcp, nfc), parse_pins('15:41, 14:42, 13:45, 12:43, 11:44'),
                                   say=printer.objects['gcode'].respond_info))
+    ext.tool_macros = limn.parse_macros(limn.HOLDER_MACROS)
     svv = printer.objects['save_variables'].allVariables
     svv['currently_docked_tool'] = carried
     return ext, printer, mcp, nfc, printer.objects['gcode'], svv
@@ -212,6 +230,8 @@ def make_with_leds(**kwargs):
     leds = {name: FakeLedEffect() for name in LED_NAMES}
     leds['ui_tool_sweep'].enabled = True                # autostart
     printer.objects.update({'led_effect ' + name: effect for name, effect in leds.items()})
+    printer.objects.update({f'gcode_macro T{i}': FakeMacro(color='', active=False) for i in range(4)})
+    printer.objects['gcode_macro T4'] = FakeMacro()     # without the variables
     printer.events['klippy:connect']()
     wait(printer, 1)                                    # the holders settle while Klipper starts
     printer.events['klippy:ready']()
@@ -369,6 +389,20 @@ def test_leds_heal_and_missing_effects():
     gcode.run('TOOL_LEDS')
     assert leds['holder_41'].state == 'occupied'
     assert 'holder_41=occupied' in gcode.said[-1]
+
+
+def test_fluidd_tool_buttons():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 13, 12, 11), carried=42)
+    buttons = {i: printer.objects[f'gcode_macro T{i}'].variables for i in range(4)}
+    assert buttons[0] == {'color': 'E0D2B4', 'active': False}
+    assert buttons[1] == {'color': '2196F3', 'active': True}
+    assert printer.objects['gcode_macro T4'].variables == {}
+    mcp.low.discard(12)                                 # 43 lifted by hand
+    wait(printer, 5)
+    assert printer.objects['gcode_macro T2'].variables['color'] == 'FFA000'
+    sets = printer.objects['gcode_macro T0'].sets
+    gcode.run('TOOL_LEDS')
+    assert printer.objects['gcode_macro T0'].sets == sets                   # only changes are set
 
 
 if __name__ == '__main__':
