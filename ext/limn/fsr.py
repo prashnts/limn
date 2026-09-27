@@ -218,13 +218,25 @@ class Fsr:
         run("UNDOCK")
         run("G28")
         run("_CLEAR_OFFSETS")
-        bed_z = {cell: self.bltouch_z(cell) for cell in self.z_cells()}
-        run("_BUZZ_DOOP")
-
+        bed_z = self.probe_bed_z()
         run("T4")
+        return self.calibrate_reference(bed_z)
+
+    def probe_bed_z(self):
+        '''BLTouch z of the z_cells(), no tool on the carriage -> {cell: z}.'''
+        bed_z = {cell: self.bltouch_z(cell) for cell in self.z_cells()}
+        self.machine.gcode_run("_BUZZ_DOOP")
+        return bed_z
+
+    def bed_z_update(self, profile, bed_z):
+        '''The profile with a new bed z only: the reference tool's edges stay.'''
+        return {'fsr_ref': {**profile['fsr_ref'], 'bed_z': [[*cell, z] for cell, z in bed_z.items()]}}
+
+    def calibrate_reference(self, bed_z):
+        '''The reference tool on the carriage, bed_z just probed -> profile.'''
         ref = self.measure(bed_z)
         tool_z = round(ref['z'] - bed_z[tuple(self.cfg['z_cell'])], 3)
-        run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f}")
+        self.machine.gcode_run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f} REFERENCE=1")
         ref['bed_z'] = [[*cell, z] for cell, z in bed_z.items()]
         return {'fsr_ref': ref}
 

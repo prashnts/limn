@@ -10,6 +10,8 @@
 PANEL_ZHOME = 9     # travel height over the beds
 PAPER_ZHOME = 6     # travel height over the paper
 
+REFERENCE_TOOL = 45     # T4: the beds are calibrated with it, its tag says so (REFERENCE=1)
+
 # No bed on the plotter: the whole bed, as [bed_mesh] in printer.cfg has it.
 NO_BED_MESHES = [{'profile': 'default'}]
 

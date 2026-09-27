@@ -107,11 +107,24 @@ class FakeToolhead:
 
 
 class FakeRoutine:
-    def __init__(self, offsets):
+    def __init__(self, plotter, offsets):
+        self.plotter = plotter
         self.offsets = offsets
 
     def calibrate(self):
+        self.plotter.steps.append('calibrate')
         return {}
+
+    def probe_bed_z(self):
+        self.plotter.steps.append('bed_z')
+        return [[30.0, 42.0, 9, 0, 0, 4.5]]
+
+    def bed_z_update(self, profile, bed_z):
+        return {'ref_z_panel': bed_z}
+
+    def calibrate_reference(self, bed_z):
+        self.plotter.steps.append(('reference', self.plotter.svv.get('currently_docked_tool')))
+        return {'ref_z_panel': bed_z, 'touch_params': [1, 0, 0, 0, 1, 0]}
 
     def probe_tool(self, profile):
         return self.offsets
@@ -121,7 +134,8 @@ class Plotter:
     '''The macros the extension runs, as far as it cares: BED_MESH_CALIBRATE
     (undocks first), DOCK, WRITE_TOOL_TAG.'''
 
-    def __init__(self, ext, printer, svv=None, bed_mesh=None, bed=None, offsets=(0.3, -0.2, 1.1)):
+    def __init__(self, ext, printer, svv=None, bed_mesh=None, bed=None, offsets=(0.3, -0.2, 1.1),
+                 reference_tag=False):
         self.ext, self.printer = ext, printer
         self.gcode = printer.objects['gcode']
         self.svv = printer.objects['save_variables'].allVariables
@@ -133,8 +147,9 @@ class Plotter:
         printer.objects.update({'bed_mesh': self.bed_mesh, 'toolhead': self.toolhead, 'probe': object()})
         self.gcode.on_script = self.on_script
         ext.dock.request = lambda cmd, kind, timeout=3: list(self.bed)
-        ext._routine = lambda gcmd, bed: FakeRoutine(offsets)
-        self.meshed, self.docked, self.undocked = [], [], []
+        ext._routine = lambda gcmd, bed: FakeRoutine(self, offsets)
+        self.reference_tag = reference_tag      # the tag of the tool in holder 45
+        self.meshed, self.docked, self.undocked, self.steps = [], [], [], []
 
     def on_script(self, script):
         name, *words = script.split()
@@ -148,8 +163,14 @@ class Plotter:
             self.bed_mesh.profiles[params['PROFILE']] = profile(x0, y0, x1, y1, z=-2 - len(self.meshed) / 100)
             self.meshed.append(params['PROFILE'])
         elif name == 'DOCK':
-            self.svv['currently_docked_tool'] = int(params['T'])
-            self.docked.append(int(params['T']))
+            tool = int(params['T'])
+            self.svv['currently_docked_tool'] = tool
+            self.docked.append(tool)
+            self.ext.tag = {'ok': True, 'name': f'pen {tool}', 'reference': tool == 45 and self.reference_tag}
+        elif name == 'UNDOCK':
+            if self.svv.get('currently_docked_tool'):
+                self.undocked.append(self.svv['currently_docked_tool'])
+                self.svv['currently_docked_tool'] = 0
         elif name == 'WRITE_TOOL_TAG':
             for axis in 'XYZ':
                 self.svv['tool_offset_' + axis.lower()] = float(params['D' + axis])
@@ -223,13 +244,72 @@ def test_no_bed_meshes_the_whole_bed():
     assert p.meshed == []
 
 def test_no_meshing_while_a_tool_may_be_on_the_carriage():
-    ext, printer, *_ = make_with_holder(low=(15, 14, 13, 12))               # 44 is out
+    ext, printer, *_ = make_with_holder(low=(15, 14, 13))                   # 43 and 44 are out
     p = Plotter(ext, printer)
-    assert '[44]' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
+    assert '[43, 44]' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
     assert p.meshed == []
-    p.svv['currently_docked_tool'] = 44                     # it's on the carriage: meshing puts it away
+    p.svv['currently_docked_tool'] = 44                     # 44 is on the carriage, 43 elsewhere
+    assert '[43]' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
+    assert p.meshed == []
+
+def test_probe_tool_puts_a_docked_tool_away_to_mesh():
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=42)  # DOCK T=42
+    p = Plotter(ext, printer)
+    p.run('LRT_PROBE_TOOL')
+    assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked[0] == 42 and p.docked[-1] == 42
+    assert len(p.pen_downs()) == 2
+
+def test_probe_tool_takes_the_only_empty_holder_as_the_carried_tool():
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0)   # 42 on, not saved (DOCK_RESET)
+    p = Plotter(ext, printer)
+    p.run('LRT_PROBE_TOOL')
+    assert p.said('taking 42 as the one on the carriage')
+    assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked[0] == 42 and p.docked[-1] == 42
+
+
+# The bed moved: its z again, and with the reference tool its points too
+def test_moved_bed_with_the_reference_tool_calibrates_again():
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=42)
+    p = Plotter(ext, printer, reference_tag=True)
+    p.run('LRT_PROBE_TOOL')
+    assert p.steps == ['bed_z', ('reference', 45)]
+    assert p.docked == [45, 42] and p.undocked == [42, 45]    # 42 away, 45 in and out, 42 back
+    assert p.ext.profile['touch_params'] == [1, 0, 0, 0, 1, 0]
+    assert p.said('Calibrated again with the reference tool 45')
+
+def test_moved_bed_without_the_reference_tag_only_takes_the_z():
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=42)
+    p = Plotter(ext, printer, reference_tag=False)
+    touch_params = p.ext.profile['touch_params']
+    p.run('LRT_PROBE_TOOL')
+    assert p.steps == ['bed_z'] and p.docked == [45, 42]      # looked at 45's tag, put it back
+    assert p.ext.profile['ref_z_panel'] == [[30.0, 42.0, 9, 0, 0, 4.5]]
+    assert p.ext.profile['touch_params'] == touch_params and len(p.ext.profile['ref_samples']) == 12
+    assert p.said("isn't the reference's") and p.said('New bed z only')
+
+def test_moved_bed_with_holder_45_empty_only_takes_the_z():
+    ext, printer, *_ = make_with_holder(low=(15, 14, 12, 11), carried=45)  # 45 on the carriage
+    p = Plotter(ext, printer, reference_tag=True)
+    p.run('LRT_PROBE_TOOL')                                 # the fake holder still reads it empty
+    assert p.steps == ['bed_z'] and p.docked == [45] and p.said('holder 45 is empty')
+
+def test_no_holders_only_takes_the_z():
+    p = plotter(carried=42)
+    p.run('LRT_PROBE_TOOL')
+    assert p.steps == ['bed_z'] and p.docked == [42] and p.said('no tool holders')
+
+def test_mesh_calibrate_alone_takes_the_z_too():
+    p = plotter(carried=0)
     p.run('LRT_MESH_CALIBRATE')
-    assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked == [44]
+    assert p.steps == ['bed_z']
+    p.steps = []
+    p.run('LRT_PROBE_TOOL')                                 # fresh now: nothing again
+    assert p.steps == [] and p.meshed == ['lrt_paper', 'lrt_panel']
+
+def test_calibrate_does_not_take_the_z_twice():
+    p = plotter(carried=0)
+    p.run('LRT_CALIBRATE')
+    assert p.steps == ['calibrate']
 
 def test_probe_tool_meshes_a_moved_bed_first_and_takes_the_tool_back():
     p = plotter(carried=42)

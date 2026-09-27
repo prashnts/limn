@@ -34,7 +34,7 @@ from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE
 from .machine import Machine
 from .geometry import ProbeValue, gen_mark_grid, mark_strokes
-from .beds import BEDS, NO_BED_MESHES
+from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL
 from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
 from . import marks
 from .rtp import Rtp
@@ -126,7 +126,7 @@ class Limn:
              "TOOL_HOLDER_CHECK T=41 EXPECT=occupied|empty [ARM=1]: stop unless the holder is so"),
             ('TOOL_TAG_READ', self.cmd_TOOL_TAG_READ, "Read the carried tool's tag [MOVE=0]"),
             ('TOOL_TAG_WRITE', self.cmd_TOOL_TAG_WRITE,
-             "TOOL_TAG_WRITE [DX= DY= DZ= NAME=] [MOVE=0]: write these to the carried tool's tag"),
+             "TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1] [MOVE=0]: write these to the carried tool's tag"),
             ('TOOL_CHANGE_PHASE', self.cmd_TOOL_CHANGE_PHASE,
              "TOOL_CHANGE_PHASE PHASE=engage|leave|idle: the tool change's step, for the LEDs"),
             ('TOOL_LEDS', self.cmd_TOOL_LEDS, "Redraw the tool holder and UI LEDs, show their states"),
@@ -258,17 +258,27 @@ class Limn:
                              f"while a pen may be on the carriage")
         return self.holder.tools - occupied - {self._carried()}
 
-    def _run_meshes(self, gcmd, meshes):
-        '''Takes the meshes. BED_MESH_CALIBRATE (limn.cfg) puts the carried tool away
-        first: probing with a pen on the carriage would run it into the bed.'''
+    def _run_meshes(self, gcmd, meshes, rebase=True):
+        '''Takes the meshes -> the tool that was on the carriage, 0: none. With `rebase`,
+        the calibration's bed z too, see _rebase(). BED_MESH_CALIBRATE
+        (limn.cfg) puts it away first: probing with a pen on the carriage would run it
+        into the bed. The only empty holder, with no tool saved as carried, is taken as
+        the carried tool: undocking it with nothing on the carriage makes the same moves
+        as docking, and its holder check stops the meshes.'''
         key = self.placement
         if key is None:
             raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
         missing = self._tools_unaccounted(gcmd)
-        if missing:
+        if len(missing) == 1 and not self._carried():
+            tool, = missing
+            gcmd.respond_info(f"[LRT][Mesh] Holder {tool} is empty and no tool is saved as carried: "
+                              f"taking {tool} as the one on the carriage, to put it away")
+            self._save_vars({'currently_docked_tool': tool})
+        elif missing:
             raise gcmd.error(f"[LRT][Mesh] tools {sorted(missing)} are out of their holders and not saved "
                              f"as carried: one could be on the carriage, and the pen would hit the bed. "
                              f"Put them back (or DOCK the one on the carriage) first")
+        carried = self._carried()
         for mesh in meshes:
             gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
             if 'origin' in mesh:
@@ -279,6 +289,8 @@ class Limn:
                     f"mesh_max={x0 + w},{y0 + h} probe_count={mesh['probe_count']}")
             else:
                 self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={mesh['profile']}")
+        if rebase and self.bed in BEDS and self.calibrated(BEDS[self.bed]['sensor']):
+            self._rebase(gcmd, BEDS[self.bed])
         self._read_bed_id(gcmd)
         if self.placement != key:
             raise gcmd.error("[LRT][Mesh] the bed moved while it was meshed, LRT_MESH_CALIBRATE again")
@@ -286,6 +298,51 @@ class Limn:
         self._save_vars({'lrt_meshes': {'placement': key, 'profiles': {
             m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}}})
         gcmd.respond_info("[LRT][Mesh] Done, SAVE_CONFIG to keep the meshes over a restart")
+        return carried
+
+    def _rebase(self, gcmd, bed):
+        '''The bed moved: the calibration's bed z (BLTouch, the carriage empty) again.
+        The reference tool in its holder, tagged so: its points too, a full calibration.
+        Without it the reference points stay: a tool probed now is a little off in XY
+        by how far the bed moved, but still in step with the other tools in Z.'''
+        routine = self._routine(gcmd, bed)
+        run = self.gcode.run_script_from_command
+        run("_CLEAR_OFFSETS")
+        try:
+            bed_z = routine.probe_bed_z()
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        why = self._no_reference(gcmd)
+        if not why:
+            run(f"DOCK T={REFERENCE_TOOL}")
+            if not self.tag.get('ok'):
+                why = f"its tag didn't read ({self.tag.get('error')})"
+            elif not self.tag.get('reference'):
+                why = f"its tag ({self.tag.get('name')}) isn't the reference's (TOOL_TAG_WRITE REFERENCE=1)"
+            else:
+                try:
+                    self._save_profile(routine.calibrate_reference(bed_z))
+                except ROUTINE_ERRORS as e:
+                    raise gcmd.error(str(e))
+                gcmd.respond_info(f"[LRT] Calibrated again with the reference tool {REFERENCE_TOOL}, "
+                                  f"SAVE_CONFIG to keep it")
+            run("UNDOCK")
+            if not why:
+                return
+        self._save_profile(routine.bed_z_update(self.profile, bed_z))
+        gcmd.respond_info(f"[LRT] New bed z only, the reference tool {REFERENCE_TOOL} can't calibrate: {why}. "
+                          f"Tools probed now may be a little off in XY; SAVE_CONFIG to keep it")
+
+    def _no_reference(self, gcmd):
+        '''Why the reference tool can't be docked to read its tag, None when it can.'''
+        if not self.holder:
+            return "no tool holders to find it and read its tag"
+        try:
+            if REFERENCE_TOOL not in self.holder.sample():
+                return f"holder {REFERENCE_TOOL} is empty"
+        except (OSError, RuntimeError) as e:
+            return f"can't read the holders ({e})"
+        return None
 
     def _ensure_meshes(self, gcmd):
         '''Meshes the bed again when its meshes aren't of the bed as it sits, then
@@ -295,8 +352,7 @@ class Limn:
         if not stale:
             return
         gcmd.respond_info(f"[LRT][Mesh] Meshing the bed again first: {'; '.join(stale)}")
-        carried = self._carried()
-        self._run_meshes(gcmd, meshes)
+        carried = self._run_meshes(gcmd, meshes)
         if carried:
             self.gcode.run_script_from_command(f"DOCK T={carried}")
 
@@ -368,7 +424,7 @@ class Limn:
 
     def cmd_CALIBRATE(self, gcmd):
         bed = self._bed(gcmd)
-        self._run_meshes(gcmd, bed['meshes'])
+        self._run_meshes(gcmd, bed['meshes'], rebase=False)
         try:
             profile = self._routine(gcmd, bed).calibrate()
         except ROUTINE_ERRORS as e:
@@ -690,7 +746,8 @@ class Limn:
         self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
                          'tool_name': tag.name, 'tool_tag_uid': tag.uid})
         self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
-                       'name': tag.name, 'tries': tries, 'read_at': self.reactor.monotonic()}, 'ok')
+                       'name': tag.name, 'reference': tag.reference, 'tries': tries,
+                       'read_at': self.reactor.monotonic()}, 'ok')
 
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
@@ -700,20 +757,23 @@ class Limn:
             gcmd.respond_info(f"[Tag] read failed after {tries} tries: {error}")
             return
         self._apply_tag(tag, tries)
-        gcmd.respond_info(f"[Tag] {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+        gcmd.respond_info(f"[Tag] {tag.name}{' (reference)' if tag.reference else ''}: "
+                          f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
 
     def cmd_TOOL_TAG_WRITE(self, gcmd):
         self._require_holder(gcmd)
         fields = {'dx': gcmd.get_float('DX', None), 'dy': gcmd.get_float('DY', None),
-                  'dz': gcmd.get_float('DZ', None), 'name': gcmd.get('NAME', None)}
+                  'dz': gcmd.get_float('DZ', None), 'name': gcmd.get('NAME', None),
+                  'reference': gcmd.get_int('REFERENCE', None)}
         if all(v is None for v in fields.values()):
-            raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ or NAME")
+            raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ, NAME or REFERENCE")
         tag, tries, error = self._at_reader(gcmd, lambda: self.holder.write_tag(**fields))
         if tag is None:
             self._set_tag({'ok': False, 'error': error, 'tries': tries}, 'error')
             raise gcmd.error(f"[Tag] write failed after {tries} tries: {error}")
         self._apply_tag(tag, tries)
-        gcmd.respond_info(f"[Tag] wrote {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+        gcmd.respond_info(f"[Tag] wrote {tag.name}{' (reference)' if tag.reference else ''}: "
+                          f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
 
     def get_status(self, eventtime):
         holder = self.holder
