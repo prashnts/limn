@@ -243,14 +243,18 @@ def test_no_bed_meshes_the_whole_bed():
     assert 'just been placed' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
     assert p.meshed == []
 
-def test_no_meshing_while_a_tool_may_be_on_the_carriage():
-    ext, printer, *_ = make_with_holder(low=(15, 14, 13))                   # 43 and 44 are out
+def test_empty_holders_are_normal_with_a_carried_tool():
+    ext, printer, *_ = make_with_holder(low=(12,), carried=42)             # only 43 home, 42 on
     p = Plotter(ext, printer)
-    assert '[43, 44]' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
-    assert p.meshed == []
-    p.svv['currently_docked_tool'] = 44                     # 44 is on the carriage, 43 elsewhere
-    assert '[43]' in raises(lambda: p.run('LRT_MESH_CALIBRATE'))
-    assert p.meshed == []
+    p.run('LRT_PROBE_TOOL')
+    assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked[0] == 42 and p.docked == [42]
+    assert p.said('holder 45 is empty') and len(p.pen_downs()) == 2
+
+def test_several_empty_holders_and_nothing_saved_leave_it_to_undock():
+    ext, printer, *_ = make_with_holder(low=(12,), carried=0)
+    p = Plotter(ext, printer)
+    p.run('LRT_MESH_CALIBRATE')
+    assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked == [] and not p.said('taking')
 
 def test_probe_tool_puts_a_docked_tool_away_to_mesh():
     ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=42)  # DOCK T=42

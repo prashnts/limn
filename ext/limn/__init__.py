@@ -247,37 +247,31 @@ class Limn:
     def _stale_meshes(self, names):
         return stale_meshes(self._vars().get('lrt_meshes'), self.placement, self._mesh_profiles(), names)
 
-    def _tools_unaccounted(self, gcmd):
-        '''Tools out of their holders but not saved as carried: one may be on the carriage.'''
+    def _empty_holders(self):
+        '''The holders without their tool now, empty when they can't be read.'''
         if not self.holder:
             return set()
         try:
-            occupied = self.holder.sample()
-        except (OSError, RuntimeError) as e:
-            raise gcmd.error(f"[LRT][Mesh] can't read the tool holders ({e}): not probing the bed "
-                             f"while a pen may be on the carriage")
-        return self.holder.tools - occupied - {self._carried()}
+            return self.holder.tools - self.holder.sample()
+        except (OSError, RuntimeError):
+            return set()
 
     def _run_meshes(self, gcmd, meshes, rebase=True):
         '''Takes the meshes -> the tool that was on the carriage, 0: none. With `rebase`,
         the calibration's bed z too, see _rebase(). BED_MESH_CALIBRATE
         (limn.cfg) puts it away first: probing with a pen on the carriage would run it
-        into the bed. The only empty holder, with no tool saved as carried, is taken as
-        the carried tool: undocking it with nothing on the carriage makes the same moves
-        as docking, and its holder check stops the meshes.'''
+        into the bed. With no tool saved as carried and only one holder empty, that tool
+        is taken as the carried one: undocking it with nothing on the carriage makes the
+        same moves as docking, and its holder check stops the meshes.'''
         key = self.placement
         if key is None:
             raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
-        missing = self._tools_unaccounted(gcmd)
-        if len(missing) == 1 and not self._carried():
-            tool, = missing
+        empty = self._empty_holders()
+        if len(empty) == 1 and not self._carried():
+            tool, = empty
             gcmd.respond_info(f"[LRT][Mesh] Holder {tool} is empty and no tool is saved as carried: "
                               f"taking {tool} as the one on the carriage, to put it away")
             self._save_vars({'currently_docked_tool': tool})
-        elif missing:
-            raise gcmd.error(f"[LRT][Mesh] tools {sorted(missing)} are out of their holders and not saved "
-                             f"as carried: one could be on the carriage, and the pen would hit the bed. "
-                             f"Put them back (or DOCK the one on the carriage) first")
         carried = self._carried()
         for mesh in meshes:
             gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
