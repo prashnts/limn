@@ -76,6 +76,7 @@ class FakeGcode:
         self.commands = {}
         self.said = []
         self.scripts = []
+        self.on_script = None
 
     def register_command(self, name, handler, desc=None):
         self.commands[name] = handler
@@ -85,6 +86,8 @@ class FakeGcode:
 
     def run_script_from_command(self, script):
         self.scripts.append(script)
+        if self.on_script:
+            self.on_script(script)
 
     def create_gcode_command(self, command, commandline, params):
         return FakeGcmd(self, params)
@@ -313,7 +316,7 @@ def test_tag_read_without_tag():
     ext, printer, _, _, gcode, svv = make_with_holder(pages=None)
     gcode.run('TOOL_TAG_READ', MOVE=0)
     assert gcode.scripts == [] and 'tool_offset_x' not in svv
-    assert ext.get_status(0)['tag'] == {'ok': False, 'error': 'no tag'}
+    assert ext.get_status(0)['tag'] == {'ok': False, 'error': 'no tag', 'tries': 1}
 
 def test_tag_write():
     ext, printer, _, nfc, gcode, svv = make_with_holder(pages=tag_pages())
@@ -403,6 +406,74 @@ def test_fluidd_tool_buttons():
     sets = printer.objects['gcode_macro T0'].sets
     gcode.run('TOOL_LEDS')
     assert printer.objects['gcode_macro T0'].sets == sets                   # only changes are set
+
+
+def flaky_reader(nfc, gcode, nudges):
+    '''The reader only reaches the tag after `nudges` nudges.'''
+    pages, nfc.pages = nfc.pages, None
+    def on_script(script):
+        if script.startswith('_RFID_NUDGE') and sum(s.startswith('_RFID_NUDGE') for s in gcode.scripts) >= nudges:
+            nfc.pages = pages
+    gcode.on_script = on_script
+
+def test_tag_read_nudges_the_reader():
+    ext, printer, _, nfc, gcode, svv = make_with_holder(pages=tag_pages())
+    flaky_reader(nfc, gcode, 1)
+    gcode.run('TOOL_TAG_READ')
+    assert gcode.scripts == ['_RFID_HOME', '_RFID_NUDGE ATTEMPT=1 T=0']
+    assert svv['tool_name'] == 'Fineliner' and ext.tag['tries'] == 2
+    assert "[Tag] no tag, nudging the reader (2/3)" in gcode.said
+
+def test_tag_read_gives_up():
+    ext, printer, _, nfc, gcode, svv = make_with_holder(pages=tag_pages())
+    flaky_reader(nfc, gcode, 5)
+    gcode.run('TOOL_TAG_READ')
+    assert gcode.scripts == ['_RFID_HOME', '_RFID_NUDGE ATTEMPT=1 T=0', '_RFID_NUDGE ATTEMPT=2 T=0']
+    assert ext.tag == {'ok': False, 'error': 'no tag', 'tries': 3} and 'tool_name' not in svv
+    assert gcode.said[-1] == "[Tag] read failed after 3 tries: no tag"
+
+def test_tag_without_moving_does_not_retry():
+    ext, printer, _, nfc, gcode, svv = make_with_holder(pages=tag_pages())
+    flaky_reader(nfc, gcode, 1)
+    gcode.run('TOOL_TAG_READ', MOVE=0)
+    assert gcode.scripts == [] and ext.tag['tries'] == 1
+
+def test_tag_write_nudges_the_reader():
+    ext, printer, _, nfc, gcode, svv = make_with_holder(pages=tag_pages())
+    flaky_reader(nfc, gcode, 2)
+    gcode.run('TOOL_TAG_WRITE', DZ=0.4)
+    assert gcode.scripts[-1] == '_RFID_NUDGE ATTEMPT=2 T=0' and svv['tool_offset_z'] == 0.4
+    ext.tag_retries = 0
+    flaky_reader(nfc, gcode, 9)
+    assert 'after 1 tries' in raises(lambda: gcode.run('TOOL_TAG_WRITE', DZ=0.5))
+
+
+def test_nudge_reenters_the_carried_tools_holder():
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(low=(15, 13, 12, 11), pages=tag_pages(), carried=42)
+    printer.events['klippy:connect']()
+    wait(printer, 1)
+    flaky_reader(nfc, gcode, 1)
+    inner = gcode.on_script
+    def on_script(script):
+        if script.startswith('_RFID_NUDGE'):
+            mcp.low.add(14)                             # the carried 42 in its holder for a moment
+            wait(printer, 0.6)
+            mcp.low.discard(14)
+            wait(printer, 0.2)                          # out again, the switch not settled yet
+        inner(script)
+    gcode.on_script = on_script
+    gcode.run('TOOL_TAG_READ')
+    assert gcode.scripts[-1] == '_RFID_NUDGE ATTEMPT=1 T=42'
+    wait(printer, 1)
+    assert svv['currently_docked_tool'] == 42 and ext.tag['ok']
+    assert not any('manual' in line for line in gcode.said)
+    assert ext.holder.expected == {} and ext.holder.occupied == {41, 43, 44, 45}
+
+def test_nudge_without_reentering():
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(pages=tag_pages(), carried=42)   # 42 reads as home
+    flaky_reader(nfc, gcode, 1)
+    gcode.run('TOOL_TAG_READ')
+    assert gcode.scripts[-1] == '_RFID_NUDGE ATTEMPT=1 T=0'
 
 
 if __name__ == '__main__':

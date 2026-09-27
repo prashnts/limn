@@ -15,6 +15,7 @@ INTERVAL = 0.2          # s between two looks at the holders
 SETTLE = 2              # equal reads before a new state counts
 SAMPLE_GAP = 0.02       # s between the reads of `sample`
 EXPECT_WINDOW = 120     # s an expected change stays expected
+ANY = 'any'             # expect(): any change, until forget()
 
 PAGE_DX, PAGE_NAME = 6, 11      # dx, dy, dz on pages 6, 7, 8; the name on 11..15
 NAME_LEN = 20
@@ -138,8 +139,18 @@ class ToolHolder:
         '''The next change of `tool`'s holder to `occupied` is ours, not a hand's.'''
         self.expected[tool] = (occupied, self.reactor.monotonic() + window)
 
+    def quiet(self, tool, window=EXPECT_WINDOW):
+        '''Every change of `tool`'s holder is ours until forget(): going in and out of it.'''
+        self.expected[tool] = (ANY, self.reactor.monotonic() + window)
+
     def forget(self, tool):
         self.expected.pop(tool, None)
+
+    def resync(self):
+        '''Takes the holders as they are now, telling nobody (after a quiet() move).'''
+        state = self.sample()
+        self.occupied, self._pending = state, None
+        return state
 
     def busy(self):
         '''One of our own tool changes is on its way.'''
@@ -148,10 +159,11 @@ class ToolHolder:
 
     def _was_expected(self, tool, occupied, now):
         want, until = self.expected.get(tool, (None, 0))
-        if want == occupied and until > now:
+        if until <= now or want not in (occupied, ANY):
+            return False
+        if want != ANY:
             del self.expected[tool]
-            return True
-        return False
+        return True
 
     def _tick(self, eventtime):
         try:
