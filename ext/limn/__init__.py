@@ -44,7 +44,6 @@ ROUTINE_ERRORS = (RuntimeError, TimeoutError, ConnectionError)
 TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
 HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
 HOLDER_MACROS = '41:T0, 42:T1, 43:T2, 44:T3, 45:T4'
-BOOT_SWEEP = 2.0        # s the ui_tool_sweep boot flourish plays before the states take over
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -86,7 +85,7 @@ class Limn:
         self._led_missing = set()
         self._led_pending = False
         self._led_timer = None
-        self._leds_from = None      # no LED redraws before (the boot flourish plays)
+        self._leds_from = None      # no LED redraws before Klipper is ready
         self.tool_macros = {}       # tool -> its T<n> macro, whose variables Fluidd shows
         self.tag_retries = 2
         self._macro_missing = set()
@@ -162,9 +161,9 @@ class Limn:
 
     def _on_ready(self):
         if self.holder:
-            # The holders may have settled already, during startup: draw once the flourish is over
-            self._leds_from = self.reactor.monotonic() + BOOT_SWEEP
-            self._led_timer = self.reactor.register_timer(self._on_led_timer, self._leds_from)
+            # The holders may have settled already, during startup: draw now anyway
+            self._leds_from = self.reactor.monotonic()
+            self._led_timer = self.reactor.register_timer(self._on_led_timer, self.reactor.NOW)
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
 
     def _on_data(self, data):
@@ -466,8 +465,6 @@ class Limn:
         self._led_pending = False
         now = self.reactor.monotonic()
         states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried())
-        if 'ui_tool_sweep' not in self._led_states:
-            states = {'ui_tool_sweep': None, **states}        # the boot animation ends
         for name, state in states.items():
             self._set_led(name, state)
         for tool, button in tool_buttons(states, self._carried()).items():

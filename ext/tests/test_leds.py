@@ -1,6 +1,6 @@
 # uv run python ext/tests/test_leds.py
 from fakes import run_tests
-from limn.leds import ToolLeds, DONE_SHOW, FLASH_SHOW, ALERT_SHOW, ERROR_NEW
+from limn.leds import ToolLeds, DONE_SHOW, ALERT_SHOW, ERROR_NEW
 
 TOOLS = (41, 42, 43, 44, 45)
 ALL = frozenset(TOOLS)
@@ -36,15 +36,15 @@ def test_dock_sequence():
     leds = ToolLeds(TOOLS)
     leds.start(43)                                      # pre-check passed
     out = leds.desired(0, ALL, True, 0)
-    assert holders(out)[43] == 'target' and digits(out) == {43: 'target'}
+    assert holders(out)[43] == 'occupied' and digits(out) == {43: 'target'}
     assert traffic(out) == ('on', None, None) and out['ui_alert'] == 'busy_approach'
     leds.set_phase('engage')
     out = leds.desired(1, ALL, True, 0)
-    assert holders(out)[43] == 'engage' and traffic(out) == (None, 'on', None)
+    assert holders(out)[43] == 'occupied' and traffic(out) == (None, 'on', None)
     assert out['ui_alert'] == 'busy_engage'
     leds.set_phase('leave')
     out = leds.desired(2, ALL - {43}, True, 0)
-    assert holders(out)[43] == 'target' and traffic(out) == (None, None, 'blink')
+    assert holders(out)[43] == 'missing' and traffic(out) == (None, None, 'blink')
     leds.done(3)                                        # post-check passed, 43 saved as carried
     out = leds.desired(3, ALL - {43}, True, 43)
     assert holders(out)[43] == 'carried' and digits(out) == {43: 'untagged'}
@@ -69,15 +69,14 @@ def test_failed_check():
     out = leds.desired(ERROR_NEW + 1, ALL, True, 44)
     assert holders(out)[44] == 'occupied' and out['ui_alert'] == 'ok'
 
-def test_manual_flash_then_settles():
+def test_manual_change_alert_calms_down():
     leds = ToolLeds(TOOLS)
     leds.manual({41}, 10)
     out = leds.desired(10, ALL - {41}, True, 0)
-    assert holders(out)[41] == 'manual' and out['ui_alert'] == 'attention_fast'
-    assert holders(leds.desired(10 + FLASH_SHOW, ALL - {41}, True, 0))[41] == 'missing'
+    assert holders(out)[41] == 'missing' and out['ui_alert'] == 'attention_fast'
     moods = [leds.desired(10 + t, ALL - {41}, True, 0)['ui_alert'] for t in (1, 2, 4, ALERT_SHOW)]
     assert moods == ['attention_fast', 'attention', 'attention_slow', 'warn']   # calms down, 41 still gone
-    assert leds.next_change(10.1) == 10 + FLASH_SHOW
+    assert leds.next_change(10.1) == 11.5
 
 def test_ok_when_all_home():
     leds = ToolLeds(TOOLS)

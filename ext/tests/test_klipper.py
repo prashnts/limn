@@ -124,7 +124,7 @@ class FakeLedEffect:
         return self.history[-1] if self.enabled and self.history else None
 
 
-LED_NAMES = ['ui_tool_sweep', 'ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert'] \
+LED_NAMES = ['ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert'] \
     + [f'{kind}_{t}' for kind in ('holder', 'ui_tool') for t in (41, 42, 43, 44, 45)]
 
 
@@ -231,14 +231,13 @@ def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
 def make_with_leds(**kwargs):
     ext, printer, mcp, nfc, gcode, svv = make_with_holder(**kwargs)
     leds = {name: FakeLedEffect() for name in LED_NAMES}
-    leds['ui_tool_sweep'].enabled = True                # autostart
     printer.objects.update({'led_effect ' + name: effect for name, effect in leds.items()})
     printer.objects.update({f'gcode_macro T{i}': FakeMacro(color='', active=False) for i in range(4)})
     printer.objects['gcode_macro T4'] = FakeMacro()     # without the variables
     printer.events['klippy:connect']()
     wait(printer, 1)                                    # the holders settle while Klipper starts
     printer.events['klippy:ready']()
-    wait(printer, limn.BOOT_SWEEP + 0.5)
+    wait(printer, 0.5)
     return ext, printer, mcp, gcode, svv, leds
 
 def lit(leds):
@@ -332,30 +331,26 @@ def test_leds_at_startup():
     assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
                          'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged',
                          'ui_alert': 'ok'}
-    assert leds['ui_tool_sweep'].history == [None]
 
-def test_boot_sweep_plays_then_stops():
+def test_leds_drawn_when_holders_settled_during_startup():
     ext, printer, mcp, nfc, gcode, svv = make_with_holder()
-    sweep = FakeLedEffect()
-    sweep.enabled = True
-    printer.objects['led_effect ui_tool_sweep'] = sweep
+    holder_41 = FakeLedEffect()
+    printer.objects['led_effect holder_41'] = holder_41
     printer.events['klippy:connect']()
-    wait(printer, 1)
+    wait(printer, 1)                                    # settled before klippy:ready: not drawn yet
+    assert holder_41.state is None
     printer.events['klippy:ready']()
-    mcp.low.discard(15)                                 # a change during the flourish
-    wait(printer, 1)
-    assert sweep.enabled
-    wait(printer, limn.BOOT_SWEEP)
-    assert not sweep.enabled and sweep.history == [None]
+    wait(printer, 0.1)
+    assert holder_41.state == 'occupied'
 
 def test_leds_follow_a_dock():
     ext, printer, mcp, gcode, svv, leds = make_with_leds()
     gcode.run('TOOL_HOLDER_CHECK', T=42, EXPECT='occupied', ARM=1)
     wait(printer, 0.1)
-    assert leds['holder_42'].state == 'target' and leds['ui_traffic_red'].state == 'on'
+    assert leds['holder_42'].state == 'occupied' and leds['ui_traffic_red'].state == 'on'
     gcode.run('TOOL_CHANGE_PHASE', PHASE='engage')
     wait(printer, 0.1)
-    assert leds['holder_42'].state == 'engage' and leds['ui_traffic_yellow'].state == 'on'
+    assert leds['ui_traffic_yellow'].state == 'on'
     assert leds['ui_traffic_red'].state is None
     mcp.low.discard(14)
     gcode.run('TOOL_CHANGE_PHASE', PHASE='leave')
@@ -379,10 +374,8 @@ def test_leds_on_failed_check_and_manual_change():
     mcp.low.discard(11)                                 # 44 lifted by hand
     wait(printer, 1)
     assert leds['holder_43'].state == 'occupied'
-    assert leds['holder_44'].state == 'manual' and leds['ui_alert'].state == 'attention_fast'
-    wait(printer, 1.5)
-    assert leds['holder_44'].state == 'missing'
-    wait(printer, 4)
+    assert leds['holder_44'].state == 'missing' and leds['ui_alert'].state == 'attention_fast'
+    wait(printer, 5)
     assert leds['ui_alert'].state == 'warn'
 
 def test_leds_heal_and_missing_effects():
@@ -397,12 +390,12 @@ def test_leds_heal_and_missing_effects():
 def test_fluidd_tool_buttons():
     ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 13, 12, 11), carried=42)
     buttons = {i: printer.objects[f'gcode_macro T{i}'].variables for i in range(4)}
-    assert buttons[0] == {'color': 'E0D2B4', 'active': False}
-    assert buttons[1] == {'color': '2196F3', 'active': True}
+    assert buttons[0] == {'color': '4CAF50', 'active': False}
+    assert buttons[1] == {'color': '', 'active': True}             # carried: no dot, highlighted
     assert printer.objects['gcode_macro T4'].variables == {}
     mcp.low.discard(12)                                 # 43 lifted by hand
     wait(printer, 5)
-    assert printer.objects['gcode_macro T2'].variables['color'] == 'FFA000'
+    assert printer.objects['gcode_macro T2'].variables['color'] == ''
     sets = printer.objects['gcode_macro T0'].sets
     gcode.run('TOOL_LEDS')
     assert printer.objects['gcode_macro T0'].sets == sets                   # only changes are set
