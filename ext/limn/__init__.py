@@ -5,6 +5,10 @@
 #
 #   [limn]
 #   serial: /dev/serial/by-id/usb-MicroPython_...
+#   tool_holder_i2c_bus: 1                  # optional, the Pi's I2C: holders and tags
+#   tool_holder_address: 0x20
+#   tool_holder_pins: 15:41, 14:42, 13:45, 12:43, 11:44
+#   tool_holder_tag_address: 0x24
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -15,7 +19,10 @@
 # beds.py      what is on each bed, and where
 # rtp.py       tool alignment on the resistive panel (BED_3)
 # fsr.py       tool alignment on the FSR arrays (BED_5)
+# i2c.py       the Pi's I2C bus: MCP23017 and PN532
+# tool_holder.py  which holders have their tool, and the tools' tags
 import json
+import logging
 
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE
@@ -24,10 +31,16 @@ from .geometry import ProbeValue, gen_draw_grid
 from .beds import BEDS
 from .rtp import Rtp
 from .fsr import Fsr
+from .i2c import Bus
+from .tool_holder import ToolHolder, parse_pins
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
 ROUTINE_ERRORS = (RuntimeError, TimeoutError, ConnectionError)
+TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
+HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
+CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
+                 'tool_offset_z': 0, 'tool_name': ''}
 
 
 class Limn:
@@ -54,6 +67,17 @@ class Limn:
         self._draw_grid = gen_draw_grid()
         self._chain_report_until = 0
 
+        self.holder = None
+        self.tag = {'ok': False}
+        self.last_manual = None
+        bus = config.getint('tool_holder_i2c_bus', None)
+        if bus is not None:
+            self._attach_holder(ToolHolder(
+                self.reactor, Bus(bus), parse_pins(config.get('tool_holder_pins', HOLDER_PINS)),
+                int(config.get('tool_holder_address', '0x20'), 0),
+                int(config.get('tool_holder_tag_address', '0x24'), 0),
+                say=self.gcode.respond_info))
+
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
             ('LRT_DISCONNECT', self.cmd_DISCONNECT, "Disconnect from the Dock"),
@@ -65,9 +89,16 @@ class Limn:
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
             ('LRT_DEBUG', self.cmd_DEBUG, "LRT_DEBUG ON=0|1: show sensor data"),
+            ('TOOL_HOLDERS', self.cmd_TOOL_HOLDERS, "Show which tool holders have their tool"),
+            ('TOOL_HOLDER_CHECK', self.cmd_TOOL_HOLDER_CHECK,
+             "TOOL_HOLDER_CHECK T=41 EXPECT=occupied|empty [ARM=1]: stop unless the holder is so"),
+            ('TOOL_TAG_READ', self.cmd_TOOL_TAG_READ, "Read the carried tool's tag [MOVE=0]"),
+            ('TOOL_TAG_WRITE', self.cmd_TOOL_TAG_WRITE,
+             "TOOL_TAG_WRITE [DX= DY= DZ= NAME=] [MOVE=0]: write these to the carried tool's tag"),
         ):
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
+        self.printer.register_event_handler("klippy:ready", self._on_ready)
 
     # Profile, in the [limn] section (SAVE_CONFIG)
     def _load_profile(self, config):
@@ -99,8 +130,14 @@ class Limn:
 
     # Dock lines
     def _on_connect(self):
+        if self.holder:
+            self.holder.start()
         if self.dock.connect():
             self.dock.send('read_bed_id()')
+
+    def _on_ready(self):
+        if self.holder:
+            self.reactor.register_callback(lambda e: self._probe_tag_reader())
 
     def _on_data(self, data):
         sample = Sample(self.reactor.monotonic(), data['hop'], data['kind'], data['state'], data['values'])
@@ -253,12 +290,153 @@ class Limn:
         gcmd.respond_info(f"[LRT] debug {'on' if self.debug else 'off'}; bed={self.bed} "
                           f"calibrated rtp={self.calibrated('rtp')} fsr={self.calibrated('fsr')}")
 
+    # Tool holder
+    def _attach_holder(self, holder):
+        self.holder = holder
+        holder.on('ready', self._on_holders_ready)
+        holder.on('change', self._on_holders_change)
+
+    def _probe_tag_reader(self):
+        try:
+            self.holder.begin_tag_reader()
+        except TAG_ERRORS as e:
+            self.gcode.respond_info(f"[Tag] no PN532: {e}")
+
+    def _vars(self):
+        return self.printer.lookup_object('save_variables').allVariables
+
+    def _save_vars(self, values):
+        save_variables = self.printer.lookup_object('save_variables')
+        for key, value in values.items():
+            gcmd = self.gcode.create_gcode_command(
+                'SAVE_VARIABLE', 'SAVE_VARIABLE', {'VARIABLE': key, 'VALUE': repr(value)})
+            save_variables.cmd_SAVE_VARIABLE(gcmd)
+
+    def _reconcile(self, occupied, startup=False):
+        '''The saved carried tool against the holders.'''
+        carried = int(self._vars().get('currently_docked_tool', 0) or 0)
+        if carried and carried in occupied:
+            self._save_vars(CARRIAGE_VARS)
+            self.gcode.respond_info(f"[Tool holder] {carried} is in its holder, not on the carriage: "
+                                    f"cleared the carried tool")
+        elif startup and not carried and self.holder.tools - occupied:
+            self.gcode.respond_info(f"[Tool holder] holders {sorted(self.holder.tools - occupied)} are "
+                                    f"empty and no tool is saved as carried")
+
+    def _on_holders_ready(self, occupied):
+        logging.info("[Tool holder] occupied: %s", sorted(occupied))
+        self._reconcile(occupied, startup=True)
+
+    def _on_holders_change(self, occupied, added, removed, manual):
+        for tool in sorted(added | removed):
+            how = 'manual' if tool in manual else 'expected'
+            what = 'returned' if tool in added else 'removed'
+            msg = f"[Tool holder] {tool}: tool {what} ({how})"
+            logging.info(msg)
+            self.gcode.respond_info(msg)
+        if manual:
+            self.last_manual = {'at': self.holder.changed_at, 'added': sorted(added & manual),
+                                'removed': sorted(removed & manual)}
+            if not self.holder.busy():
+                self._reconcile(occupied)
+        self.printer.send_event("limn:tool_holder_changed", occupied, added, removed, manual)
+
+    def _require_holder(self, gcmd):
+        if not self.holder:
+            raise gcmd.error("[Tool holder] not configured, see tool_holder_i2c_bus in [limn]")
+
+    def _wait_moves(self):
+        self.printer.lookup_object('toolhead').wait_moves()
+
+    def cmd_TOOL_HOLDERS(self, gcmd):
+        self._require_holder(gcmd)
+        try:
+            occupied = self.holder.sample()
+        except (OSError, RuntimeError) as e:
+            raise gcmd.error(f"[Tool holder] can't read the holders: {e}")
+        gcmd.respond_info(f"[Tool holder] occupied: {sorted(occupied)}, "
+                          f"empty: {sorted(self.holder.tools - occupied)}")
+
+    def cmd_TOOL_HOLDER_CHECK(self, gcmd):
+        tool = gcmd.get_int('T')
+        expect = gcmd.get('EXPECT').lower()
+        if expect not in ('occupied', 'empty'):
+            raise gcmd.error("[Tool holder] EXPECT=occupied|empty")
+        if not self.holder:
+            gcmd.respond_info("[Tool holder] not configured, not checking")
+            return
+        if tool not in self.holder.tools:
+            raise gcmd.error(f"[Tool holder] no holder for tool {tool}")
+        self._wait_moves()
+        try:
+            occupied = tool in self.holder.sample()
+        except (OSError, RuntimeError) as e:
+            self.holder.forget(tool)
+            raise gcmd.error(f"[Tool holder] can't read the holders: {e}")
+        if occupied != (expect == 'occupied'):
+            self.holder.forget(tool)
+            raise gcmd.error(f"[Tool holder] holder {tool} is {'occupied' if occupied else 'empty'}, "
+                             f"expected {expect}")
+        if gcmd.get_int('ARM', 0):
+            self.holder.expect(tool, not occupied)
+
+    def _tag_home(self, gcmd):
+        if gcmd.get_int('MOVE', 1):
+            self.gcode.run_script_from_command("_RFID_HOME")
+        self._wait_moves()
+
+    def _apply_tag(self, tag):
+        self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
+                         'tool_name': tag.name, 'tool_tag_uid': tag.uid})
+        self.tag = {'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
+                    'name': tag.name, 'read_at': self.reactor.monotonic()}
+
+    def cmd_TOOL_TAG_READ(self, gcmd):
+        self._require_holder(gcmd)
+        self._tag_home(gcmd)
+        try:
+            tag = self.holder.read_tag()
+        except TAG_ERRORS as e:
+            self.tag = {'ok': False, 'error': str(e)}
+            gcmd.respond_info(f"[Tag] read failed: {e}")
+            return
+        if tag is None:
+            self.tag = {'ok': False, 'error': 'no tag'}
+            gcmd.respond_info("[Tag] no tag found")
+            return
+        self._apply_tag(tag)
+        gcmd.respond_info(f"[Tag] {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+
+    def cmd_TOOL_TAG_WRITE(self, gcmd):
+        self._require_holder(gcmd)
+        fields = {'dx': gcmd.get_float('DX', None), 'dy': gcmd.get_float('DY', None),
+                  'dz': gcmd.get_float('DZ', None), 'name': gcmd.get('NAME', None)}
+        if all(v is None for v in fields.values()):
+            raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ or NAME")
+        self._tag_home(gcmd)
+        try:
+            tag = self.holder.write_tag(**fields)
+        except TAG_ERRORS as e:
+            self.tag = {'ok': False, 'error': str(e)}
+            raise gcmd.error(f"[Tag] write failed: {e}")
+        self._apply_tag(tag)
+        gcmd.respond_info(f"[Tag] wrote {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+
     def get_status(self, eventtime):
+        holder = self.holder
         return {
             'bed': self.bed,
             'rtp_calibrated': self.calibrated('rtp'),
             'fsr_calibrated': self.calibrated('fsr'),
             'connected': self.dock.connected,
+            'tool_holder': {
+                'enabled': holder is not None,
+                'ok': bool(holder and holder.ok),
+                'occupied': sorted(holder.occupied) if holder and holder.occupied is not None else None,
+                'changed_at': holder.changed_at if holder else 0,
+                'last_manual': self.last_manual,
+            },
+            'tag': self.tag,
         }
 
 

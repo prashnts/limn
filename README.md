@@ -5,9 +5,31 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 - `rfid.py`: Script to read and update tool's NFC tag data.
 - `klipper/`: Klipper configuration for the toolchanger and printer.
 - `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
+- `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME=]`. Klipper's user needs to be in the `i2c` group.
 - `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
 - `slicer/config.ini`: Sample PrusaSlicer config to make it suitable for plotting.
 - `step/`: (todo) 3D Printable Parts
 
 
 There is some more info posted [here](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) about this project.
+
+## Linking the Klipper config
+
+Symlink the repo's `klipper/` folder into Klipper's config folder instead of copying the files over:
+
+```sh
+ln -sfn ~/limn/klipper ~/printer_data/config/limn
+ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
+```
+
+Then in `~/printer_data/config/printer.cfg` include them through the link:
+
+```ini
+[include limn/limn.cfg]
+[include limn/leds.cfg]
+[include limn/buzzer.cfg]
+```
+
+- `printer.cfg` itself stays a real file in `~/printer_data/config/`. `SAVE_CONFIG` rewrites it by renaming a new file over it, so a symlink would be replaced by a plain copy, and the saved `[limn]` calibration would stop reaching the repo. `klipper/printer.cfg` in the repo is a reference copy (the tests read its `SAVE_CONFIG` block); copy it back when you want the repo to have the latest calibration.
+- Klipper resolves `[include]` relative to the file that has it. `limn.cfg` ends with `[include limn-tools.cfg]`, which through the link means `~/limn/klipper/limn-tools.cfg`. Either move that file into the repo's `klipper/`, or move the `[include limn-tools.cfg]` line from `limn.cfg` into `printer.cfg`.
+- Editing the linked files in Fluidd/Mainsail edits the repo's files. After a `git pull`, `RESTART` picks up config changes; changes under `ext/limn` need `sudo systemctl restart klipper`, since Klipper imports its extras only once.
