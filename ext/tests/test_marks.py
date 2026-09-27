@@ -116,6 +116,7 @@ class FakeRoutine:
         return {}
 
     def probe_bed_z(self):
+        assert not self.plotter.svv.get('currently_docked_tool'), 'BLTouch probing with a tool on'
         self.plotter.steps.append('bed_z')
         return [[30.0, 42.0, 9, 0, 0, 4.5]]
 
@@ -369,6 +370,18 @@ def test_paper_full():
     p.run('LRT_MARKS', RESET=1)
     p.run('LRT_PROBE_TOOL')
     assert len(p.pen_downs()) == 2 and p.svv['lrt_marks']['next'] == 1
+
+
+def test_fsr_bltouch_z_puts_the_tool_away():
+    p = plotter(carried=42)
+
+    class Fsr:
+        def bltouch_z(self, cell):
+            assert not p.svv['currently_docked_tool'], 'BLTouch probing with a tool on'
+            return 4.2
+
+    assert p.ext._fsr_bed_z(Fsr(), (1, 1, 3)) == 4.2
+    assert p.gcode.scripts[:2] == ['UNDOCK', 'DOCK T=42'] and p.undocked == [42] and p.docked == [42]
 
 
 if __name__ == '__main__':

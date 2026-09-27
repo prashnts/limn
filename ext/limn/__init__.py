@@ -301,6 +301,7 @@ class Limn:
         by how far the bed moved, but still in step with the other tools in Z.'''
         routine = self._routine(gcmd, bed)
         run = self.gcode.run_script_from_command
+        run("UNDOCK")                   # the BLTouch probes: nothing lower on the carriage
         run("_CLEAR_OFFSETS")
         try:
             bed_z = routine.probe_bed_z()
@@ -443,11 +444,18 @@ class Limn:
         self._draw_test_mark(gcmd, bed)
 
     def _fsr_bed_z(self, fsr, cell):
-        '''BLTouch z of a cell: from the calibration, or probed now.'''
+        '''BLTouch z of a cell: from the calibration, or probed now, the carried
+        tool put away for it and taken back.'''
         for c in self.profile.get('fsr_ref', {}).get('bed_z', []):
             if tuple(c[:3]) == cell:
                 return c[3]
-        return fsr.bltouch_z(cell)
+        carried = self._carried()
+        run = self.gcode.run_script_from_command
+        run("UNDOCK")
+        z = fsr.bltouch_z(cell)
+        if carried:
+            run(f"DOCK T={carried}")
+        return z
 
     def cmd_FSR_Z(self, gcmd):
         bed = self._bed(gcmd, 'fsr')
