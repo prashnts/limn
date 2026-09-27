@@ -26,6 +26,7 @@ The extension sets the tool holder and UI LEDs from what it knows. At startup th
 | | white flash | changed by hand |
 | | red, blinking | the check at this holder failed |
 | | purple, breathing | holders can't be read |
+| Fluidd tool buttons `T0`..`T4` | dot colour / highlight | the holder's state, same colours as the dock strip / the carried tool (`tool_holder_macros` in `[limn]`) |
 | UI digit | blue, breathing | tool being changed |
 | | amber / white | carried tool, tag not read / tag applied |
 | UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |

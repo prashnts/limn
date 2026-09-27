@@ -154,3 +154,17 @@ class ToolLeds:
         holders = {t: out[f'holder_{t}'] for t in self.tools}
         out['ui_alert'] = self._alert(now, phase, holders, ok, carried)
         return out
+
+
+# Fluidd's tool buttons (T0..): the dot is the holder's state, the carried tool is highlighted
+BUTTON_COLORS = {
+    'occupied': 'E0D2B4', 'carried': '2196F3', 'missing': 'FFA000', 'target': '64B5F6',
+    'engage': '64B5F6', 'manual': 'FFFFFF', 'error': 'F44336', 'unknown': '9C27B0',
+}
+
+
+def tool_buttons(states, carried):
+    """{holder_<tool>: state} -> {tool: {'color': hex, 'active': bool}}"""
+    return {int(name.split('_')[1]): {'color': BUTTON_COLORS.get(state, ''),
+                                      'active': int(name.split('_')[1]) == carried}
+            for name, state in states.items() if name.startswith('holder_')}

@@ -9,6 +9,7 @@
 #   tool_holder_address: 0x20
 #   tool_holder_pins: 15:41, 14:42, 13:45, 12:43, 11:44
 #   tool_holder_tag_address: 0x24
+#   tool_holder_macros: 41:T0, 42:T1, 43:T2, 44:T3, 45:T4     # Fluidd's tool buttons
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -34,16 +35,22 @@ from .rtp import Rtp
 from .fsr import Fsr
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
-from .leds import ToolLeds
+from .leds import ToolLeds, tool_buttons
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
 ROUTINE_ERRORS = (RuntimeError, TimeoutError, ConnectionError)
 TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
 HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
+HOLDER_MACROS = '41:T0, 42:T1, 43:T2, 44:T3, 45:T4'
 BOOT_SWEEP = 2.0        # s the ui_tool_sweep boot flourish plays before the states take over
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
+
+
+def parse_macros(text):
+    '''"41:T0, 42:T1" -> {41: 'T0', 42: 'T1'}'''
+    return {int(tool): name.strip() for tool, _, name in (item.strip().partition(':') for item in text.split(','))}
 
 
 class Limn:
@@ -79,6 +86,8 @@ class Limn:
         self._led_pending = False
         self._led_timer = None
         self._leds_from = None      # no LED redraws before (the boot flourish plays)
+        self.tool_macros = {}       # tool -> its T<n> macro, whose variables Fluidd shows
+        self._macro_missing = set()
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -86,6 +95,7 @@ class Limn:
                 int(config.get('tool_holder_address', '0x20'), 0),
                 int(config.get('tool_holder_tag_address', '0x24'), 0),
                 say=self.gcode.respond_info))
+            self.tool_macros = parse_macros(config.get('tool_holder_macros', HOLDER_MACROS))
 
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
@@ -457,10 +467,29 @@ class Limn:
             states = {'ui_tool_sweep': None, **states}        # the boot animation ends
         for name, state in states.items():
             self._set_led(name, state)
+        for tool, button in tool_buttons(states, self._carried()).items():
+            if tool in self.tool_macros:
+                self._set_macro_vars(self.tool_macros[tool], button)
         next_change = self.leds.next_change(now)
         if next_change is not None and self._led_timer is not None:
             self.reactor.update_timer(self._led_timer, next_change + 0.05)
         return states
+
+    def _set_macro_vars(self, name, values):
+        '''Sets the macro's variables that changed; they must be declared (variable_color: '').'''
+        macro = self.printer.lookup_object('gcode_macro ' + name, None)
+        if macro is None:
+            return
+        for key, value in values.items():
+            if macro.variables.get(key) == value:
+                continue
+            try:
+                macro.cmd_SET_GCODE_VARIABLE(self.gcode.create_gcode_command(
+                    'SET_GCODE_VARIABLE', 'SET_GCODE_VARIABLE', {'VARIABLE': key, 'VALUE': repr(value)}))
+            except self.gcode.error:
+                if (name, key) not in self._macro_missing:
+                    self._macro_missing.add((name, key))
+                    logging.info("[Tool holder] [gcode_macro %s] has no variable_%s, not showing it", name, key)
 
     def _set_led(self, name, state):
         effect = self.printer.lookup_object('led_effect ' + name, None)
