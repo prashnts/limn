@@ -27,6 +27,17 @@ class FakeReactor:
     def unregister_timer(self, timer):
         self.timers.pop(timer, None)
 
+    def update_timer(self, timer, waketime):
+        if timer in self.timers:
+            self.timers[timer] = waketime
+
+    def register_callback(self, callback):
+        '''Runs once, at the next pause.'''
+        def once(eventtime):
+            callback(eventtime)
+            return self.NEVER
+        self.timers[once] = self.t
+
     def pause(self, until):
         while self.t < until:
             self.t = min(until, self.t + 0.01)

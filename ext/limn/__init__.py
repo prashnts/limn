@@ -21,6 +21,7 @@
 # fsr.py       tool alignment on the FSR arrays (BED_5)
 # i2c.py       the Pi's I2C bus: MCP23017 and PN532
 # tool_holder.py  which holders have their tool, and the tools' tags
+# leds.py      what the dock and UI LEDs show
 import json
 import logging
 
@@ -33,6 +34,7 @@ from .rtp import Rtp
 from .fsr import Fsr
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
+from .leds import ToolLeds
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
@@ -70,6 +72,12 @@ class Limn:
         self.holder = None
         self.tag = {'ok': False}
         self.last_manual = None
+        self.leds = None
+        self._led_states = {}       # led_effect name -> STATE we set, None: stopped
+        self._led_missing = set()
+        self._led_pending = False
+        self._led_timer = None
+        self._ready = False
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -95,6 +103,9 @@ class Limn:
             ('TOOL_TAG_READ', self.cmd_TOOL_TAG_READ, "Read the carried tool's tag [MOVE=0]"),
             ('TOOL_TAG_WRITE', self.cmd_TOOL_TAG_WRITE,
              "TOOL_TAG_WRITE [DX= DY= DZ= NAME=] [MOVE=0]: write these to the carried tool's tag"),
+            ('TOOL_CHANGE_PHASE', self.cmd_TOOL_CHANGE_PHASE,
+             "TOOL_CHANGE_PHASE PHASE=engage|leave|idle: the tool change's step, for the LEDs"),
+            ('TOOL_LEDS', self.cmd_TOOL_LEDS, "Redraw the tool holder and UI LEDs, show their states"),
         ):
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
@@ -136,7 +147,9 @@ class Limn:
             self.dock.send('read_bed_id()')
 
     def _on_ready(self):
+        self._ready = True
         if self.holder:
+            self._led_timer = self.reactor.register_timer(self._on_led_timer, self.reactor.NEVER)
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
 
     def _on_data(self, data):
@@ -293,8 +306,10 @@ class Limn:
     # Tool holder
     def _attach_holder(self, holder):
         self.holder = holder
+        self.leds = ToolLeds(holder.tools)
         holder.on('ready', self._on_holders_ready)
         holder.on('change', self._on_holders_change)
+        holder.on('status', lambda ok: self._request_leds())
 
     def _probe_tag_reader(self):
         try:
@@ -320,12 +335,14 @@ class Limn:
             self.gcode.respond_info(f"[Tool holder] {carried} is in its holder, not on the carriage: "
                                     f"cleared the carried tool")
         elif startup and not carried and self.holder.tools - occupied:
+            self.leds.manual((), self.reactor.monotonic())
             self.gcode.respond_info(f"[Tool holder] holders {sorted(self.holder.tools - occupied)} are "
                                     f"empty and no tool is saved as carried")
 
     def _on_holders_ready(self, occupied):
         logging.info("[Tool holder] occupied: %s", sorted(occupied))
         self._reconcile(occupied, startup=True)
+        self._request_leds()
 
     def _on_holders_change(self, occupied, added, removed, manual):
         for tool in sorted(added | removed):
@@ -337,8 +354,10 @@ class Limn:
         if manual:
             self.last_manual = {'at': self.holder.changed_at, 'added': sorted(added & manual),
                                 'removed': sorted(removed & manual)}
+            self.leds.manual(manual, self.holder.changed_at)
             if not self.holder.busy():
                 self._reconcile(occupied)
+        self._request_leds()
         self.printer.send_event("limn:tool_holder_changed", occupied, added, removed, manual)
 
     def _require_holder(self, gcmd):
@@ -368,40 +387,115 @@ class Limn:
         if tool not in self.holder.tools:
             raise gcmd.error(f"[Tool holder] no holder for tool {tool}")
         self._wait_moves()
+        arm = gcmd.get_int('ARM', 0)
         try:
             occupied = tool in self.holder.sample()
         except (OSError, RuntimeError) as e:
-            self.holder.forget(tool)
+            self._check_failed(tool)
             raise gcmd.error(f"[Tool holder] can't read the holders: {e}")
         if occupied != (expect == 'occupied'):
-            self.holder.forget(tool)
+            self._check_failed(tool)
             raise gcmd.error(f"[Tool holder] holder {tool} is {'occupied' if occupied else 'empty'}, "
                              f"expected {expect}")
-        if gcmd.get_int('ARM', 0):
+        if arm:
             self.holder.expect(tool, not occupied)
+            self.leds.start(tool)
+        elif tool == self.leds.active and self.leds.phase in ('approach', 'engage', 'leave'):
+            self.leds.done(self.reactor.monotonic())
+        self._request_leds()
+
+    def _check_failed(self, tool):
+        self.holder.forget(tool)
+        self.leds.failed(tool)
+        self._request_leds()
+
+    def cmd_TOOL_CHANGE_PHASE(self, gcmd):
+        phase = gcmd.get('PHASE').lower()
+        if phase not in ('engage', 'leave', 'idle'):
+            raise gcmd.error("[Tool holder] PHASE=engage|leave|idle")
+        if self.leds:
+            self.leds.set_phase(phase)
+            self._request_leds()
+
+    def cmd_TOOL_LEDS(self, gcmd):
+        if not self.leds:
+            raise gcmd.error("[Tool holder] not configured, no LEDs to draw")
+        self._led_states.clear()
+        states = self._render_leds()
+        gcmd.respond_info("[LEDs] " + ", ".join(f"{k}={v}" for k, v in states.items() if v))
+
+    # LEDs: ToolLeds says what, the led_effect sections of leds.cfg how
+    def _carried(self):
+        try:
+            return int(self._vars().get('currently_docked_tool', 0) or 0)
+        except (KeyError, ValueError, TypeError):
+            return 0
+
+    def _request_leds(self):
+        '''Redraw soon: after the command running now, so saved variables are in.'''
+        if self.leds and self._ready and not self._led_pending:
+            self._led_pending = True
+            self.reactor.register_callback(lambda e: self._render_leds())
+
+    def _on_led_timer(self, eventtime):
+        self._request_leds()
+        return self.reactor.NEVER
+
+    def _render_leds(self):
+        self._led_pending = False
+        now = self.reactor.monotonic()
+        states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried())
+        if 'ui_tool_sweep' not in self._led_states:
+            states = {'ui_tool_sweep': None, **states}        # the boot animation ends
+        for name, state in states.items():
+            self._set_led(name, state)
+        next_change = self.leds.next_change(now)
+        if next_change is not None and self._led_timer is not None:
+            self.reactor.update_timer(self._led_timer, next_change + 0.05)
+        return states
+
+    def _set_led(self, name, state):
+        effect = self.printer.lookup_object('led_effect ' + name, None)
+        if effect is None:
+            if name not in self._led_missing:
+                self._led_missing.add(name)
+                logging.info("[LEDs] no [led_effect %s], not showing it", name)
+            return
+        if name in self._led_states and self._led_states[name] == state \
+                and bool(getattr(effect, 'enabled', False)) == (state is not None):
+            return
+        params = {'STOP': '1', 'FADETIME': '0.3'} if state is None else {'STATE': state}
+        effect.cmd_SET_LED_EFFECT(self.gcode.create_gcode_command('SET_LED_EFFECT', 'SET_LED_EFFECT', params))
+        self._led_states[name] = state
 
     def _tag_home(self, gcmd):
         if gcmd.get_int('MOVE', 1):
             self.gcode.run_script_from_command("_RFID_HOME")
         self._wait_moves()
 
+    def _set_tag(self, tag, state):
+        self.tag = tag
+        self.leds.tag(state, self._carried(), self.reactor.monotonic())
+        self._request_leds()
+
     def _apply_tag(self, tag):
         self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
                          'tool_name': tag.name, 'tool_tag_uid': tag.uid})
-        self.tag = {'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
-                    'name': tag.name, 'read_at': self.reactor.monotonic()}
+        self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
+                       'name': tag.name, 'read_at': self.reactor.monotonic()}, 'ok')
 
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
         self._tag_home(gcmd)
+        self._set_tag(self.tag, 'reading')
         try:
             tag = self.holder.read_tag()
         except TAG_ERRORS as e:
-            self.tag = {'ok': False, 'error': str(e)}
+            self._set_tag({'ok': False, 'error': str(e)}, 'error')
             gcmd.respond_info(f"[Tag] read failed: {e}")
             return
         if tag is None:
-            self.tag = {'ok': False, 'error': 'no tag'}
+            self._set_tag({'ok': False, 'error': 'no tag'}, 'error')
             gcmd.respond_info("[Tag] no tag found")
             return
         self._apply_tag(tag)
@@ -414,10 +508,11 @@ class Limn:
         if all(v is None for v in fields.values()):
             raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ or NAME")
         self._tag_home(gcmd)
+        self._set_tag(self.tag, 'reading')
         try:
             tag = self.holder.write_tag(**fields)
         except TAG_ERRORS as e:
-            self.tag = {'ok': False, 'error': str(e)}
+            self._set_tag({'ok': False, 'error': str(e)}, 'error')
             raise gcmd.error(f"[Tag] write failed: {e}")
         self._apply_tag(tag)
         gcmd.respond_info(f"[Tag] wrote {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
@@ -435,6 +530,8 @@ class Limn:
                 'occupied': sorted(holder.occupied) if holder and holder.occupied is not None else None,
                 'changed_at': holder.changed_at if holder else 0,
                 'last_manual': self.last_manual,
+                'phase': self.leds.phase if self.leds else None,
+                'changing': self.leds.active if self.leds else None,
             },
             'tag': self.tag,
         }
