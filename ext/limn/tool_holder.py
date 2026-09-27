@@ -18,6 +18,8 @@ EXPECT_WINDOW = 120     # s an expected change stays expected
 ANY = 'any'             # expect(): any change, until forget()
 
 PAGE_DX, PAGE_NAME = 6, 11      # dx, dy, dz on pages 6, 7, 8; the name on 11..15
+PAGE_FLAGS = 9                  # REFERENCE: the reference tool, anything else: not
+REFERENCE, NOT_REFERENCE = b'LREF', bytes(4)
 NAME_LEN = 20
 
 
@@ -61,6 +63,7 @@ class Tag:
     dy: float
     dz: float
     name: str
+    reference: bool = False
 
 
 class ToolHolder:
@@ -221,13 +224,13 @@ class ToolHolder:
         nums = self.nfc.ntag_read(PAGE_DX)
         name = self.nfc.ntag_read(PAGE_NAME) + self.nfc.ntag_read(PAGE_NAME + 4)[:4]
         return Tag(uid.hex(), decode_num(nums[0:4]), decode_num(nums[4:8]),
-                   decode_num(nums[8:12]), decode_name(name))
+                   decode_num(nums[8:12]), decode_name(name), bytes(nums[12:16]) == REFERENCE)
 
-    def write_tag(self, dx=None, dy=None, dz=None, name=None, timeout=0.5):
+    def write_tag(self, dx=None, dy=None, dz=None, name=None, reference=None, timeout=0.5):
         '''Writes the given fields only, reads the tag back -> Tag.'''
-        return self._tag_io(lambda: self._write_tag(dx, dy, dz, name, timeout))
+        return self._tag_io(lambda: self._write_tag(dx, dy, dz, name, reference, timeout))
 
-    def _write_tag(self, dx, dy, dz, name, timeout):
+    def _write_tag(self, dx, dy, dz, name, reference, timeout):
         if self.nfc.read_uid(timeout) is None:
             raise RuntimeError("no tag on the reader")
         for i, value in enumerate((dx, dy, dz)):
@@ -237,9 +240,12 @@ class ToolHolder:
             data = encode_name(name)
             for i in range(0, NAME_LEN, 4):
                 self.nfc.ntag_write(PAGE_NAME + i // 4, data[i:i + 4])
+        if reference is not None:
+            self.nfc.ntag_write(PAGE_FLAGS, REFERENCE if reference else NOT_REFERENCE)
         tag = self._read_tag(timeout)
         wrote = {'dx': dx, 'dy': dy, 'dz': dz}
         if tag is None or any(v is not None and abs(getattr(tag, k) - v) > 0.006 for k, v in wrote.items()) \
-                or (name is not None and tag.name != decode_name(encode_name(name))):
+                or (name is not None and tag.name != decode_name(encode_name(name))) \
+                or (reference is not None and tag.reference != bool(reference)):
             raise RuntimeError(f"the tag reads back differently: {tag}")
         return tag

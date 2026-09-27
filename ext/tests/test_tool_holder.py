@@ -122,6 +122,16 @@ def test_partial_write():
     tag = holder.write_tag(name='Brush pen')
     assert nfc.writes == [8, 11, 12, 13, 14, 15] and tag.name == 'Brush pen'
 
+def test_reference_flag():
+    _, holder, _, nfc, _, _ = make(pages=tag_pages())
+    assert holder.read_tag().reference is False
+    nfc.pages[9] = b'\xff\x00\x12\x34'                    # whatever an old tag has there
+    assert holder.read_tag().reference is False
+    tag = holder.write_tag(reference=True)
+    assert tag.reference and nfc.writes == [9] and (tag.dx, tag.name) == (1.25, 'Fineliner')
+    assert holder.write_tag(dz=0.9).reference                # other fields leave it
+    assert holder.write_tag(reference=False).reference is False
+
 def test_write_without_tag():
     reactor, holder, *_ = make(pages=None)
     try:

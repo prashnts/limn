@@ -114,27 +114,37 @@ class Rtp:
         run("UNDOCK")
         run("G28")
         run("_CLEAR_OFFSETS")
-
-        coords = self.grid()
-        ref_z_panel = self.probe_mesh(coords)
-        ref_z_paper = gen_bb_grid(**self.cfg['paper_grid'])
-        run("_BUZZ_DOOP")
-        self.machine.say("[LRT] Z mesh collected")
-
+        ref_z_panel = self.probe_bed_z()
         run("T4")
+        return self.calibrate_reference(ref_z_panel)
+
+    def probe_bed_z(self):
+        '''BLTouch z over the reference grid, no tool on the carriage -> ref_z_panel.'''
+        ref_z_panel = self.probe_mesh(self.grid())
+        self.machine.gcode_run("_BUZZ_DOOP")
+        self.machine.say("[LRT] Z mesh collected")
+        return ref_z_panel
+
+    def bed_z_update(self, profile, ref_z_panel):
+        '''The profile with a new bed z only: the reference tool's points stay.'''
+        return {'ref_z_panel': ref_z_panel}
+
+    def calibrate_reference(self, ref_z_panel):
+        '''The reference tool on the carriage, ref_z_panel just probed -> profile.'''
+        run = self.machine.gcode_run
         run("SET_LED_EFFECT EFFECT=ui_alert_blink REPLACE=1")
         touch_params = self.fit_touch()
         self.machine.say(f"[LRT] touch_params={touch_params}")
         run("SET_LED_EFFECT EFFECT=ui_alert_blink STOP=1")
 
-        ref_samples = self.probe_points(coords, touch_params, self.cfg['ref_samples'])
+        ref_samples = self.probe_points(self.grid(), touch_params, self.cfg['ref_samples'])
         tool_z = rtp_reference_z(ref_samples, ref_z_panel)
-        run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f}")
+        run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f} REFERENCE=1")
         return {
             'touch_params': list(touch_params),
             'ref_samples': ref_samples,
             'ref_z_panel': ref_z_panel,
-            'ref_z_paper': ref_z_paper,
+            'ref_z_paper': gen_bb_grid(**self.cfg['paper_grid']),
         }
 
     def probe_tool(self, profile):
