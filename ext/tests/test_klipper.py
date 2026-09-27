@@ -213,8 +213,9 @@ def make_with_leds(**kwargs):
     leds['ui_tool_sweep'].enabled = True                # autostart
     printer.objects.update({'led_effect ' + name: effect for name, effect in leds.items()})
     printer.events['klippy:connect']()
+    wait(printer, 1)                                    # the holders settle while Klipper starts
     printer.events['klippy:ready']()
-    wait(printer, 1)
+    wait(printer, limn.BOOT_SWEEP + 0.5)
     return ext, printer, mcp, gcode, svv, leds
 
 def lit(leds):
@@ -306,8 +307,23 @@ def test_tag_write():
 def test_leds_at_startup():
     ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
     assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
-                         'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged'}
+                         'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged',
+                         'ui_alert': 'ok'}
     assert leds['ui_tool_sweep'].history == [None]
+
+def test_boot_sweep_plays_then_stops():
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder()
+    sweep = FakeLedEffect()
+    sweep.enabled = True
+    printer.objects['led_effect ui_tool_sweep'] = sweep
+    printer.events['klippy:connect']()
+    wait(printer, 1)
+    printer.events['klippy:ready']()
+    mcp.low.discard(15)                                 # a change during the flourish
+    wait(printer, 1)
+    assert sweep.enabled
+    wait(printer, limn.BOOT_SWEEP)
+    assert not sweep.enabled and sweep.history == [None]
 
 def test_leds_follow_a_dock():
     ext, printer, mcp, gcode, svv, leds = make_with_leds()
@@ -333,14 +349,18 @@ def test_leds_on_failed_check_and_manual_change():
     ext, printer, mcp, gcode, svv, leds = make_with_leds()
     raises(lambda: gcode.run('TOOL_HOLDER_CHECK', T=43, EXPECT='empty', ARM=1))
     wait(printer, 0.1)
-    assert leds['holder_43'].state == 'error' and leds['ui_alert'].state == 'error'
+    assert leds['holder_43'].state == 'error' and leds['ui_alert'].state == 'error_new'
+    wait(printer, 3)
+    assert leds['ui_alert'].state == 'error'
     gcode.run('TOOL_CHANGE_PHASE', PHASE='idle')
     mcp.low.discard(11)                                 # 44 lifted by hand
     wait(printer, 1)
     assert leds['holder_43'].state == 'occupied'
-    assert leds['holder_44'].state == 'manual' and leds['ui_alert'].state == 'attention'
+    assert leds['holder_44'].state == 'manual' and leds['ui_alert'].state == 'attention_fast'
     wait(printer, 1.5)
     assert leds['holder_44'].state == 'missing'
+    wait(printer, 4)
+    assert leds['ui_alert'].state == 'warn'
 
 def test_leds_heal_and_missing_effects():
     ext, printer, mcp, gcode, svv, leds = make_with_leds()

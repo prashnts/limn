@@ -15,7 +15,7 @@ There is some more info posted [here](https://hackaday.io/project/205431-limn-pe
 
 ## LEDs
 
-The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
+The extension sets the tool holder and UI LEDs from what it knows. At startup the boot sweep plays for 2 s, then the states take over. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
 
 | Where | State | Means |
 |---|---|---|
@@ -30,7 +30,14 @@ The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds
 | | amber / white | carried tool, tag not read / tag applied |
 | UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
 | UI tag (bottom left) | blue blink / green / red blink | reading / applied / failed |
-| UI alert (top left) | amber blink / red blink | a hand was on the holders / something failed |
+| UI alert (top left), most urgent first | red, fast then slow blink | a check failed or the holders can't be read (fast for the first 3 s) |
+| | blue spinner, faster near the holder | tool change: travelling, at the holder, leaving |
+| | cyan spinner | reading or writing a tag |
+| | green, quick blink | a tool change just went well |
+| | amber blink, slowing down over 5 s | a hand was on the holders |
+| | amber, breathing | a tool is unaccounted for, or the carried tool's tag failed |
+| | green, breathing | carrying a tool with its tag read: ready |
+| | dim green, slow | all tools home |
 
 ## Linking the Klipper config
 
