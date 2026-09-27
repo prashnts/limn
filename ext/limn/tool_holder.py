@@ -113,11 +113,13 @@ class ToolHolder:
             if not self.ok:
                 self.mcp.setup_inputs(sum(1 << pin for pin in self.pins))
                 self.ok = True
+                self._emit('status', True)
             return decode_holders(self.mcp.read(), self.pins)
         except OSError:
             if self.ok:
+                self.ok = False
                 self.say("[Tool holder] lost the MCP23017")
-            self.ok = False
+                self._emit('status', False)
             raise
 
     def sample(self):

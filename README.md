@@ -13,6 +13,25 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 
 There is some more info posted [here](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) about this project.
 
+## LEDs
+
+The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
+
+| Where | State | Means |
+|---|---|---|
+| Dock strip, per holder | warm white | tool in its holder |
+| | blue | its tool is on the carriage |
+| | amber, breathing | holder empty and nobody carries its tool |
+| | blue, breathing / fast blink | this tool is being changed / at the holder |
+| | white flash | changed by hand |
+| | red, blinking | the check at this holder failed |
+| | purple, breathing | holders can't be read |
+| UI digit | blue, breathing | tool being changed |
+| | amber / white | carried tool, tag not read / tag applied |
+| UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
+| UI tag (bottom left) | blue blink / green / red blink | reading / applied / failed |
+| UI alert (top left) | amber blink / red blink | a hand was on the holders / something failed |
+
 ## Linking the Klipper config
 
 Symlink the repo's `klipper/` folder into Klipper's config folder instead of copying the files over:

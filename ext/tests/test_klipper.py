@@ -99,6 +99,30 @@ class FakeSaveVariables:
         self.allVariables[gcmd.get('VARIABLE')] = ast.literal_eval(gcmd.get('VALUE'))
 
 
+class FakeLedEffect:
+    '''led_effect: `history` is every STATE it was set to, None for a stop.'''
+
+    def __init__(self):
+        self.enabled = False
+        self.history = []
+
+    def cmd_SET_LED_EFFECT(self, gcmd):
+        if gcmd.get_int('STOP', 0):
+            self.enabled = False
+            self.history.append(None)
+        else:
+            self.enabled = True
+            self.history.append(gcmd.get('STATE', None))
+
+    @property
+    def state(self):
+        return self.history[-1] if self.enabled and self.history else None
+
+
+LED_NAMES = ['ui_tool_sweep', 'ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert'] \
+    + [f'{kind}_{t}' for kind in ('holder', 'ui_tool') for t in (41, 42, 43, 44, 45)]
+
+
 class FakeToolhead:
     def __init__(self):
         self.waits = 0
@@ -126,7 +150,9 @@ class FakePrinter:
     def get_reactor(self):
         return self.reactor
 
-    def lookup_object(self, name):
+    def lookup_object(self, name, default=KeyError):
+        if name not in self.objects and default is not KeyError:
+            return default
         return self.objects[name]
 
     def register_event_handler(self, event, handler):
@@ -180,6 +206,19 @@ def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
     svv = printer.objects['save_variables'].allVariables
     svv['currently_docked_tool'] = carried
     return ext, printer, mcp, nfc, printer.objects['gcode'], svv
+
+def make_with_leds(**kwargs):
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(**kwargs)
+    leds = {name: FakeLedEffect() for name in LED_NAMES}
+    leds['ui_tool_sweep'].enabled = True                # autostart
+    printer.objects.update({'led_effect ' + name: effect for name, effect in leds.items()})
+    printer.events['klippy:connect']()
+    printer.events['klippy:ready']()
+    wait(printer, 1)
+    return ext, printer, mcp, gcode, svv, leds
+
+def lit(leds):
+    return {name: e.state for name, e in leds.items() if e.state}
 
 def wait(printer, seconds):
     printer.reactor.pause(printer.reactor.t + seconds)
@@ -262,6 +301,54 @@ def test_tag_write():
     assert svv['tool_offset_x'] == 2.5 and svv['tool_offset_z'] == 0.05 and svv['tool_name'] == 'Brush pen'
     nfc.pages = None
     assert 'write failed' in raises(lambda: gcode.run('TOOL_TAG_WRITE', DZ=1))
+
+
+def test_leds_at_startup():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
+    assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
+                         'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged'}
+    assert leds['ui_tool_sweep'].history == [None]
+
+def test_leds_follow_a_dock():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds()
+    gcode.run('TOOL_HOLDER_CHECK', T=42, EXPECT='occupied', ARM=1)
+    wait(printer, 0.1)
+    assert leds['holder_42'].state == 'target' and leds['ui_traffic_red'].state == 'on'
+    gcode.run('TOOL_CHANGE_PHASE', PHASE='engage')
+    wait(printer, 0.1)
+    assert leds['holder_42'].state == 'engage' and leds['ui_traffic_yellow'].state == 'on'
+    assert leds['ui_traffic_red'].state is None
+    mcp.low.discard(14)
+    gcode.run('TOOL_CHANGE_PHASE', PHASE='leave')
+    gcode.run('TOOL_HOLDER_CHECK', T=42, EXPECT='empty')
+    svv['currently_docked_tool'] = 42                   # the macro's SAVE_VARIABLE, before the redraw
+    wait(printer, 0.5)
+    assert leds['holder_42'].state == 'carried' and leds['ui_traffic_green'].state == 'on'
+    assert leds['ui_tool_42'].state == 'untagged'
+    assert leds['holder_42'].history.count('carried') == 1          # no redraw without a change
+    wait(printer, 4)
+    assert leds['ui_traffic_green'].state is None
+
+def test_leds_on_failed_check_and_manual_change():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds()
+    raises(lambda: gcode.run('TOOL_HOLDER_CHECK', T=43, EXPECT='empty', ARM=1))
+    wait(printer, 0.1)
+    assert leds['holder_43'].state == 'error' and leds['ui_alert'].state == 'error'
+    gcode.run('TOOL_CHANGE_PHASE', PHASE='idle')
+    mcp.low.discard(11)                                 # 44 lifted by hand
+    wait(printer, 1)
+    assert leds['holder_43'].state == 'occupied'
+    assert leds['holder_44'].state == 'manual' and leds['ui_alert'].state == 'attention'
+    wait(printer, 1.5)
+    assert leds['holder_44'].state == 'missing'
+
+def test_leds_heal_and_missing_effects():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds()
+    leds['holder_41'].enabled = False                   # STOP_LED_EFFECTS from elsewhere
+    del printer.objects['led_effect ui_alert']
+    gcode.run('TOOL_LEDS')
+    assert leds['holder_41'].state == 'occupied'
+    assert 'holder_41=occupied' in gcode.said[-1]
 
 
 if __name__ == '__main__':
