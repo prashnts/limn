@@ -41,6 +41,7 @@ RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
 ROUTINE_ERRORS = (RuntimeError, TimeoutError, ConnectionError)
 TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
 HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
+BOOT_SWEEP = 2.0        # s the ui_tool_sweep boot flourish plays before the states take over
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -77,7 +78,7 @@ class Limn:
         self._led_missing = set()
         self._led_pending = False
         self._led_timer = None
-        self._ready = False
+        self._leds_from = None      # no LED redraws before (the boot flourish plays)
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -147,9 +148,10 @@ class Limn:
             self.dock.send('read_bed_id()')
 
     def _on_ready(self):
-        self._ready = True
         if self.holder:
-            self._led_timer = self.reactor.register_timer(self._on_led_timer, self.reactor.NEVER)
+            # The holders may have settled already, during startup: draw once the flourish is over
+            self._leds_from = self.reactor.monotonic() + BOOT_SWEEP
+            self._led_timer = self.reactor.register_timer(self._on_led_timer, self._leds_from)
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
 
     def _on_data(self, data):
@@ -309,7 +311,7 @@ class Limn:
         self.leds = ToolLeds(holder.tools)
         holder.on('ready', self._on_holders_ready)
         holder.on('change', self._on_holders_change)
-        holder.on('status', lambda ok: self._request_leds())
+        holder.on('status', self._on_holders_status)
 
     def _probe_tag_reader(self):
         try:
@@ -338,6 +340,11 @@ class Limn:
             self.leds.manual((), self.reactor.monotonic())
             self.gcode.respond_info(f"[Tool holder] holders {sorted(self.holder.tools - occupied)} are "
                                     f"empty and no tool is saved as carried")
+
+    def _on_holders_status(self, ok):
+        if not ok:
+            self.leds.lost(self.reactor.monotonic())
+        self._request_leds()
 
     def _on_holders_ready(self, occupied):
         logging.info("[Tool holder] occupied: %s", sorted(occupied))
@@ -406,7 +413,7 @@ class Limn:
 
     def _check_failed(self, tool):
         self.holder.forget(tool)
-        self.leds.failed(tool)
+        self.leds.failed(tool, self.reactor.monotonic())
         self._request_leds()
 
     def cmd_TOOL_CHANGE_PHASE(self, gcmd):
@@ -433,7 +440,8 @@ class Limn:
 
     def _request_leds(self):
         '''Redraw soon: after the command running now, so saved variables are in.'''
-        if self.leds and self._ready and not self._led_pending:
+        if self.leds and self._leds_from is not None and not self._led_pending \
+                and self.reactor.monotonic() >= self._leds_from:
             self._led_pending = True
             self.reactor.register_callback(lambda e: self._render_leds())
 

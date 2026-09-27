@@ -12,12 +12,23 @@
 #   ui_traffic_*    the tool change's phase: red approach, yellow engage,
 #                   green (blinking) leave, green done; red blinking: failed
 #   ui_tag          reading, ok, error
-#   ui_alert        attention (a hand on the holders), error
+#   ui_alert        the machine's mood, most urgent first; its colour turns
+#                   its meaning around, its speed says how fresh or urgent:
+#                   error_new, error              red: a check failed, holders unreadable
+#                   busy_approach/engage/leave    blue spinner: a tool change, faster near the holder
+#                   reading                       cyan spinner: a tag read or write
+#                   success                       green blink: a tool change just went well
+#                   attention_fast/_/_slow        amber, slowing down: a hand was on the holders
+#                   warn                          amber breathing: a tool is unaccounted for, a bad tag
+#                   ready                         green breathing: carrying a tool with its tag read
+#                   ok                            dim green, slow: all tools home
 CHANGE_PHASES = ('approach', 'engage', 'leave')
 DONE_SHOW = 3.0         # s the green light stays after a tool change
 FLASH_SHOW = 1.5        # s a holder flashes after a hand changed it
 TAG_OK_SHOW = 3.0
-ALERT_SHOW = 5.0
+ALERT_SHOW = 5.0        # s the alert calms down over after a hand change
+ATTENTION_STEPS = ((1.5, 'attention_fast'), (3.5, 'attention'), (ALERT_SHOW, 'attention_slow'))
+ERROR_NEW = 3.0         # s a new error flashes fast
 
 
 class ToolLeds:
@@ -28,7 +39,8 @@ class ToolLeds:
         self.active = None          # the tool being changed
         self.phase_until = 0.0
         self.flash = {}             # tool -> until
-        self.alert_until = 0.0
+        self.alert_at = None        # a hand was on the holders
+        self.error_at = None        # a check failed, or the holders stopped answering
         self.tag_state = None       # 'reading', 'ok', 'error'
         self.tag_tool = None        # the tool carried when the tag was read
         self.tag_until = 0.0
@@ -45,13 +57,17 @@ class ToolLeds:
     def done(self, now):
         self.phase, self.phase_until = 'done', now + DONE_SHOW
 
-    def failed(self, tool):
+    def failed(self, tool, now):
         self.phase, self.active = 'failed', tool
+        self.error_at = now
+
+    def lost(self, now):
+        self.error_at = now
 
     def manual(self, tools, now):
         for tool in tools:
             self.flash[tool] = now + FLASH_SHOW
-        self.alert_until = now + ALERT_SHOW
+        self.alert_at = now
 
     def tag(self, state, tool, now):
         self.tag_state, self.tag_tool = state, tool
@@ -65,8 +81,33 @@ class ToolLeds:
 
     def next_change(self, now):
         '''When `desired` changes by itself next, None if it doesn't.'''
-        times = [t for t in (self.phase_until, self.alert_until, self.tag_until, *self.flash.values()) if t > now]
+        times = [self.phase_until, self.tag_until, *self.flash.values()]
+        if self.alert_at is not None:
+            times += [self.alert_at + after for after, _ in ATTENTION_STEPS]
+        if self.error_at is not None:
+            times.append(self.error_at + ERROR_NEW)
+        times = [t for t in times if t > now]
         return min(times) if times else None
+
+    def _alert(self, now, phase, holders, ok, carried):
+        if phase == 'failed' or not ok:
+            fresh = self.error_at is not None and now - self.error_at < ERROR_NEW
+            return 'error_new' if fresh else 'error'
+        if phase in CHANGE_PHASES:
+            return 'busy_' + phase
+        if self.tag_state == 'reading':
+            return 'reading'
+        if phase == 'done':
+            return 'success'
+        if self.alert_at is not None:
+            for after, state in ATTENTION_STEPS:
+                if now < self.alert_at + after:
+                    return state
+        if 'missing' in holders.values() or (self.tag_state == 'error' and self.tag_tool == carried and carried):
+            return 'warn'
+        if carried and self.tag_state in ('ok', 'reading') and self.tag_tool == carried:
+            return 'ready'
+        return 'ok'
 
     def _holder(self, tool, now, phase, occupied, ok, carried):
         if not ok or occupied is None:
@@ -110,10 +151,6 @@ class ToolLeds:
             tag = 'error'
         out['ui_tag'] = tag
 
-        if phase == 'failed' or not ok:
-            out['ui_alert'] = 'error'
-        elif self.alert_until > now:
-            out['ui_alert'] = 'attention'
-        else:
-            out['ui_alert'] = None
+        holders = {t: out[f'holder_{t}'] for t in self.tools}
+        out['ui_alert'] = self._alert(now, phase, holders, ok, carried)
         return out
