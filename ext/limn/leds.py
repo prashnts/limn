@@ -6,8 +6,9 @@
 # Only the state lives here: `desired` turns it into {led_effect name: STATE or
 # None}. How a STATE looks is klipper/leds.cfg's business (_led_styles).
 #
-#   holder_<tool>   the dock strip, one segment per holder:
-#                   occupied, carried, missing, target, engage, manual, error, unknown
+#   holder_<tool>   the dock strip, one segment per holder, status only:
+#                   occupied, carried / missing (empty: its tool is on the
+#                   carriage / nobody's), error (a check failed there), unknown
 #   ui_tool_<tool>  the tool's digit on the UI strip: target, untagged, carried
 #   ui_traffic_*    the tool change's phase: red approach, yellow engage,
 #                   green (blinking) leave, green done; red blinking: failed
@@ -24,7 +25,6 @@
 #                   ok                            dim green, slow: all tools home
 CHANGE_PHASES = ('approach', 'engage', 'leave')
 DONE_SHOW = 3.0         # s the green light stays after a tool change
-FLASH_SHOW = 1.5        # s a holder flashes after a hand changed it
 TAG_OK_SHOW = 3.0
 ALERT_SHOW = 5.0        # s the alert calms down over after a hand change
 ATTENTION_STEPS = ((1.5, 'attention_fast'), (3.5, 'attention'), (ALERT_SHOW, 'attention_slow'))
@@ -38,7 +38,6 @@ class ToolLeds:
         self.phase = None           # CHANGE_PHASES, 'done', 'failed' or None
         self.active = None          # the tool being changed
         self.phase_until = 0.0
-        self.flash = {}             # tool -> until
         self.alert_at = None        # a hand was on the holders
         self.error_at = None        # a check failed, or the holders stopped answering
         self.tag_state = None       # 'reading', 'ok', 'error'
@@ -65,8 +64,6 @@ class ToolLeds:
         self.error_at = now
 
     def manual(self, tools, now):
-        for tool in tools:
-            self.flash[tool] = now + FLASH_SHOW
         self.alert_at = now
 
     def tag(self, state, tool, now):
@@ -81,7 +78,7 @@ class ToolLeds:
 
     def next_change(self, now):
         '''When `desired` changes by itself next, None if it doesn't.'''
-        times = [self.phase_until, self.tag_until, *self.flash.values()]
+        times = [self.phase_until, self.tag_until]
         if self.alert_at is not None:
             times += [self.alert_at + after for after, _ in ATTENTION_STEPS]
         if self.error_at is not None:
@@ -112,13 +109,8 @@ class ToolLeds:
     def _holder(self, tool, now, phase, occupied, ok, carried):
         if not ok or occupied is None:
             return 'unknown'
-        if tool == self.active:
-            if phase == 'failed':
-                return 'error'
-            if phase in CHANGE_PHASES:
-                return 'engage' if phase == 'engage' else 'target'
-        if self.flash.get(tool, 0) > now:
-            return 'manual'
+        if tool == self.active and phase == 'failed':
+            return 'error'
         if tool in occupied:
             return 'occupied'
         return 'carried' if tool == carried else 'missing'
@@ -157,10 +149,8 @@ class ToolLeds:
 
 
 # Fluidd's tool buttons (T0..): the dot is the holder's state, the carried tool is highlighted
-BUTTON_COLORS = {
-    'occupied': 'E0D2B4', 'carried': '2196F3', 'missing': 'FFA000', 'target': '64B5F6',
-    'engage': '64B5F6', 'manual': 'FFFFFF', 'error': 'F44336', 'unknown': '9C27B0',
-}
+# (no dot: empty; the carried tool's button is highlighted instead)
+BUTTON_COLORS = {'occupied': '4CAF50', 'error': 'F44336', 'unknown': '9C27B0'}
 
 
 def tool_buttons(states, carried):

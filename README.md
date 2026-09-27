@@ -15,18 +15,14 @@ There is some more info posted [here](https://hackaday.io/project/205431-limn-pe
 
 ## LEDs
 
-The extension sets the tool holder and UI LEDs from what it knows. At startup the boot sweep plays for 2 s, then the states take over. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
+The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
 
 | Where | State | Means |
 |---|---|---|
-| Dock strip, per holder | warm white | tool in its holder |
-| | blue | its tool is on the carriage |
-| | amber, breathing | holder empty and nobody carries its tool |
-| | blue, breathing / fast blink | this tool is being changed / at the holder |
-| | white flash | changed by hand |
-| | red, blinking | the check at this holder failed |
-| | purple, breathing | holders can't be read |
-| Fluidd tool buttons `T0`..`T4` | dot colour / highlight | the holder's state, same colours as the dock strip / the carried tool (`tool_holder_macros` in `[limn]`) |
+| Dock strip, per holder | green | tool in its holder |
+| | off | holder empty (its tool on the carriage, or missing), or holders unreadable |
+| | red | the check at this holder failed |
+| Fluidd tool buttons `T0`..`T4` | dot colour / highlight | green home, no dot empty, red failed / the carried tool (`tool_holder_macros` in `[limn]`) |
 | UI digit | blue, breathing | tool being changed |
 | | amber / white | carried tool, tag not read / tag applied |
 | UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
