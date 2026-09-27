@@ -88,7 +88,8 @@ def test_calibrate_keeps_the_sequence():
     profile = rtp.calibrate()
     macros = [s.split()[0] for s in plotter.ran]
     assert macros[:3] == ['UNDOCK', 'G28', '_CLEAR_OFFSETS']
-    assert macros.index('BED_MESH_CALIBRATE') < macros.index('T4') < macros.index('WRITE_TOOL_TAG')
+    assert 'BED_MESH_CALIBRATE' not in macros         # LRT_CALIBRATE meshes the bed before
+    assert macros.index('T4') < macros.index('WRITE_TOOL_TAG')
     assert plotter.ran[-1].startswith('WRITE_TOOL_TAG DX=0 DY=0 DZ=')
     assert len(profile['ref_samples']) == len(profile['ref_z_panel']) == 12
     # The reference tool is seen where it was sent.

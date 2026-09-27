@@ -93,6 +93,7 @@ One line per frame, so several nodes of the same kind stay apart (read by `ext/l
 ```
 
 Host commands only the Dock handles: `power_on()`, `power_off()`, `read_bed_id()`, `stats()`, `frame(<hop>,<type>,<base64>)` (raw frame, hop 0 = the Dock). Every other command is also sent down the chain:
+- `read_bed_id()` answers `["BED_3", [spec], {"boot": "9f2c01aa", "placed": 3, "powered": true}]`. `placed` counts the beds placed and removed since the Dock booted, `boot` is new on every boot. Klipper keeps its meshes and test marks per `(boot, placed)`: once either changes, the bed may have moved.
 - `calibrate()`, `debug_on()`, `debug_off()`, `reset()`
 - `ping()`: every node answers with hello
 - `arm(<role>)`, `disarm()`

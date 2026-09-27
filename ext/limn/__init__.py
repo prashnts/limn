@@ -19,19 +19,24 @@
 # machine.py   what the routines need from Klipper
 # geometry.py  calibration math
 # beds.py      what is on each bed, and where
+# placement.py what stays true about the bed on the plotter: its meshes, the next test mark
+# marks.py     the test marks on the paper
 # rtp.py       tool alignment on the resistive panel (BED_3)
 # fsr.py       tool alignment on the FSR arrays (BED_5)
 # i2c.py       the Pi's I2C bus: MCP23017 and PN532
 # tool_holder.py  which holders have their tool, and the tools' tags
 # leds.py      what the dock and UI LEDs show
+import os
 import json
 import logging
 
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE
 from .machine import Machine
-from .geometry import ProbeValue, gen_draw_grid
-from .beds import BEDS
+from .geometry import ProbeValue, gen_mark_grid, mark_strokes
+from .beds import BEDS, NO_BED_MESHES
+from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
+from . import marks
 from .rtp import Rtp
 from .fsr import Fsr
 from .i2c import Bus
@@ -66,6 +71,8 @@ class Limn:
         self.samples = Samples()
         self.dock.on('data', self._on_data)
         self.dock.on('read_bed_id', self._on_bed_id)
+        for kind in ('bed_detected', 'bed_removed'):
+            self.dock.on(kind, lambda data, kind=kind: self._on_bed_moved(kind, data))
         for kind in ('hello', 'stats'):
             self.dock.on(kind, lambda data, kind=kind: self._on_chain_report(kind, data))
         for kind in ('log', 'error'):
@@ -73,8 +80,10 @@ class Limn:
 
         self.debug = False
         self.bed = None
+        self.placement = None       # placement_key() of the bed on the plotter, None: not known
+        self._session = os.urandom(4).hex()
+        self._bed_lines = 0         # bed_detected / bed_removed lines seen
         self.profile = self._load_profile(config)
-        self._draw_grid = gen_draw_grid()
         self._chain_report_until = 0
 
         self.holder = None
@@ -103,7 +112,9 @@ class Limn:
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
             ('LRT_DISCONNECT', self.cmd_DISCONNECT, "Disconnect from the Dock"),
             ('LRT_READ_BED_ID', self.cmd_READ_BED_ID, "Read which bed is on the plotter"),
-            ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE, "Bed meshes of the bed on the plotter"),
+            ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE,
+             "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
+            ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE, "Calibrate the bed with the reference tool (T4)"),
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL, "Measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
@@ -175,6 +186,14 @@ class Limn:
 
     def _on_bed_id(self, data):
         self.bed = data[0]
+        live = f"live:{self._session}:{self.dock.connects}:{self._bed_lines}"
+        self.placement = placement_key(data, live)
+
+    def _on_bed_moved(self, kind, data):
+        self._bed_lines += 1
+        self.bed, self.placement = None, None
+        if kind == 'bed_removed':
+            self.gcode.respond_info("[LRT] The bed was removed: meshes and test marks start over")
 
     def _on_chain_report(self, kind, data):
         if self.reactor.monotonic() < self._chain_report_until:
@@ -191,7 +210,7 @@ class Limn:
             data = self.dock.request('read_bed_id()', 'read_bed_id', timeout=3)
         except (TimeoutError, ConnectionError) as e:
             raise gcmd.error(f"[LRT] could not read the bed id: {e}")
-        self.bed = data[0]
+        self._on_bed_id(data)
         gcmd.respond_info(f"[LRT] Bed: {self.bed}")
         return self.bed
 
@@ -209,19 +228,107 @@ class Limn:
         cls = Rtp if sensor == 'rtp' else Fsr
         return cls(machine, self.dock, self.samples, bed[sensor])
 
-    def _draw_test_mark(self):
-        if len(self._draw_grid) < 2:
-            self._draw_grid = gen_draw_grid()
-        start = self._draw_grid.pop(0)
-        end = self._draw_grid[0]
-        run = self.gcode.run_script_from_command
-        run("_APPLY_OFFSETS MESH=lrt_paper")
-        run("G1 F2000")
-        run(f"G1 X{start[0]} Y{start[1]}")
-        run("G1 Z1 ACT1")
-        run(f"G1 X{end[0]} Y{end[1]}")
-        run("G1 Z1 ACT2")
-        run("_CLEAR_OFFSETS")
+    # Meshes: of this placement of the bed (placement.py)
+    def _bed_meshes(self, gcmd):
+        '''The meshes of the bed on the plotter, the whole bed without one.'''
+        if self.bed == 'NONE':
+            return NO_BED_MESHES
+        if self.bed not in BEDS:
+            raise gcmd.error(f"[LRT][Mesh] no meshes known for bed {self.bed}: not probing a bed "
+                             f"we don't know the shape of")
+        return BEDS[self.bed]['meshes']
+
+    def _mesh_profiles(self):
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        if bed_mesh is None:
+            return {}
+        return bed_mesh.get_status(self.reactor.monotonic()).get('profiles', {})
+
+    def _stale_meshes(self, names):
+        return stale_meshes(self._vars().get('lrt_meshes'), self.placement, self._mesh_profiles(), names)
+
+    def _tools_unaccounted(self, gcmd):
+        '''Tools out of their holders but not saved as carried: one may be on the carriage.'''
+        if not self.holder:
+            return set()
+        try:
+            occupied = self.holder.sample()
+        except (OSError, RuntimeError) as e:
+            raise gcmd.error(f"[LRT][Mesh] can't read the tool holders ({e}): not probing the bed "
+                             f"while a pen may be on the carriage")
+        return self.holder.tools - occupied - {self._carried()}
+
+    def _run_meshes(self, gcmd, meshes):
+        '''Takes the meshes. BED_MESH_CALIBRATE (limn.cfg) puts the carried tool away
+        first: probing with a pen on the carriage would run it into the bed.'''
+        key = self.placement
+        if key is None:
+            raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
+        missing = self._tools_unaccounted(gcmd)
+        if missing:
+            raise gcmd.error(f"[LRT][Mesh] tools {sorted(missing)} are out of their holders and not saved "
+                             f"as carried: one could be on the carriage, and the pen would hit the bed. "
+                             f"Put them back (or DOCK the one on the carriage) first")
+        for mesh in meshes:
+            gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
+            if 'origin' in mesh:
+                x0, y0 = mesh['origin']
+                w, h = mesh['size']
+                self.gcode.run_script_from_command(
+                    f"BED_MESH_CALIBRATE PROFILE={mesh['profile']} mesh_min={x0},{y0} "
+                    f"mesh_max={x0 + w},{y0 + h} probe_count={mesh['probe_count']}")
+            else:
+                self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={mesh['profile']}")
+        self._read_bed_id(gcmd)
+        if self.placement != key:
+            raise gcmd.error("[LRT][Mesh] the bed moved while it was meshed, LRT_MESH_CALIBRATE again")
+        profiles = self._mesh_profiles()
+        self._save_vars({'lrt_meshes': {'placement': key, 'profiles': {
+            m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}}})
+        gcmd.respond_info("[LRT][Mesh] Done, SAVE_CONFIG to keep the meshes over a restart")
+
+    def _ensure_meshes(self, gcmd):
+        '''Meshes the bed again when its meshes aren't of the bed as it sits, then
+        takes the carried tool back. The tools' tags stay as they are.'''
+        meshes = self._bed_meshes(gcmd)
+        stale = self._stale_meshes([m['profile'] for m in meshes])
+        if not stale:
+            return
+        gcmd.respond_info(f"[LRT][Mesh] Meshing the bed again first: {'; '.join(stale)}")
+        carried = self._carried()
+        self._run_meshes(gcmd, meshes)
+        if carried:
+            self.gcode.run_script_from_command(f"DOCK T={carried}")
+
+    # Test marks (marks.py), where the last one ended, per placement of the bed
+    def _draw_test_mark(self, gcmd, bed):
+        if 'marks' not in bed:
+            return
+        points = gen_mark_grid(**bed['marks'])
+        record = self._vars().get('lrt_marks')
+        why = []
+        try:
+            self._read_bed_id(gcmd)
+        except self.gcode.error as e:
+            why.append(str(e))
+        i = next_mark(record, self.placement)
+        if i + 1 >= len(points):
+            why.append(f"the paper is full ({len(points) - 1} marks), LRT_MARKS RESET=1 once there is a new sheet")
+        if not self._carried():
+            why.append("no tool on the carriage")
+        why += self._stale_meshes(['lrt_paper'])
+        paper = self._mesh_profiles().get('lrt_paper')
+        if not why:
+            strokes = mark_strokes(points[i], points[i + 1], bed['marks']['arm'])
+            svv = self._vars()
+            offsets = tuple(float(svv.get(k, 0) or 0) for k in ('tool_offset_x', 'tool_offset_y', 'tool_offset_z'))
+            why += marks.problems(strokes, offsets, mesh_bounds(paper))
+        if why:
+            gcmd.respond_info(f"[LRT][Mark] Not drawing the test mark: {'; '.join(why)}")
+            return
+        marks.draw(Machine(self.printer, gcmd), strokes)
+        self._save_vars({'lrt_marks': {'placement': self.placement, 'next': i + 1}})
+        gcmd.respond_info(f"[LRT][Mark] Mark {i + 1} of {len(points) - 1} drawn at {points[i]} -> {points[i + 1]}")
 
     # Commands
     def cmd_CONNECT(self, gcmd):
@@ -234,23 +341,40 @@ class Limn:
         self._read_bed_id(gcmd)
 
     def cmd_MESH_CALIBRATE(self, gcmd):
-        bed = self._bed(gcmd)
-        for mesh in bed['meshes']:
-            x0, y0 = mesh['origin']
-            w, h = mesh['size']
-            gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
-            self.gcode.run_script_from_command(
-                f"BED_MESH_CALIBRATE PROFILE={mesh['profile']} mesh_min={x0},{y0} "
-                f"mesh_max={x0 + w},{y0 + h} probe_count={mesh['probe_count']}")
+        self._read_bed_id(gcmd)
+        meshes = self._bed_meshes(gcmd)
+        if self.bed == 'NONE':
+            gcmd.respond_info("[LRT][Mesh] No bed on the plotter: meshing the whole bed")
+        if gcmd.get_int('IF_STALE', 0):
+            stale = self._stale_meshes([m['profile'] for m in meshes])
+            if not stale:
+                gcmd.respond_info("[LRT][Mesh] The meshes are of the bed as it sits, not meshing")
+                return
+            gcmd.respond_info(f"[LRT][Mesh] Meshing: {'; '.join(stale)}")
+        self._run_meshes(gcmd, meshes)
+
+    def cmd_MARKS(self, gcmd):
+        if gcmd.get_int('RESET', 0):
+            self._save_vars({'lrt_marks': {'placement': None, 'next': 0}})
+            gcmd.respond_info("[LRT][Mark] The next test mark is the first on the paper")
+            return
+        self._read_bed_id(gcmd)
+        if self.bed not in BEDS or 'marks' not in BEDS[self.bed]:
+            gcmd.respond_info(f"[LRT][Mark] No test marks on bed {self.bed}")
+            return
+        n = len(gen_mark_grid(**BEDS[self.bed]['marks'])) - 1
+        i = next_mark(self._vars().get('lrt_marks'), self.placement)
+        gcmd.respond_info(f"[LRT][Mark] Next test mark: {i + 1} of {n} on {self.bed}")
 
     def cmd_CALIBRATE(self, gcmd):
         bed = self._bed(gcmd)
+        self._run_meshes(gcmd, bed['meshes'])
         try:
             profile = self._routine(gcmd, bed).calibrate()
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         self._save_profile(profile)
-        self._draw_test_mark()
+        self._draw_test_mark(gcmd, bed)
         self.gcode.run_script_from_command("_BUZZ_DOOP")
         gcmd.respond_info("[LRT] Calibrated, SAVE_CONFIG to keep it")
 
@@ -259,12 +383,14 @@ class Limn:
         if not self.calibrated(bed['sensor']):
             gcmd.respond_info("[LRT] Not calibrated yet, calibrating first.")
             self.cmd_CALIBRATE(gcmd)
+        else:
+            self._ensure_meshes(gcmd)
         try:
             dx, dy, dz = self._routine(gcmd, bed).probe_tool(self.profile)
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={dx} DY={dy} DZ={dz}")
-        self._draw_test_mark()
+        self._draw_test_mark(gcmd, bed)
 
     def _fsr_bed_z(self, fsr, cell):
         '''BLTouch z of a cell: from the calibration, or probed now.'''
@@ -593,6 +719,7 @@ class Limn:
         holder = self.holder
         return {
             'bed': self.bed,
+            'placement': self.placement,
             'rtp_calibrated': self.calibrated('rtp'),
             'fsr_calibrated': self.calibrated('fsr'),
             'connected': self.dock.connected,

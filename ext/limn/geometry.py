@@ -22,13 +22,17 @@ def gen_bb_grid(*, nx=5, ny=5, xrange=(45, 106), yrange=(40, 70), z_park=9):
             for x in np.arange(xmin, xmax + 1, stepx)
             for y in np.arange(ymin, ymax + 1, stepy)]
 
-def gen_draw_grid(xrange=(20, 100), yrange=(120, 150), n=5):
-    '''Zig-zag of test mark positions on the paper.'''
-    xp = np.linspace(*xrange, n)
-    yp = np.linspace(*yrange, n)
-    X, Y = np.meshgrid(xp, yp, indexing='xy')
-    X[1::2, :] = X[1::2, ::-1]
-    return np.concat(np.stack((X, Y), axis=2)).tolist()
+def gen_mark_grid(*, nx, ny, xrange, yrange, **_):
+    '''Centres of the test marks' + on the paper, row by row.'''
+    return [(round(float(x), 2), round(float(y), 2))
+            for y in np.linspace(*yrange, ny) for x in np.linspace(*xrange, nx)]
+
+def mark_strokes(at, to, arm):
+    '''One test mark, two strokes through their corner: └ at `at`, which with the
+    previous tool's ┐ there makes a +, and ┐ at `to`, for the next tool.'''
+    (x0, y0), (x1, y1) = at, to
+    return [[(x0 + arm, y0), (x0, y0), (x0, y0 + arm)],
+            [(x1 - arm, y1), (x1, y1), (x1, y1 - arm)]]
 
 
 # RTP

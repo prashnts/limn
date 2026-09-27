@@ -10,6 +10,15 @@
 PANEL_ZHOME = 9     # travel height over the beds
 PAPER_ZHOME = 6     # travel height over the paper
 
+# No bed on the plotter: the whole bed, as [bed_mesh] in printer.cfg has it.
+NO_BED_MESHES = [{'profile': 'default'}]
+
+# Test marks (marks.py) stay inside the lrt_paper mesh, short of the tool holders
+# and the tag reader, and are only drawn with offsets like these on the tag.
+MARKS_MAX_X = 110
+TOOL_MAX_DXY = 5            # mm, |dx| and |dy|
+TOOL_DZ = (-0.5, 3.0)       # over the BLTouch z, the reference tool is ~1.0
+
 BEDS = {
     # Resistive touch panel.
     'BED_3': {
@@ -18,12 +27,13 @@ BEDS = {
             {'origin': (5, 100), 'size': (110, 75), 'profile': 'lrt_paper', 'probe_count': '3,3'},
             {'origin': (25, 35), 'size': (60, 50), 'profile': 'lrt_panel', 'probe_count': '3,3'},
         ],
+        # Centres of the + of the test marks, row by row; `arm`: length of each line.
+        'marks': {'nx': 6, 'ny': 3, 'xrange': (20, 100), 'yrange': (120, 150), 'arm': 4},
         'rtp': {
             'z_park': PANEL_ZHOME,
             # Reference grid, probed with the BLTouch and with the reference tool.
             'grid': {'nx': 4, 'ny': 3, 'xrange': (30, 90), 'yrange': (42, 65)},
             'paper_grid': {'nx': 4, 'ny': 4, 'xrange': (30, 90), 'yrange': (110, 160), 'z_park': PAPER_ZHOME},
-            'paper_mesh': 'BED_MESH_CALIBRATE PROFILE=lrt_paper mesh_min=5,110 mesh_max=115,174',
             # Three points for the raw -> plotter transform (Atmel AVR341).
             'touch_points': [(100, 52), (65, 40), (25, 70)],
             'touch_samples': 4,     # probes per touch point
@@ -41,6 +51,7 @@ BEDS = {
             {'origin': (108, 36), 'size': (10, 20), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
+        'marks': {'nx': 5, 'ny': 3, 'xrange': (15, 80), 'yrange': (120, 150), 'arm': 4},
         'fsr': {
             'z_park': PANEL_ZHOME,
             # origin: outer corner of cell (row 0, col 0); col_dir / row_dir:
