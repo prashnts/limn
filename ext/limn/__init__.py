@@ -10,6 +10,7 @@
 #   tool_holder_pins: 15:41, 14:42, 13:45, 12:43, 11:44
 #   tool_holder_tag_address: 0x24
 #   tool_holder_macros: 41:T0, 42:T1, 43:T2, 44:T3, 45:T4     # Fluidd's tool buttons
+#   tool_holder_tag_retries: 2              # reads again after _RFID_NUDGE
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -87,6 +88,7 @@ class Limn:
         self._led_timer = None
         self._leds_from = None      # no LED redraws before (the boot flourish plays)
         self.tool_macros = {}       # tool -> its T<n> macro, whose variables Fluidd shows
+        self.tag_retries = 2
         self._macro_missing = set()
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
@@ -96,6 +98,7 @@ class Limn:
                 int(config.get('tool_holder_tag_address', '0x24'), 0),
                 say=self.gcode.respond_info))
             self.tool_macros = parse_macros(config.get('tool_holder_macros', HOLDER_MACROS))
+            self.tag_retries = config.getint('tool_holder_tag_retries', 2)
 
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
@@ -505,37 +508,75 @@ class Limn:
         effect.cmd_SET_LED_EFFECT(self.gcode.create_gcode_command('SET_LED_EFFECT', 'SET_LED_EFFECT', params))
         self._led_states[name] = state
 
-    def _tag_home(self, gcmd):
-        if gcmd.get_int('MOVE', 1):
+    def _at_reader(self, gcmd, attempt):
+        '''Goes to the reader and runs `attempt` (-> Tag, None: no tag), nudging the
+        reader between tries: it doesn't always extend all the way. -> (Tag, tries, error)'''
+        move = gcmd.get_int('MOVE', 1)
+        tries = 1 + (self.tag_retries if move else 0)
+        if move:
             self.gcode.run_script_from_command("_RFID_HOME")
         self._wait_moves()
+        self._set_tag(self.tag, 'reading')
+        error = None
+        for n in range(1, tries + 1):
+            if n > 1:
+                gcmd.respond_info(f"[Tag] {error}, nudging the reader ({n}/{tries})")
+                self._nudge_reader(n - 1)
+            try:
+                tag = attempt()
+            except TAG_ERRORS as e:
+                error = str(e)
+                continue
+            if tag is not None:
+                if n > 1:
+                    logging.info("[Tag] read on try %d/%d", n, tries)
+                return tag, n, None
+            error = 'no tag'
+        return None, tries, error
 
     def _set_tag(self, tag, state):
         self.tag = tag
         self.leds.tag(state, self._carried(), self.reactor.monotonic())
         self._request_leds()
 
-    def _apply_tag(self, tag):
+    def _nudge_reader(self, attempt):
+        '''_RFID_NUDGE: with T= it goes into the carried tool's holder and out again,
+        which pushes the reader out. Only when that holder reads empty.'''
+        tool = self._carried()
+        try:
+            reenter = tool in self.holder.tools and tool not in self.holder.sample()
+        except (OSError, RuntimeError):
+            reenter = False
+        if not reenter:
+            tool = 0
+        if tool:
+            self.holder.quiet(tool)         # the tool in its holder for a moment is ours
+        try:
+            self.gcode.run_script_from_command(f"_RFID_NUDGE ATTEMPT={attempt} T={tool}")
+            self._wait_moves()
+        finally:
+            if tool:
+                try:
+                    self.holder.resync()
+                except (OSError, RuntimeError):
+                    pass
+                self.holder.forget(tool)
+                self._request_leds()
+
+    def _apply_tag(self, tag, tries):
         self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
                          'tool_name': tag.name, 'tool_tag_uid': tag.uid})
         self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
-                       'name': tag.name, 'read_at': self.reactor.monotonic()}, 'ok')
+                       'name': tag.name, 'tries': tries, 'read_at': self.reactor.monotonic()}, 'ok')
 
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
-        self._tag_home(gcmd)
-        self._set_tag(self.tag, 'reading')
-        try:
-            tag = self.holder.read_tag()
-        except TAG_ERRORS as e:
-            self._set_tag({'ok': False, 'error': str(e)}, 'error')
-            gcmd.respond_info(f"[Tag] read failed: {e}")
-            return
+        tag, tries, error = self._at_reader(gcmd, self.holder.read_tag)
         if tag is None:
-            self._set_tag({'ok': False, 'error': 'no tag'}, 'error')
-            gcmd.respond_info("[Tag] no tag found")
+            self._set_tag({'ok': False, 'error': error, 'tries': tries}, 'error')
+            gcmd.respond_info(f"[Tag] read failed after {tries} tries: {error}")
             return
-        self._apply_tag(tag)
+        self._apply_tag(tag, tries)
         gcmd.respond_info(f"[Tag] {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
 
     def cmd_TOOL_TAG_WRITE(self, gcmd):
@@ -544,14 +585,11 @@ class Limn:
                   'dz': gcmd.get_float('DZ', None), 'name': gcmd.get('NAME', None)}
         if all(v is None for v in fields.values()):
             raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ or NAME")
-        self._tag_home(gcmd)
-        self._set_tag(self.tag, 'reading')
-        try:
-            tag = self.holder.write_tag(**fields)
-        except TAG_ERRORS as e:
-            self._set_tag({'ok': False, 'error': str(e)}, 'error')
-            raise gcmd.error(f"[Tag] write failed: {e}")
-        self._apply_tag(tag)
+        tag, tries, error = self._at_reader(gcmd, lambda: self.holder.write_tag(**fields))
+        if tag is None:
+            self._set_tag({'ok': False, 'error': error, 'tries': tries}, 'error')
+            raise gcmd.error(f"[Tag] write failed after {tries} tries: {error}")
+        self._apply_tag(tag, tries)
         gcmd.respond_info(f"[Tag] wrote {tag.name}: dx={tag.dx} dy={tag.dy} dz={tag.dz}")
 
     def get_status(self, eventtime):
