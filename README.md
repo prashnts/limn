@@ -2,7 +2,6 @@
 
 Limn is a pen plotter with a toolchanger. This repository contains the various klipper configuration files and some extra modules.
 
-- `rfid.py`: Script to read and update tool's NFC tag data.
 - `klipper/`: Klipper configuration for the toolchanger and printer.
 - `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
 - `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME=]`. Klipper's user needs to be in the `i2c` group.
@@ -10,6 +9,18 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 - `slicer/config.ini`: Sample PrusaSlicer config to make it suitable for plotting.
 - `step/`: (todo) 3D Printable Parts
 
+
+## Bed meshes and test marks
+
+`LRT_MESH_CALIBRATE` takes the meshes of the bed on the plotter (`meshes` in `ext/limn/beds.py`); with no bed on the plotter, the whole bed as `[bed_mesh]` in `printer.cfg` has it. A bed it doesn't know, it doesn't probe. `IF_STALE=1` only meshes when the meshes aren't of the bed as it sits now.
+
+The meshes and the test marks belong to one placement of the bed. The Dock counts the beds placed and removed since it booted (`read_bed_id()`, see `micropython/STRATEGY.md`), so this holds over Klipper restarts. Once the bed has been off, or the Dock restarted, `LRT_PROBE_TOOL` meshes the bed again before probing the tool (and takes the tool back after), and the marks start over at the first one. The tools' tags stay as they are. The meshes are only in memory until `SAVE_CONFIG`; a restart without it meshes again too. Dock firmware without the count: the meshes are trusted until Klipper restarts.
+
+After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
+
+Nothing is probed or drawn when a pen could hit the bed or the tools:
+- Meshing puts the carried tool away first, and stops if a holder is empty that isn't the carried tool's (a pen may be on the carriage without the extension knowing).
+- A mark is only drawn with a carried tool, with a paper mesh of this placement, inside that mesh and short of the holders (`MARKS_MAX_X`), and with sane offsets on its tag (`TOOL_MAX_DXY`, `TOOL_DZ`). The pen travels at the beds' travel height and comes down only over the mark.
 
 There is some more info posted [here](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) about this project.
 

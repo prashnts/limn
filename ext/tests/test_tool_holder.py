@@ -54,7 +54,7 @@ def test_mcp_setup_keeps_other_pins():
 
 def test_num_encoding():
     assert encode_num(1.05) == bytes([0, 1, 5, 0])
-    assert decode_num(encode_num(1.05)) == 1.05         # rfid.py read this back as 1.5
+    assert decode_num(encode_num(1.05)) == 1.05         # the old rfid.py read this back as 1.5
     assert decode_num(encode_num(-0.5)) == -0.5
     assert decode_num(encode_num(1.999)) == 2.0
     assert decode_num(bytes([0, 51, 0, 0])) == 51.0

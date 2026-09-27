@@ -4,6 +4,7 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import time
 import json
+import random
 import rp2
 from machine import Pin, ADC, Timer, WDT
 from neopixel import NeoPixel
@@ -31,6 +32,12 @@ PROBE_PULSE_MS = 10    # BLTouch style pulse
 PROBE_LOCKOUT_MS = 50  # after a pulse, ignore touches for this long
 TOUCH_THRESHOLD = NODE.get('touch_threshold', 56000)
 REMOVED_MS = 250       # DETECT must read "no bed" this long to count as removed
+
+# Klipper remembers meshes and test marks per placement of a bed. `placed` counts
+# the beds placed and removed since boot; a new BOOT_ID says the count started
+# over, and that the bed may have moved while the Dock was off.
+BOOT_ID = '%08x' % random.getrandbits(32)
+_placed = 0
 
 _enable_debug = True
 _armed = False
@@ -64,6 +71,10 @@ def read_bed_id(val=None):
         if spec[2] <= val <= spec[3]:
             return spec[0], list(spec)
     return 'UNKNOWN', None
+
+
+def placement():
+    return {'boot': BOOT_ID, 'placed': _placed, 'powered': POWER_STATE}
 
 
 def log(text):
@@ -170,7 +181,7 @@ def handle_host_command(cmd):
     elif cmd == 'power_off()':
         turn_off_power()
     elif cmd == 'read_bed_id()':
-        teeprint("read_bed_id", json.dumps(list(read_bed_id())))
+        teeprint("read_bed_id", json.dumps(list(read_bed_id()) + [placement()]))
     elif cmd == 'debug_on()':
         _enable_debug = True
     elif cmd == 'debug_off()':
@@ -208,7 +219,7 @@ _bed_missing_at = None
 def check_bed(val):
     '''Powers the bed once the same bed id is read for BED_CONFIRM_MS, and cuts
     power once it reads missing for REMOVED_MS (a touch lifts it briefly).'''
-    global POWER_STATE, _bed_candidate, _bed_seen_at, _bed_missing_at
+    global POWER_STATE, _bed_candidate, _bed_seen_at, _bed_missing_at, _placed
     bed_id = read_bed_id(val)
     now = time.ticks_ms()
 
@@ -223,6 +234,7 @@ def check_bed(val):
                 turn_on_power()
                 print("Probe detected and power turned on")
                 POWER_STATE = True
+                _placed += 1
         return
 
     _bed_candidate = None
@@ -234,6 +246,7 @@ def check_bed(val):
         teeprint("bed_removed", json.dumps(list(bed_id)))
         turn_off_power()
         POWER_STATE = False
+        _placed += 1
         _bed_missing_at = None
 
 

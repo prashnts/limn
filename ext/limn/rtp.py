@@ -4,7 +4,8 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
 # Calibration, with the reference tool (T4):
-#   1. BLTouch z over a grid on the panel (ref_z_panel), and the paper mesh.
+#   1. BLTouch z over a grid on the panel (ref_z_panel). The bed meshes are
+#      LRT_MESH_CALIBRATE's, taken just before.
 #   2. Three touches -> raw panel to plotter transform (Atmel AVR341).
 #   3. The reference tool probes the same grid: where the panel sees it at
 #      each point (ref_samples). This is what other tools are compared with,
@@ -116,10 +117,7 @@ class Rtp:
 
         coords = self.grid()
         ref_z_panel = self.probe_mesh(coords)
-        run("_BUZZ_DOOP")
         ref_z_paper = gen_bb_grid(**self.cfg['paper_grid'])
-        run(self.cfg['paper_mesh'])
-        run("_CLEAR_OFFSETS")
         run("_BUZZ_DOOP")
         self.machine.say("[LRT] Z mesh collected")
 

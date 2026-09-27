@@ -51,6 +51,7 @@ class Dock:
         self.timer = None
         self.lines = Lines()
         self.listeners = {}         # kind -> [callback(data)]
+        self.connects = 0           # lines may have been missed between two connects
         self._replies = {}          # kind -> data, while a request waits for it
 
     def on(self, kind, callback):
@@ -73,6 +74,7 @@ class Dock:
         if self.timer:
             self.reactor.unregister_timer(self.timer)
         self.timer = self.reactor.register_timer(self._read, self.reactor.NOW)
+        self.connects += 1
         self.say("[LRT] Connected")
         return True
 
