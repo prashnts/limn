@@ -123,7 +123,11 @@ class Dock:
         if kind in self._replies:
             self._replies[kind] = data
         for callback in self.listeners.get(kind, ()):
-            callback(data)
+            # This runs in a reactor timer: an exception here would shut Klipper down.
+            try:
+                callback(data)
+            except Exception:
+                logging.exception("[LRT] Dock line not handled: %r", line[:200])
 
     def _read(self, eventtime):
         try:

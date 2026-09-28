@@ -180,6 +180,9 @@ class Limn:
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
 
     def _on_data(self, data):
+        if not (isinstance(data, dict) and {'hop', 'kind', 'state', 'values'} <= data.keys()):
+            logging.warning("[LRT] data line that is not a sample: %r", str(data)[:200])
+            return
         sample = Sample(self.reactor.monotonic(), data['hop'], data['kind'], data['state'], data['values'])
         self.samples.add(sample)
         if self.debug and sample.state == S_SAMPLE:
