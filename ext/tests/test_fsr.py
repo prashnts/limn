@@ -18,14 +18,12 @@ def bed_z(x, y):
 
 
 def bed_cfg():
-    cfg = copy.deepcopy(BEDS['BED_5']['fsr'])
-    cfg['arrays'][1]['origin'] = (60, 45)       # measured, in real life
-    return cfg
+    return copy.deepcopy(BEDS['BED_5']['fsr'])
 
 
 class FsrBed:
     '''The plotter over BED_5: a docked tool whose tip sits `tip` off the
-    toolhead, pressing on two FSR arrays with a dead zone between cells.'''
+    toolhead, pressing on an FSR array with a dead zone between cells.'''
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None):
@@ -144,8 +142,8 @@ def test_calibrate():
     ref = profile['fsr_ref']
     assert [s.split()[0] for s in bed.ran[:3]] == ['UNDOCK', 'G28', '_CLEAR_OFFSETS']
     assert bed.ran[-1].startswith('WRITE_TOOL_TAG DX=0 DY=0 DZ=')
-    # The edges sit between the cells: x = 60 + 4 * 2.5 on hop 2, y = 36 + 4 * 2.5 on hop 1.
-    assert abs(ref['x'] - 70.0) < 0.03 and abs(ref['y'] - 46.0) < 0.03
+    # The edges sit between the cells: x = 108 + 2 * 2.5 between rows, y = 36 + 4 * 2.5 between cols.
+    assert abs(ref['x'] - 113.0) < 0.03 and abs(ref['y'] - 46.0) < 0.03
     assert all(0.3 < g < 0.5 for g in ref['gaps'])
     assert not bed.dragged
     assert bed.pos[2] == fsr.cfg['z_park']
@@ -208,26 +206,48 @@ def test_dock_disconnect_lifts():
         pass
     assert bed.pos[2] == fsr.cfg['z_park']
 
-def test_wrong_origin_is_reported():
+def test_tools_far_off():
+    '''A few mm off in X (4 rows) and more in Y (8 cols): found, and measured.'''
+    profile = calibrated()
+    for tip in ((3.4, -5.0), (-3.2, 8.0), (5.5, 1.9), (-1.6, -0.9)):
+        fsr, bed, _ = setup(tip=tip)
+        bed.tool = 'T1'
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
+        assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
+
+def test_off_the_array_stops_at_the_floor():
+    profile = calibrated()
+    # Misses the 4 rows; lands on a dead zone (this tip has no width to reach a cell)
+    for tip in ((-4.5, 0.0), (0.0, 1.25)):
+        fsr, bed, _ = setup(tip=tip)
+        bed.tool = 'T1'
+        try:
+            fsr.probe_tool(profile)
+            assert False, 'should stop'
+        except FsrError as e:
+            assert 'no contact' in str(e) and 'over the array' in str(e)
+        assert bed.lowest_z >= floor_of(fsr, profile) - 1e-9
+        assert bed.pos[2] == fsr.cfg['z_park']
+
+def test_array_origin_only_roughly_right():
     profile = calibrated()
     cfg = bed_cfg()
-    fsr, bed, _ = setup(cfg=cfg)
-    cfg['arrays'][1]['origin'] = (62, 45)       # 2mm off: we aim at the wrong cells
+    fsr, bed, _ = setup(cfg=cfg, tip=(0.35, -0.2))
+    cfg['arrays'][0]['origin'] = (109.5, 35.2)     # we aim off, the cells are where they were
+    fsr.arrays = {a['hop']: a for a in cfg['arrays']}
     bed.tool = 'T1'
-    try:
-        fsr.probe_tool(profile)
-        assert False, 'should stop'
-    except FsrError as e:
-        assert 'check the array origin' in str(e)
-    assert bed.pos[2] == fsr.cfg['z_park']
+    dx, dy, _ = fsr.probe_tool(profile)
+    assert abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03
 
 def test_unmeasured_array_is_refused():
-    cfg = copy.deepcopy(BEDS['BED_5']['fsr'])
-    fsr, bed, _ = setup(cfg=bed_cfg())
+    cfg = bed_cfg()
+    cfg['arrays'][0]['origin'] = None
+    fsr, bed, _ = setup()
     fsr.cfg = cfg
     fsr.arrays = {a['hop']: a for a in cfg['arrays']}
     try:
-        fsr.array(2)
+        fsr.array(1)
         assert False
     except FsrError as e:
         assert 'not set' in str(e)
