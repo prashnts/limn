@@ -92,6 +92,7 @@ BEDS = {
             'sure': 700,            # another cell this strong: the tip is there, not crosstalk
             'press_limit': 950,     # strength that means pressing too hard: lift now
             'press': 0.3,           # mm below contact for the XY taps
+            'prior_margin': 0.4,    # mm below an expected contact z the search may go
             'resolution': 0.02,     # mm, edge search stops here
             'repeats': 3,           # z measurements, median
         },

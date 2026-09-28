@@ -120,7 +120,8 @@ class Limn:
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
-             "Measure the carried tool on the FSR like LRT_PROBE_TOOL, only report it"),
+             "LRT_FSR_MEASURE [BED_Z=] [TIP=x,y] [Z=] [PRESS=]: measure the carried tool on the FSR "
+             "like LRT_PROBE_TOOL, only report it"),
             ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
              "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
@@ -515,14 +516,25 @@ class Limn:
         bed = self._bed(gcmd, 'fsr')
         self._need_tool(gcmd)
         fsr = self._routine(gcmd, bed)
+        # What is known of the tool already: a precious pen comes down where expected
+        # (TIP=x,y as locate reports it), never far past its contact (Z=), gently (PRESS=).
+        tip = gcmd.get('TIP', None)
+        prior = {'tip': [float(v) for v in tip.split(',')] if tip else None,
+                 'z': gcmd.get_float('Z', None)}
+        press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
+        if press is not None:
+            fsr.cfg = {**fsr.cfg, 'press': press}
+        bed_z_given = gcmd.get_float('BED_Z', None)
         try:
-            bed_z = {cell: self._fsr_bed_z(gcmd, fsr, cell) for cell in fsr.z_cells()}
+            bed_z = {cell: bed_z_given if bed_z_given is not None else self._fsr_bed_z(gcmd, fsr, cell)
+                     for cell in fsr.z_cells()}
             self.gcode.run_script_from_command("_CLEAR_OFFSETS")
-            m = fsr.measure(bed_z)
+            m = fsr.measure(bed_z, prior)
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
-        dz = m['z'] - bed_z[tuple(bed['fsr']['z_cell'])]
-        gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={dz:.3f}) "
+        z_bed = bed_z[tuple(bed['fsr']['z_cell'])]
+        gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={m['z'] - z_bed:.3f} "
+                          f"over bed_z={z_bed:.3f}) tip={[round(v, 2) for v in m['tip']]} "
                           f"gaps={[round(g, 3) for g in m['gaps']]}")
 
     def cmd_FSR_MATRIX(self, gcmd):
