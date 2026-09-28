@@ -169,7 +169,24 @@ def test_dead_sensor_lifts():
         fsr.probe_tool(profile)
         assert False, 'should stop'
     except FsrError as e:
-        assert 'no frames' in str(e)
+        assert 'no frames' in str(e) and 'hop 1 FSR state 43' in str(e), e
+    assert bed.pos[2] == fsr.cfg['z_park']
+
+def test_no_frames_says_what_was_heard():
+    fsr, bed, _ = setup(alive_for=0.0)          # nothing at all
+    bed.tool = 'T1'
+    try:
+        fsr.measure({(1, 1, 3): 1.0})
+        assert False, 'should stop'
+    except FsrError as e:
+        assert 'nothing from any node' in str(e), e
+    fsr, bed, _ = setup(alive_for=0.0)          # only touch samples: old firmware
+    bed.samples.add(Sample(0.0, 1, FSR, 42, [[1, 3, 400]]))
+    try:
+        fsr.measure({(1, 1, 3): 1.0})
+        assert False, 'should stop'
+    except FsrError as e:
+        assert 'hop 1 FSR state 42 x1' in str(e) and 'mcu.py update' in str(e), e
     assert bed.pos[2] == fsr.cfg['z_park']
 
 def test_no_contact_stops_at_the_floor():

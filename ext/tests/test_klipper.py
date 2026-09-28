@@ -1,5 +1,6 @@
 # uv run python ext/tests/test_klipper.py
 # The Klipper side, with stand-ins for Klipper's objects.
+import json
 import os
 import re
 
@@ -58,7 +59,7 @@ class FakeGcmd:
         value = self.get(key, default)
         return None if value is None else int(value)
 
-    def get_float(self, key, default=KeyError):
+    def get_float(self, key, default=KeyError, **limits):
         value = self.get(key, default)
         return None if value is None else float(value)
 
@@ -195,7 +196,8 @@ def test_commands_registered():
     ext, printer = make()
     names = set(printer.objects['gcode'].commands)
     for name in ('LRT_CONNECT', 'LRT_DISCONNECT', 'LRT_READ_BED_ID', 'LRT_MESH_CALIBRATE',
-                 'LRT_CALIBRATE', 'LRT_PROBE_TOOL', 'LRT_CHAIN', 'LRT_DEBUG', 'LRT_FSR_Z', 'LRT_FSR_EDGE'):
+                 'LRT_CALIBRATE', 'LRT_PROBE_TOOL', 'LRT_CHAIN', 'LRT_DEBUG', 'LRT_FSR_Z', 'LRT_FSR_EDGE',
+                 'LRT_FSR_MATRIX'):
         assert name in names, name
 
 def test_saved_profile_loads():
@@ -235,6 +237,33 @@ def test_moves_reach_klipper_as_plain_floats():
     for coord, speed in toolhead.moves:
         assert all(v is None or type(v) is float for v in coord) and type(speed) is float, (coord, speed)
     assert toolhead.moves[0][0][2] is None and toolhead.moves[1][0][:2] == [None, None]
+
+
+def test_fsr_matrix_reports_what_arrives():
+    ext, printer = make()
+    printer.objects['probe'] = object()
+    gcode, reactor = printer.objects['gcode'], printer.reactor
+    ext.dock.request = lambda cmd, kind, timeout=3: ['BED_5', ['BED_5', 22000, 43000, 47500],
+                                                     {'boot': 'b', 'placed': 1, 'powered': True}]
+    sent = []
+    ext.dock.send_to = lambda hop, cmd: sent.append((hop, cmd))
+    cells = [[r, c, 900 if (r, c) == (1, 3) else 5] for r in range(4) for c in range(8)]
+
+    def frame(eventtime):
+        if (1, 'matrix(on)') in sent and (1, 'matrix(off)') not in sent:
+            ext.dock.handle_line('!LRT>>data>>' + json.dumps({'hop': 1, 'kind': 4, 'state': 43, 'values': cells}) + '>>')
+        return eventtime + 0.03
+    reactor.register_timer(frame, 0)
+    gcode.run('LRT_FSR_MATRIX', SECONDS=1)
+    assert sent == [(1, 'matrix(on)'), (1, 'matrix(off)')]
+    line = next(s for s in gcode.said if 'state 43' in s)
+    assert 'hop 1 kind 4 state 43' in line and '32 cells' in line and 'strongest 900' in line, line
+
+    gcode.said.clear()                                      # an array that only sends touches
+    ext.samples = limn.Samples()
+    reactor.unregister_timer(frame)
+    gcode.run('LRT_FSR_MATRIX', SECONDS=0.5)
+    assert any('hop 1: no matrix frames' in s for s in gcode.said) and any('nothing at all' in s for s in gcode.said)
 
 
 def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
