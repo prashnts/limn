@@ -32,8 +32,10 @@ class Machine:
         return self.toolhead.get_position()[:3]
 
     def move(self, x=None, y=None, z=None, speed=TRAVEL_SPEED):
-        '''Raw machine coordinates, no gcode offsets or mesh.'''
-        self.toolhead.manual_move([x, y, z], speed)
+        '''Raw machine coordinates, no gcode offsets or mesh. Plain floats: the
+        routines compute with numpy, and a numpy float in Klipper's position
+        breaks its status JSON.'''
+        self.toolhead.manual_move([None if v is None else float(v) for v in (x, y, z)], float(speed))
 
     def wait_moves(self):
         self.toolhead.wait_moves()

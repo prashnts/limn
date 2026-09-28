@@ -146,9 +146,13 @@ class FakeMacro:
 class FakeToolhead:
     def __init__(self):
         self.waits = 0
+        self.moves = []
 
     def wait_moves(self):
         self.waits += 1
+
+    def manual_move(self, coord, speed):
+        self.moves.append((coord, speed))
 
 
 class FakeConfigfile:
@@ -216,6 +220,21 @@ def test_dock_lines_reach_the_samples():
     assert ext.samples.latest(2, FSR).state == S_MATRIX
     assert ext.bed == 'BED_5'
     assert ext.get_status(0)['bed'] == 'BED_5'
+
+
+def test_moves_reach_klipper_as_plain_floats():
+    # A numpy float in the toolhead's position breaks Klipper's status JSON (webhooks).
+    import numpy as np
+    from limn.machine import Machine
+    _, printer = make()
+    printer.objects['probe'] = object()
+    toolhead = printer.objects['toolhead']
+    machine = Machine(printer, None)
+    machine.move(*(np.array([111.75, 44.75]) - np.array([-34.34, 25.0])))
+    machine.move(z=np.float64(4.2), speed=np.float64(2))
+    for coord, speed in toolhead.moves:
+        assert all(v is None or type(v) is float for v in coord) and type(speed) is float, (coord, speed)
+    assert toolhead.moves[0][0][2] is None and toolhead.moves[1][0][:2] == [None, None]
 
 
 def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
