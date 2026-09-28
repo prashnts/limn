@@ -239,6 +239,18 @@ def test_moves_reach_klipper_as_plain_floats():
     assert toolhead.moves[0][0][2] is None and toolhead.moves[1][0][:2] == [None, None]
 
 
+def test_a_garbled_dock_line_does_not_stop_klipper():
+    # Seen on the printer: a data line whose body was not JSON shut Klipper down
+    # from the Dock's read timer.
+    ext, printer = make()
+    ext.dock.handle_line('!LRT>>data>>{"hop": 1, "kind": 4, "state": 43, "val>>')
+    ext.dock.handle_line('!LRT>>data>>[1, 2]>>')
+    ext.dock.on('hello', lambda data: data['nope'])         # a listener that breaks
+    ext.dock.handle_line('!LRT>>hello>>{"hop": 1}>>')
+    ext.dock.handle_line('!LRT>>data>>{"hop": 1, "kind": 4, "state": 43, "values": [[0, 0, 12]]}>>')
+    assert len(ext.samples.recent) == 1 and ext.samples.latest(1, FSR).values == [[0, 0, 12]]
+
+
 def test_fsr_matrix_reports_what_arrives():
     ext, printer = make()
     printer.objects['probe'] = object()
