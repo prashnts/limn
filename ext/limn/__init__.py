@@ -22,7 +22,7 @@
 # placement.py what stays true about the bed on the plotter: its meshes, the next test mark
 # marks.py     the test marks on the paper
 # rtp.py       tool alignment on the resistive panel (BED_3)
-# fsr.py       tool alignment on the FSR arrays (BED_5)
+# fsr.py       tool alignment on the FSR array (BED_5)
 # i2c.py       the Pi's I2C bus: MCP23017 and PN532
 # tool_holder.py  which holders have their tool, and the tools' tags
 # leds.py      what the dock and UI LEDs show
@@ -477,7 +477,7 @@ class Limn:
         axis = gcmd.get('AXIS', 'X').lower()
         edge = bed['fsr'][axis + '_edges'][gcmd.get_int('INDEX', 0)]
         fsr = self._routine(gcmd, bed)
-        hop, row, col_a, _ = edge
+        hop, (row, col_a), _ = edge
         try:
             fsr.matrix(True)
             try:

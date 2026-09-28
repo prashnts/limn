@@ -1,4 +1,4 @@
-# Limn - tool alignment with two FSR arrays at right angles (BED_5)
+# Limn - tool alignment with an FSR array (BED_5)
 #
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -9,7 +9,12 @@
 # XY: between two cells there is a dead zone (<0.5mm) where neither responds.
 #    Taps find the last point where cell A still responds and the last point
 #    where cell B does; the edge is halfway, so the gap width cancels out.
-#    The arrays are at right angles: one gives X, the other Y.
+#    An edge between cols gives one axis, an edge between rows the other.
+# Where the tip is: first contact at the array's `aim`, where any cell may
+#    respond. That cell, and how far the tip goes before leaving it, give the
+#    tip to a few tenths; every search after aims that much off, so a tool
+#    a few mm off still lands on the cells it measures. Off the array
+#    nothing responds: down to the floor, up, and stop.
 # A tool is compared with the reference tool (T4) on the same cells, so the
 # array positions only need to be roughly right.
 #
@@ -75,49 +80,95 @@ class Fsr:
         return strengths.get(tuple(cell), 0) >= self.cfg['respond']
 
     # Z
-    def contact_z(self, hop, row, col, bed_z):
+    def contact_z(self, hop, row, col, bed_z, shift=(0, 0), top=None):
         '''z where the tool starts to press on (row, col), median of `repeats`.
-        bed_z: BLTouch z at that cell; the search stays within tool_z of it.'''
+        bed_z: BLTouch z at that cell; the search stays within tool_z of it.
+        shift: where the tip sits off the toolhead, as far as we know (locate).
+        top: start there instead of above the window.'''
         cfg = self.cfg
-        x, y = self.array(hop).center(row, col)
+        x, y = self.array(hop).center(row, col) - np.asarray(shift)
         low, high = cfg['tool_z']
         floor = bed_z + low
-        z = bed_z + high + 1.0
+        z = bed_z + high + 1.0 if top is None else top
         found = []
         with lifted_on_error(self.machine, cfg['z_park']):
             self.machine.move(z=cfg['z_park'])
-            self.machine.move(x, y)
+            self.machine.move(float(x), float(y))
             self.machine.move(z=z)
-            if self.responds(self.read(hop), (row, col)):
+            if self.touched(self.read(hop)):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             for _ in range(cfg['repeats']):
-                z = self._descend(hop, (row, col), z, cfg['step'], floor)
-                z = self._back_off(hop, (row, col), z + 2 * cfg['step'])
-                z = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
+                z, _ = self._descend(hop, (row, col), z, cfg['step'], floor)
+                z = self._back_off(hop, z + 2 * cfg['step'])
+                z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
                 found.append(z)
-                z = self._back_off(hop, (row, col), z + 2 * cfg['step'])
+                z = self._back_off(hop, z + 2 * cfg['step'])
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         return float(np.median(found))
 
+    def touched(self, strengths):
+        return [c for c in strengths if self.responds(strengths, c)]
+
     def _descend(self, hop, cell, z, step, floor):
+        '''Down until `cell` responds (None: any cell) -> (z, the cells that do).'''
         while True:
             z -= step
             if z < floor:
-                raise FsrError(f"[LRT] no contact down to z={floor:.2f}")
+                raise FsrError(f"[LRT] no contact down to z={floor:.2f}: is the tool over the array at hop {hop}?")
             self.machine.move(z=z, speed=JOG_SPEED)
-            strengths = self.read(hop)
-            if self.responds(strengths, cell):
-                return z
-            others = [c for c in strengths if self.responds(strengths, c)]
-            if others:
-                raise FsrError(f"[LRT] cell {others[0]} of hop {hop} responds instead of {cell}: check the array origin")
+            touched = self.touched(self.read(hop))
+            if touched and (cell is None or tuple(cell) in touched):
+                return z, touched
+            if touched:
+                raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell}: check the array origin")
 
-    def _back_off(self, hop, cell, z):
+    def _back_off(self, hop, z):
         self.machine.move(z=z, speed=JOG_SPEED)
-        if self.responds(self.read(hop), cell):
+        if self.touched(self.read(hop)):
             raise FsrError(f"[LRT] still touching after backing off to z={z:.2f}")
         return z
+
+    # Where the tip is
+    def locate(self, hop, bed_z):
+        '''Down at the array's `aim` until any cell responds, then along the
+        cols and the rows to where that cell stops -> (shift, z): the tip's
+        offset from the toolhead to a few tenths, and a z just above contact.'''
+        cfg = self.cfg
+        array = self.array(hop)
+        aim = array.point(*self.arrays[hop]['aim'])
+        low, high = cfg['tool_z']
+        floor = bed_z + low
+        z = bed_z + high + 1.0
+        with lifted_on_error(self.machine, cfg['z_park']):
+            self.machine.move(z=cfg['z_park'])
+            self.machine.move(float(aim[0]), float(aim[1]))
+            self.machine.move(z=z)
+            if self.touched(self.read(hop)):
+                raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
+            z, _ = self._descend(hop, None, z, cfg['step'], floor)
+            z = self._back_off(hop, z + 2 * cfg['step'])
+            z, touched = self._descend(hop, None, z, cfg['fine_step'], floor)
+            z_press, z_lift = z - cfg['press'], z + 1.0
+            # Along each axis: two cells respond, the tip is on the edge
+            # between them. One does: the tip leaves it where it reaches the
+            # cell's far side, which is within two cells. The dead zone puts
+            # either a few tenths out, enough to aim.
+            shift = np.zeros(2)
+            for axis, direction in ((1, array.col_dir), (0, array.row_dir)):
+                on = sorted({cell[axis] for cell in touched})
+                if len(on) > 1:
+                    tip = on[-1] * array.pitch
+                else:
+                    cell = touched[0]
+                    last = self.last_response(hop, cell, aim, aim + 2 * array.pitch * direction,
+                                              z_press, z_lift, resolution=0.1)
+                    tip = (on[0] + 1) * array.pitch - np.dot(last - aim, direction)
+                shift += (tip - np.dot(aim - array.origin, direction)) * direction
+            self.machine.move(z=cfg['z_park'])
+            self.machine.wait_moves()
+        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead (cells {touched})")
+        return shift, z + 2 * cfg['step']
 
     # XY
     def tap(self, hop, xy, z_press, z_lift):
@@ -129,9 +180,10 @@ class Fsr:
         self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
         return strengths
 
-    def last_response(self, hop, cell, start, end, z_press, z_lift):
+    def last_response(self, hop, cell, start, end, z_press, z_lift, resolution=None):
         '''The last point from `start` (centre of `cell`) towards `end` (centre
         of its neighbour) where `cell` still responds.'''
+        resolution = resolution or self.cfg['resolution']
         start, end = np.array(start, dtype=float), np.array(end, dtype=float)
         if not self.responds(self.tap(hop, start, z_press, z_lift), cell):
             raise FsrError(f"[LRT] cell {cell} of hop {hop} does not respond at its centre {start.round(2)}: check the array origin")
@@ -139,7 +191,7 @@ class Fsr:
             raise FsrError(f"[LRT] cell {cell} of hop {hop} responds at its neighbour's centre {end.round(2)}: check the array origin")
         lo, hi = 0.0, 1.0
         length = float(np.linalg.norm(end - start))
-        while (hi - lo) * length > self.cfg['resolution']:
+        while (hi - lo) * length > resolution:
             mid = (lo + hi) / 2
             if self.responds(self.tap(hop, start + mid * (end - start), z_press, z_lift), cell):
                 lo = mid
@@ -147,18 +199,20 @@ class Fsr:
                 hi = mid
         return start + (lo + hi) / 2 * (end - start)
 
-    def find_edge(self, edge, z_contact):
-        '''edge: (hop, row, col_a, col_b) -> (edge point, gap width)'''
-        hop, row, col_a, col_b = edge
+    def find_edge(self, edge, z_contact, shift=(0, 0)):
+        '''edge: (hop, (row, col) of cell a, (row, col) of its neighbour b)
+        -> (edge point, gap width). shift: as for contact_z.'''
+        hop, cell_a, cell_b = edge
         array = self.array(hop)
-        a, b = array.center(row, col_a), array.center(row, col_b)
+        a = array.center(*cell_a) - np.asarray(shift)
+        b = array.center(*cell_b) - np.asarray(shift)
         z_press = z_contact - self.cfg['press']
         z_lift = z_contact + 1.0
         with lifted_on_error(self.machine, self.cfg['z_park']):
             self.machine.move(z=self.cfg['z_park'])
             self.machine.move(float(a[0]), float(a[1]))
-            a_off = self.last_response(hop, (row, col_a), a, b, z_press, z_lift)
-            b_on = self.last_response(hop, (row, col_b), b, a, z_press, z_lift)
+            a_off = self.last_response(hop, tuple(cell_a), a, b, z_press, z_lift)
+            b_on = self.last_response(hop, tuple(cell_b), b, a, z_press, z_lift)
             self.machine.move(z=self.cfg['z_park'])
             self.machine.wait_moves()
         return (a_off + b_on) / 2, float(np.linalg.norm(b_on - a_off))
@@ -167,9 +221,9 @@ class Fsr:
     def z_cells(self):
         '''Cells that need a BLTouch z: the z cell and the first cell of each edge.'''
         cells = [tuple(self.cfg['z_cell'])]
-        for hop, row, col_a, _ in self.cfg['x_edges'] + self.cfg['y_edges']:
-            if (hop, row, col_a) not in cells:
-                cells.append((hop, row, col_a))
+        for hop, cell_a, _ in self.cfg['x_edges'] + self.cfg['y_edges']:
+            if (hop, *cell_a) not in cells:
+                cells.append((hop, *cell_a))
         return cells
 
     def bltouch_z(self, cell):
@@ -188,18 +242,23 @@ class Fsr:
         '''The docked tool: contact z on the z cell, and the X and Y edges.
         bed_z: {cell: BLTouch z} for z_cells().'''
         cfg = self.cfg
+        shift, contact = {}, {}
+
+        def on(hop, row, col):
+            '''The tip found on this array, and its contact z on (row, col).'''
+            if hop not in contact:
+                shift[hop], top = self.locate(hop, bed_z[(hop, row, col)])
+                contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top)
+            return contact[hop]
+
         self.matrix(True)
         try:
-            hop, row, col = cfg['z_cell']
-            z = self.contact_z(hop, row, col, bed_z[(hop, row, col)])
-            contact = {hop: z}
+            z = on(*cfg['z_cell'])
             points, gaps = {'x': [], 'y': []}, []
             for axis, edges in (('x', cfg['x_edges']), ('y', cfg['y_edges'])):
                 for edge in edges:
-                    e_hop, e_row, e_col, _ = edge
-                    if e_hop not in contact:
-                        contact[e_hop] = self.contact_z(e_hop, e_row, e_col, bed_z[(e_hop, e_row, e_col)])
-                    point, gap = self.find_edge(edge, contact[e_hop])
+                    e_hop, cell_a, _ = edge
+                    point, gap = self.find_edge(edge, on(e_hop, *cell_a), shift[e_hop])
                     points[axis].append(point[0 if axis == 'x' else 1])
                     gaps.append(gap)
                     self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} gap={gap:.3f}")

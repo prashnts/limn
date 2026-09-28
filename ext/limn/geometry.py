@@ -102,8 +102,12 @@ class FsrArray:
         self.rows = rows
         self.cols = cols
 
+    def point(self, row, col):
+        '''Plotter point at fractional (row, col) from the origin, in cells.'''
+        return self.origin + self.pitch * (col * self.col_dir + row * self.row_dir)
+
     def center(self, row, col):
-        return self.origin + self.pitch * ((col + 0.5) * self.col_dir + (row + 0.5) * self.row_dir)
+        return self.point(row + 0.5, col + 0.5)
 
     def cell_at(self, xy):
         '''(row, col) under a plotter point, or None outside the array.'''
