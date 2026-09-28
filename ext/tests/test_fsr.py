@@ -177,6 +177,40 @@ def test_crosstalk_up_the_column():
         assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
         assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
 
+def test_prior_brings_the_tip_down_on_the_aim():
+    '''Without a prior this tip lands on the edge between rows 0 and 1 at the aim
+    (a dead zone for a tip this fine); told where it is, it comes down mid cell.'''
+    profile = calibrated()
+    tip = (-1.25, 0.6)
+    fsr, bed, _ = setup(tip=tip)
+    bed.tool = 'T0'
+    try:
+        fsr.probe_tool(profile)
+        assert False, 'lands on the dead zone'
+    except FsrError as e:
+        assert 'no contact' in str(e)
+    fsr, bed, _ = setup(tip=tip)
+    bed.tool = 'T0'
+    bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
+    m = fsr.measure(bed_z, {'tip': (-1.2, 0.7), 'z': None})
+    assert abs(m['x'] - profile['fsr_ref']['x'] - 1.25) < 0.03 and abs(m['y'] - profile['fsr_ref']['y'] + 0.6) < 0.03
+    assert abs(m['tip'][0] - tip[0]) < 0.5 and abs(m['tip'][1] - tip[1]) < 0.5
+
+def test_prior_z_keeps_a_miss_short():
+    '''Told where contact is expected, a miss goes only prior_margin below it.'''
+    profile = calibrated()
+    bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
+    fsr, bed, _ = setup(tip=(-4.5, 0.0))           # off the rows
+    bed.tool = 'T0'
+    expected = bed_z[(1, 1, 3)] + 1.0                # where this tool's contact would be
+    try:
+        fsr.measure(bed_z, {'tip': None, 'z': expected})
+        assert False, 'should stop'
+    except FsrError as e:
+        assert 'no contact' in str(e)
+    assert bed.lowest_z >= expected - fsr.cfg['prior_margin'] - 1e-9
+    assert bed.pos[2] == fsr.cfg['z_park']
+
 def test_dead_sensor_lifts():
     profile = calibrated()
     fsr, bed, _ = setup(alive_for=1.0)

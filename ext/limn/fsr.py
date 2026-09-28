@@ -103,16 +103,25 @@ class Fsr:
         return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells)
 
     # Z
-    def contact_z(self, hop, row, col, bed_z, shift=(0, 0), top=None):
+    def window(self, bed_z, prior=None):
+        '''(floor, top) of the z search: tool_z over the BLTouch z, or, with the
+        contact z expected (prior['z']), `prior_margin` below it, never lower.'''
+        low, high = self.cfg['tool_z']
+        floor, top = bed_z + low, bed_z + high + 1.0
+        if prior and prior.get('z') is not None:
+            floor = max(floor, prior['z'] - self.cfg['prior_margin'])
+            top = min(top, prior['z'] + 1.0)
+        return floor, top
+
+    def contact_z(self, hop, row, col, bed_z, shift=(0, 0), top=None, prior=None):
         '''z where the tool starts to press on (row, col), median of `repeats`.
         bed_z: BLTouch z at that cell; the search stays within tool_z of it.
         shift: where the tip sits off the toolhead, as far as we know (locate).
-        top: start there instead of above the window.'''
+        top: start there instead of above the window. prior: see window().'''
         cfg = self.cfg
         x, y = self.array(hop).center(row, col) - np.asarray(shift)
-        low, high = cfg['tool_z']
-        floor = bed_z + low
-        z = bed_z + high + 1.0 if top is None else top
+        floor, z = self.window(bed_z, prior)
+        z = z if top is None else top
         found = []
         with lifted_on_error(self.machine, cfg['z_park']):
             self.machine.move(z=cfg['z_park'])
@@ -159,16 +168,17 @@ class Fsr:
         return z
 
     # Where the tip is
-    def locate(self, hop, bed_z):
+    def locate(self, hop, bed_z, prior=None):
         '''Down at the array's `aim` until any cell responds, then along the
         cols and the rows to where that cell stops -> (shift, z): the tip's
-        offset from the toolhead to a few tenths, and a z just above contact.'''
+        offset from the toolhead to a few tenths, and a z just above contact.
+        prior['tip']: where the tip is thought to be, so it comes down on the aim.'''
         cfg = self.cfg
         array = self.array(hop)
         aim = array.point(*self.arrays[hop]['aim'])
-        low, high = cfg['tool_z']
-        floor = bed_z + low
-        z = bed_z + high + 1.0
+        if prior and prior.get('tip') is not None:
+            aim = aim - np.asarray(prior['tip'], dtype=float)
+        floor, z = self.window(bed_z, prior)
         with lifted_on_error(self.machine, cfg['z_park']):
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(aim[0]), float(aim[1]))
@@ -274,17 +284,18 @@ class Fsr:
         self.machine.move(z=z_park)
         return float(result.test_z)
 
-    def measure(self, bed_z):
+    def measure(self, bed_z, prior=None):
         '''The docked tool: contact z on the z cell, and the X and Y edges.
-        bed_z: {cell: BLTouch z} for z_cells().'''
+        bed_z: {cell: BLTouch z} for z_cells(). prior: what is known of the
+        tool already, {'tip': (x, y), 'z': contact z}, see locate() and window().'''
         cfg = self.cfg
         shift, contact = {}, {}
 
         def on(hop, row, col):
             '''The tip found on this array, and its contact z on (row, col).'''
             if hop not in contact:
-                shift[hop], top = self.locate(hop, bed_z[(hop, row, col)])
-                contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top)
+                shift[hop], top = self.locate(hop, bed_z[(hop, row, col)], prior)
+                contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
             return contact[hop]
 
         self.matrix(True)
@@ -305,6 +316,7 @@ class Fsr:
             'x': float(np.mean(points['x'])),
             'y': float(np.mean(points['y'])),
             'gaps': gaps,
+            'tip': [float(v) for v in shift[cfg['z_cell'][0]]],
         }
 
     def calibrate(self):
