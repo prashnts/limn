@@ -119,6 +119,8 @@ class Limn:
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL, "Measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
+            ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
+             "Measure the carried tool on the FSR like LRT_PROBE_TOOL, only report it"),
             ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
              "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
@@ -506,6 +508,22 @@ class Limn:
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         gcmd.respond_info(f"[LRT] {axis} edge {edge}: {point.round(3).tolist()} gap={gap:.3f} (contact z={z:.3f})")
+
+    def cmd_FSR_MEASURE(self, gcmd):
+        '''What LRT_CALIBRATE and LRT_PROBE_TOOL measure with the carried tool (where
+        its tip is, contact z, the edges), only reported: no tag, no profile.'''
+        bed = self._bed(gcmd, 'fsr')
+        self._need_tool(gcmd)
+        fsr = self._routine(gcmd, bed)
+        try:
+            bed_z = {cell: self._fsr_bed_z(gcmd, fsr, cell) for cell in fsr.z_cells()}
+            self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+            m = fsr.measure(bed_z)
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        dz = m['z'] - bed_z[tuple(bed['fsr']['z_cell'])]
+        gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={dz:.3f}) "
+                          f"gaps={[round(g, 3) for g in m['gaps']]}")
 
     def cmd_FSR_MATRIX(self, gcmd):
         '''The bed's arrays in matrix mode for SECONDS: what arrives, per hop. Nothing moves.'''

@@ -386,7 +386,7 @@ def test_fsr_bltouch_z_puts_the_tool_away():
 def test_fsr_jogs_need_a_tool_on_the_carriage():
     ext, printer, *_ = make_with_holder(low=(13,), carried=0)              # only 45 home, nothing on
     p = Plotter(ext, printer, bed=reply('BED_5'))
-    for name in ('LRT_FSR_Z', 'LRT_FSR_EDGE'):
+    for name in ('LRT_FSR_Z', 'LRT_FSR_EDGE', 'LRT_FSR_MEASURE'):
         assert 'no tool on the carriage' in raises(lambda: p.run(name))
     assert p.toolhead.moves == [] and 'UNDOCK' not in p.gcode.scripts
 
