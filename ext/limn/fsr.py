@@ -21,10 +21,12 @@
 # The arrays run in matrix mode meanwhile: every cell every frame, so we also
 # know they are alive. No frame for `alive` seconds, a press above
 # `press_limit`, or no contact down to the floor: lift to park and stop.
+from collections import Counter
+
 import numpy as np
 
 from .geometry import FsrArray
-from .samples import FSR, S_MATRIX
+from .samples import FSR, RTP, S_MATRIX
 from .machine import JOG_SPEED, lifted_on_error
 
 
@@ -63,7 +65,7 @@ class Fsr:
         self.machine.pause(self.cfg['settle'])
         while not self.samples.since(since, hop=hop, kind=FSR, state=S_MATRIX):
             if self.machine.now() - since > self.cfg['alive']:
-                raise FsrError(f"[LRT] no frames from the FSR at hop {hop}")
+                raise FsrError(f"[LRT] no frames from the FSR at hop {hop}: {self.heard(since)}")
             self.machine.pause(0.02)
 
         cells = {}
@@ -75,6 +77,16 @@ class Fsr:
         if hardest >= self.cfg['press_limit']:
             raise FsrError(f"[LRT] pressing too hard on the FSR at hop {hop} ({hardest:.0f})")
         return strengths
+
+    def heard(self, until, window=5.0):
+        '''What the chain did send in the `window` s before `until`, for the error.'''
+        recent = [s for s in self.samples.since(until - window) if s.t <= until + self.cfg['alive']]
+        if not recent:
+            return f"nothing from any node in {window:.0f}s (is the Dock connected? LRT_CHAIN)"
+        seen = Counter((s.hop, {FSR: 'FSR', RTP: 'RTP'}.get(s.kind, s.kind), s.state) for s in recent)
+        heard = ', '.join(f"hop {h} {kind} state {state} x{n}" for (h, kind, state), n in sorted(seen.items()))
+        return (f"heard {heard} in {window:.0f}s. Matrix frames are FSR state {S_MATRIX}: without them, "
+                f"the node's firmware may be from before matrix mode (mcu.py update)")
 
     def responds(self, strengths, cell):
         return strengths.get(tuple(cell), 0) >= self.cfg['respond']

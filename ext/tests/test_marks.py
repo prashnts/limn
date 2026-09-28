@@ -1,7 +1,7 @@
 # uv run python ext/tests/test_marks.py
 # The bed's placement, its meshes and the test marks, over Klipper restarts.
 from fakes import run_tests
-from test_klipper import make, make_with_holder, raises
+from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
 from limn.geometry import gen_mark_grid, mark_strokes
 from limn.beds import BEDS
@@ -380,8 +380,29 @@ def test_fsr_bltouch_z_puts_the_tool_away():
             assert not p.svv['currently_docked_tool'], 'BLTouch probing with a tool on'
             return 4.2
 
-    assert p.ext._fsr_bed_z(Fsr(), (1, 1, 3)) == 4.2
+    assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
     assert p.gcode.scripts[:2] == ['UNDOCK', 'DOCK T=42'] and p.undocked == [42] and p.docked == [42]
+
+def test_fsr_jogs_need_a_tool_on_the_carriage():
+    ext, printer, *_ = make_with_holder(low=(13,), carried=0)              # only 45 home, nothing on
+    p = Plotter(ext, printer, bed=reply('BED_5'))
+    for name in ('LRT_FSR_Z', 'LRT_FSR_EDGE'):
+        assert 'no tool on the carriage' in raises(lambda: p.run(name))
+    assert p.toolhead.moves == [] and 'UNDOCK' not in p.gcode.scripts
+
+def test_fsr_bltouch_z_puts_away_a_tool_not_saved_as_carried():
+    # Over the array the BLTouch puts the carriage in the lane of holder 41: a pen
+    # on it that the variables missed (DOCK_RESET) would run into the holders.
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0)   # 42 on, not saved
+    p = Plotter(ext, printer)
+
+    class Fsr:
+        def bltouch_z(self, cell):
+            assert not p.svv['currently_docked_tool'], 'BLTouch probing with a tool on'
+            return 4.2
+
+    assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
+    assert p.said('taking 42 as the one on the carriage') and p.undocked == [42] and p.docked == [42]
 
 
 if __name__ == '__main__':

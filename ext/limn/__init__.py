@@ -31,7 +31,7 @@ import json
 import logging
 
 from .dock import Dock
-from .samples import Samples, Sample, FSR, RTP, S_SAMPLE
+from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
 from .machine import Machine
 from .geometry import ProbeValue, gen_mark_grid, mark_strokes
 from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL
@@ -119,6 +119,8 @@ class Limn:
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL, "Measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
+            ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
+             "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
             ('LRT_DEBUG', self.cmd_DEBUG, "LRT_DEBUG ON=0|1: show sensor data"),
             ('TOOL_HOLDERS', self.cmd_TOOL_HOLDERS, "Show which tool holders have their tool"),
@@ -256,23 +258,28 @@ class Limn:
         except (OSError, RuntimeError):
             return set()
 
-    def _run_meshes(self, gcmd, meshes, rebase=True):
-        '''Takes the meshes -> the tool that was on the carriage, 0: none. With `rebase`,
-        the calibration's bed z too, see _rebase(). BED_MESH_CALIBRATE
-        (limn.cfg) puts it away first: probing with a pen on the carriage would run it
-        into the bed. With no tool saved as carried and only one holder empty, that tool
-        is taken as the carried one: undocking it with nothing on the carriage makes the
-        same moves as docking, and its holder check stops the meshes.'''
-        key = self.placement
-        if key is None:
-            raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
+    def _guess_carried(self, gcmd, tag):
+        '''Before the BLTouch probes: a pen on the carriage would run into the bed,
+        or, over the FSR, into the holders. With no tool saved as carried and only one
+        holder empty, that tool is taken as the carried one, so UNDOCK puts it away:
+        undocking it with nothing on the carriage makes the same moves as docking, and
+        its holder check stops there. -> the tool on the carriage, 0: none.'''
         empty = self._empty_holders()
         if len(empty) == 1 and not self._carried():
             tool, = empty
-            gcmd.respond_info(f"[LRT][Mesh] Holder {tool} is empty and no tool is saved as carried: "
+            gcmd.respond_info(f"[LRT]{tag} Holder {tool} is empty and no tool is saved as carried: "
                               f"taking {tool} as the one on the carriage, to put it away")
             self._save_vars({'currently_docked_tool': tool})
-        carried = self._carried()
+        return self._carried()
+
+    def _run_meshes(self, gcmd, meshes, rebase=True):
+        '''Takes the meshes -> the tool that was on the carriage, 0: none. With `rebase`,
+        the calibration's bed z too, see _rebase(). BED_MESH_CALIBRATE
+        (limn.cfg) puts it away first, see _guess_carried().'''
+        key = self.placement
+        if key is None:
+            raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
+        carried = self._guess_carried(gcmd, '[Mesh]')
         for mesh in meshes:
             gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
             if 'origin' in mesh:
@@ -443,13 +450,14 @@ class Limn:
         self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={dx} DY={dy} DZ={dz}")
         self._draw_test_mark(gcmd, bed)
 
-    def _fsr_bed_z(self, fsr, cell):
+    def _fsr_bed_z(self, gcmd, fsr, cell):
         '''BLTouch z of a cell: from the calibration, or probed now, the carried
-        tool put away for it and taken back.'''
+        tool put away for it and taken back. The probe sits 34mm left of the pen:
+        over the array, the carriage is in the lane of holder 41.'''
         for c in self.profile.get('fsr_ref', {}).get('bed_z', []):
             if tuple(c[:3]) == cell:
                 return c[3]
-        carried = self._carried()
+        carried = self._guess_carried(gcmd, '[FSR]')
         run = self.gcode.run_script_from_command
         run("UNDOCK")
         z = fsr.bltouch_z(cell)
@@ -457,15 +465,21 @@ class Limn:
             run(f"DOCK T={carried}")
         return z
 
+    def _need_tool(self, gcmd):
+        '''The FSR only feels a tool: nothing on the carriage, nothing to jog down.'''
+        if not self._guess_carried(gcmd, '[FSR]'):
+            raise gcmd.error("[LRT] no tool on the carriage: DOCK T=<holder> first")
+
     def cmd_FSR_Z(self, gcmd):
         bed = self._bed(gcmd, 'fsr')
+        self._need_tool(gcmd)
         cell = gcmd.get('CELL', None)
         cell = tuple(int(v) for v in cell.split(',')) if cell else tuple(bed['fsr']['z_cell'])
         fsr = self._routine(gcmd, bed)
         try:
             fsr.matrix(True)
             try:
-                z = fsr.contact_z(*cell, self._fsr_bed_z(fsr, cell))
+                z = fsr.contact_z(*cell, self._fsr_bed_z(gcmd, fsr, cell))
             finally:
                 fsr.matrix(False)
         except ROUTINE_ERRORS as e:
@@ -474,6 +488,7 @@ class Limn:
 
     def cmd_FSR_EDGE(self, gcmd):
         bed = self._bed(gcmd, 'fsr')
+        self._need_tool(gcmd)
         axis = gcmd.get('AXIS', 'X').lower()
         edge = bed['fsr'][axis + '_edges'][gcmd.get_int('INDEX', 0)]
         fsr = self._routine(gcmd, bed)
@@ -481,13 +496,43 @@ class Limn:
         try:
             fsr.matrix(True)
             try:
-                z = fsr.contact_z(hop, row, col_a, self._fsr_bed_z(fsr, (hop, row, col_a)))
+                z = fsr.contact_z(hop, row, col_a, self._fsr_bed_z(gcmd, fsr, (hop, row, col_a)))
                 point, gap = fsr.find_edge(edge, z)
             finally:
                 fsr.matrix(False)
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         gcmd.respond_info(f"[LRT] {axis} edge {edge}: {point.round(3).tolist()} gap={gap:.3f} (contact z={z:.3f})")
+
+    def cmd_FSR_MATRIX(self, gcmd):
+        '''The bed's arrays in matrix mode for SECONDS: what arrives, per hop. Nothing moves.'''
+        bed = self._bed(gcmd, 'fsr')
+        fsr = self._routine(gcmd, bed)
+        seconds = gcmd.get_float('SECONDS', 1.0, minval=0.1, maxval=10.0)
+        start = self.reactor.monotonic()
+        try:
+            fsr.matrix(True)
+            self.reactor.pause(start + seconds)
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        finally:
+            try:
+                fsr.matrix(False)
+            except ROUTINE_ERRORS:
+                pass
+        heard = {}
+        for s in self.samples.since(start):
+            heard.setdefault((s.hop, s.kind, s.state), []).append(s)
+        for hop in fsr.arrays:
+            if not any(key[0] == hop and key[1:] == (FSR, S_MATRIX) for key in heard):
+                gcmd.respond_info(f"[LRT] hop {hop}: no matrix frames (FSR state {S_MATRIX}) in {seconds:.1f}s")
+        if not heard:
+            gcmd.respond_info("[LRT] nothing at all from the chain: LRT_CHAIN")
+        for (hop, kind, state), frames in sorted(heard.items()):
+            cells = max(len(f.values) for f in frames)
+            strongest = max((v[2] for f in frames for v in f.values if len(v) == 3), default=0)
+            gcmd.respond_info(f"[LRT] hop {hop} kind {kind} state {state}: {len(frames)} frames "
+                              f"({len(frames) / seconds:.0f}/s), up to {cells} cells, strongest {strongest}")
 
     def cmd_CHAIN(self, gcmd):
         if not self.dock.connect():
