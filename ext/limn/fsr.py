@@ -59,7 +59,8 @@ class Fsr:
                     raise   # turning it off can fail quietly: the error that got us here matters more
 
     def read(self, hop):
-        '''After a move: waits for it and for fresh frames -> {(row, col): strength}.'''
+        '''After a move: waits for it and for fresh frames -> {(row, col): strength},
+        without the array's dead rows.'''
         self.machine.wait_moves()
         since = self.machine.now()
         self.machine.pause(self.cfg['settle'])
@@ -68,10 +69,12 @@ class Fsr:
                 raise FsrError(f"[LRT] no frames from the FSR at hop {hop}: {self.heard(since)}")
             self.machine.pause(0.02)
 
+        dead = self.arrays[hop].get('dead_rows', ())
         cells = {}
         for frame in self.samples.since(since, hop=hop, kind=FSR, state=S_MATRIX):
             for row, col, strength in frame.values:
-                cells.setdefault((row, col), []).append(strength)
+                if row not in dead:
+                    cells.setdefault((row, col), []).append(strength)
         strengths = {cell: float(np.median(v)) for cell, v in cells.items()}
         hardest = max(strengths.values(), default=0)
         if hardest >= self.cfg['press_limit']:
@@ -89,7 +92,15 @@ class Fsr:
                 f"the node's firmware may be from before matrix mode (mcu.py update)")
 
     def responds(self, strengths, cell):
-        return strengths.get(tuple(cell), 0) >= self.cfg['respond']
+        '''Over `respond`, and close to the strongest cell: a press also lifts
+        the other rows of its column a little (crosstalk), row 3 a lot.'''
+        s = strengths.get(tuple(cell), 0)
+        return s >= self.cfg['respond'] and s >= self.cfg['dominance'] * max(strengths.values(), default=0)
+
+    def top(self, strengths, n=3):
+        '''The strongest cells, for messages.'''
+        cells = sorted(strengths, key=lambda c: -strengths[c])[:n]
+        return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells)
 
     # Z
     def contact_z(self, hop, row, col, bed_z, shift=(0, 0), top=None):
@@ -120,20 +131,26 @@ class Fsr:
         return float(np.median(found))
 
     def touched(self, strengths):
-        return [c for c in strengths if self.responds(strengths, c)]
+        '''The cells that respond, strongest first.'''
+        return sorted((c for c in strengths if self.responds(strengths, c)), key=lambda c: -strengths[c])
 
     def _descend(self, hop, cell, z, step, floor):
         '''Down until `cell` responds (None: any cell) -> (z, the cells that do).'''
+        cfg = self.cfg
         while True:
             z -= step
             if z < floor:
                 raise FsrError(f"[LRT] no contact down to z={floor:.2f}: is the tool over the array at hop {hop}?")
             self.machine.move(z=z, speed=JOG_SPEED)
-            touched = self.touched(self.read(hop))
+            strengths = self.read(hop)
+            touched = self.touched(strengths)
             if touched and (cell is None or tuple(cell) in touched):
                 return z, touched
-            if touched:
-                raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell}: check the array origin")
+            # At first touch the crosstalk can lead the pressed cell: only a
+            # real press elsewhere means the tip is not over `cell`.
+            if touched and strengths[touched[0]] >= cfg['sure']:
+                raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
+                               f"({self.top(strengths)}): check the array origin")
 
     def _back_off(self, hop, z):
         self.machine.move(z=z, speed=JOG_SPEED)
@@ -160,8 +177,15 @@ class Fsr:
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             z, _ = self._descend(hop, None, z, cfg['step'], floor)
             z = self._back_off(hop, z + 2 * cfg['step'])
-            z, touched = self._descend(hop, None, z, cfg['fine_step'], floor)
+            z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
             z_press, z_lift = z - cfg['press'], z + 1.0
+            # Which cell: pressed in, where the crosstalk has fallen behind.
+            strengths = self.tap(hop, aim, z_press, z_lift)
+            touched = self.touched(strengths)
+            if not touched:
+                raise FsrError(f"[LRT] nothing responds pressed in at {aim.round(2)} ({self.top(strengths)})")
+            # Only the strongest and its neighbours: crosstalk shows further up the column.
+            touched = [c for c in touched if max(abs(c[0] - touched[0][0]), abs(c[1] - touched[0][1])) <= 1]
             # Along each axis: two cells respond, the tip is on the edge
             # between them. One does: the tip leaves it where it reaches the
             # cell's far side, which is within two cells. The dead zone puts

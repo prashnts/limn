@@ -50,7 +50,7 @@ BEDS = {
     'BED_5': {
         'sensor': 'fsr',
         'meshes': [
-            {'origin': (108, 36), 'size': (10, 20), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
+            {'origin': (111, 40), 'size': (7.5, 19), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
         'marks': {'nx': 5, 'ny': 3, 'xrange': (15, 80), 'yrange': (120, 150), 'arm': 4},
@@ -58,14 +58,18 @@ BEDS = {
             'z_park': PANEL_ZHOME,
             # origin: outer corner of cell (row 0, col 0); col_dir / row_dir:
             # plotter direction of increasing col / row. Check with LRT_FSR_Z
-            # that the cell you aim at is the one that lights up.
+            # that the cell you aim at is the one that lights up. Mapped with
+            # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
+            # dead_rows: row 3's ADC line has no series resistor: any press in
+            # a column lifts it to ~500, pressed or not. It tells nothing.
             # aim: (row, col), in cells from the origin, where the tip first
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
             # off than the array reaches from there is not found: here -3.75..
-            # +6.25mm in X (4 rows), -8.75..+11.25mm in Y (8 cols).
+            # +3.75mm in X (rows 0-2), -8.75..+11.25mm in Y (8 cols).
             'arrays': [
-                {'hop': 1, 'origin': (108, 36), 'col_dir': (0, 1), 'row_dir': (1, 0), 'aim': (1.5, 3.5)},
+                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 3.5),
+                 'dead_rows': (3,)},
             ],
             'pitch': 2.5,
             'z_cell': (1, 1, 3),                # hop, row, col used for z
@@ -82,6 +86,10 @@ BEDS = {
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
             'respond': 150,         # strength (0..1000) that counts as touched
+            # A press lifts the other rows of its column too, row 3 (no series
+            # resistor on its ADC line) to ~530 while the pressed cell is ~880:
+            'dominance': 0.75,      # a cell responds only this close to the strongest
+            'sure': 700,            # another cell this strong: the tip is there, not crosstalk
             'press_limit': 950,     # strength that means pressing too hard: lift now
             'press': 0.3,           # mm below contact for the XY taps
             'resolution': 0.02,     # mm, edge search stops here

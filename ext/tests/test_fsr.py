@@ -26,7 +26,8 @@ class FsrBed:
     toolhead, pressing on an FSR array with a dead zone between cells.'''
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
-                 noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None):
+                 noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
+                 crosstalk=False):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -43,6 +44,7 @@ class FsrBed:
         self.responds = responds
         self.spike = spike
         self.disconnect_after = disconnect_after
+        self.crosstalk = crosstalk              # as on BED_5: a press lifts its column's row 3 to ~530, row 0 a bit
         self.rng = np.random.default_rng(7)
         self.lowest_z = 99.0
         self.dragged = False
@@ -98,7 +100,9 @@ class FsrBed:
             for col in range(array.cols):
                 s = abs(self.rng.normal(0, self.noise))
                 if (row, col) == pressed and self.responds:
-                    s = 1000 if self.spike else min(1000, self.press() * self.gain) + s
+                    s = 1000 if self.spike else min(880, self.press() * self.gain) + s
+                elif self.crosstalk and pressed and col == pressed[1] and self.responds:
+                    s += {3: 530, 0: 220}.get(row, 0)
                 values.append([row, col, int(s)])
         return values
 
@@ -142,8 +146,8 @@ def test_calibrate():
     ref = profile['fsr_ref']
     assert [s.split()[0] for s in bed.ran[:3]] == ['UNDOCK', 'G28', '_CLEAR_OFFSETS']
     assert bed.ran[-1].startswith('WRITE_TOOL_TAG DX=0 DY=0 DZ=')
-    # The edges sit between the cells: x = 108 + 2 * 2.5 between rows, y = 36 + 4 * 2.5 between cols.
-    assert abs(ref['x'] - 113.0) < 0.03 and abs(ref['y'] - 46.0) < 0.03
+    # The edges sit between the cells: x = 111 + 2 * 2.5 between rows, y = 59.6 - 4 * 2.5 between cols.
+    assert abs(ref['x'] - 116.0) < 0.03 and abs(ref['y'] - 49.6) < 0.03
     assert all(0.3 < g < 0.5 for g in ref['gaps'])
     assert not bed.dragged
     assert bed.pos[2] == fsr.cfg['z_park']
@@ -160,6 +164,18 @@ def test_tool_offsets():
     _, _, ref_dz = ref_fsr.probe_tool(profile)
     assert abs(ref_dz - 1.0) < 0.1 and abs(dz - ref_dz - 0.4) < 0.03
     assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
+
+def test_crosstalk_up_the_column():
+    '''BED_5: a press lifts row 3 of its column to ~530 at once, before the pressed
+    cell gets there. Measured all the same, far off too.'''
+    fsr, bed, _ = setup(crosstalk=True)
+    profile = fsr.calibrate()
+    for tip in ((0.35, -0.2), (3.4, -5.0), (-1.6, -0.9)):
+        fsr, bed, _ = setup(tip=tip, crosstalk=True)
+        bed.tool = 'T1'
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
+        assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
 
 def test_dead_sensor_lifts():
     profile = calibrated()
@@ -224,9 +240,9 @@ def test_dock_disconnect_lifts():
     assert bed.pos[2] == fsr.cfg['z_park']
 
 def test_tools_far_off():
-    '''A few mm off in X (4 rows) and more in Y (8 cols): found, and measured.'''
+    '''A few mm off in X (rows 0-2) and more in Y (8 cols): found, and measured.'''
     profile = calibrated()
-    for tip in ((3.4, -5.0), (-3.2, 8.0), (5.5, 1.9), (-1.6, -0.9)):
+    for tip in ((3.4, -5.0), (-3.2, 8.0), (3.0, 1.9), (-1.6, -0.9)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
         dx, dy, _ = fsr.probe_tool(profile)
@@ -235,7 +251,7 @@ def test_tools_far_off():
 
 def test_off_the_array_stops_at_the_floor():
     profile = calibrated()
-    # Misses the 4 rows; lands on a dead zone (this tip has no width to reach a cell)
+    # Misses the rows; lands on a dead zone (this tip has no width to reach a cell)
     for tip in ((-4.5, 0.0), (0.0, 1.25)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
@@ -251,7 +267,7 @@ def test_array_origin_only_roughly_right():
     profile = calibrated()
     cfg = bed_cfg()
     fsr, bed, _ = setup(cfg=cfg, tip=(0.35, -0.2))
-    cfg['arrays'][0]['origin'] = (109.5, 35.2)     # we aim off, the cells are where they were
+    cfg['arrays'][0]['origin'] = (112.5, 58.8)     # we aim off, the cells are where they were
     fsr.arrays = {a['hop']: a for a in cfg['arrays']}
     bed.tool = 'T1'
     dx, dy, _ = fsr.probe_tool(profile)
