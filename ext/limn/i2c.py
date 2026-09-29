@@ -168,8 +168,10 @@ class PN532:
             raise RuntimeError(f"PN532: unexpected reply to 0x{cmd:02x}")
         return reply[2:]
 
-    def begin(self, retries=0x10):
-        '''Wakes it up, makes "no tag" come back after `retries` tries -> firmware version.'''
+    def begin(self, retries=0xFF):
+        '''Wakes it up -> firmware version. `retries`: activations before it answers "no
+        tag"; 0xFF (its default, as adafruit_pn532 leaves it) keeps trying until read_uid's
+        timeout aborts it. A few tries, 0x10, gave up well before that and missed tags.'''
         try:
             self.call(CMD_SAM_CONFIGURATION, [0x01, 0x14, 0x01])
         except (OSError, TimeoutError, RuntimeError):
