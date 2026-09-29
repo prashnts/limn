@@ -270,6 +270,7 @@ def test_fsr_matrix_reports_what_arrives():
     assert sent == [(1, 'matrix(on)'), (1, 'matrix(off)')]
     line = next(s for s in gcode.said if 'state 43' in s)
     assert 'hop 1 kind 4 state 43' in line and '32 cells' in line and 'strongest 900' in line, line
+    assert any(s.startswith('[LRT] hop 1 cells: (1, 3)=900, ') for s in gcode.said), gcode.said
 
     gcode.said.clear()                                      # an array that only sends touches
     ext.samples = limn.Samples()
