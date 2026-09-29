@@ -84,6 +84,7 @@ BEDS = {
             # and never goes below the bottom.
             'tool_z': (-0.5, 3.0),
             'step': 0.1,            # mm, coarse z steps: a step can go this far past contact before it is seen
+            'back_off': 0.4,        # mm up after finding contact: clear of it, a tip on an edge registers ~0.2 deep
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop

@@ -135,10 +135,10 @@ class Fsr:
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             for _ in range(cfg['repeats']):
                 z, _ = self._descend(hop, (row, col), z, cfg['step'], floor)
-                z = self._back_off(hop, z + 2 * cfg['step'])
+                z = self._back_off(hop, z + cfg['back_off'])
                 z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
                 found.append(z)
-                z = self._back_off(hop, z + 2 * cfg['step'])
+                z = self._back_off(hop, z + cfg['back_off'])
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         return float(np.median(found))
@@ -196,7 +196,7 @@ class Fsr:
             if self.touched(self.read(hop), hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             z, _ = self._descend(hop, None, z, cfg['step'], floor)
-            z = self._back_off(hop, z + 2 * cfg['step'])
+            z = self._back_off(hop, z + cfg['back_off'])
             z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
             self.depth[hop] = self.press_depth(hop, None, z)
             z_press, z_lift = z - self.depth[hop], z + 1.0
@@ -220,7 +220,7 @@ class Fsr:
             self.machine.wait_moves()
         self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead (cells {touched}), "
                          f"taps press {self.depth[hop]:.2f}mm")
-        return shift, z + 2 * cfg['step']
+        return shift, z + cfg['back_off']
 
     def press_depth(self, hop, cell, z):
         '''How far past contact the taps press, the tip at contact (z) over
