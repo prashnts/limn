@@ -132,6 +132,30 @@ def test_reference_flag():
     assert holder.write_tag(dz=0.9).reference                # other fields leave it
     assert holder.write_tag(reference=False).reference is False
 
+def test_format_2_pen_and_colour():
+    '''A format 1 tag (offsets, name) reads with no pen and no colour; writing either
+    makes it format 2 and keeps what was there: offsets, name, the reference flag.'''
+    _, holder, _, nfc, _, _ = make(pages=tag_pages(name='Micron 01 Blue'))
+    nfc.pages[16] = b'\x00\x11\x22\x33'                   # an old tag's leftovers: not format 2
+    tag = holder.read_tag()
+    assert (tag.pen, tag.color) == (None, None)
+    tag = holder.write_tag(pen='sakura-micron-01', color='#1F4AA8')
+    assert (tag.pen, tag.color, tag.name, tag.dx, tag.reference) == \
+        ('sakura-micron-01', '#1f4aa8', 'Micron 01 Blue', 1.25, False)
+    assert nfc.writes[-1] == 16, 'the mark goes last: a half written tag stays format 1'
+    assert set(nfc.writes) == {16, 17, 18, 19, 20, 21}
+    tag = holder.write_tag(color='#c8102e')                  # the pen stays
+    assert (tag.pen, tag.color) == ('sakura-micron-01', '#c8102e')
+    tag = holder.write_tag(pen='stabilo-88')                 # the colour stays
+    assert (tag.pen, tag.color) == ('stabilo-88', '#c8102e')
+    assert holder.write_tag(color='').color is None and holder.read_tag().pen == 'stabilo-88'
+    for bad in (dict(pen='Has Spaces'), dict(pen='x' * 17), dict(color='blue')):
+        try:
+            holder.write_tag(**bad)
+            assert False, bad
+        except ValueError:
+            pass
+
 def test_write_without_tag():
     reactor, holder, *_ = make(pages=None)
     try:

@@ -70,6 +70,9 @@ class Tool(BaseModel):
     z_min: float | None = None  # narrow the machine's z limits for this tool
     z_max: float | None = None
     link: float | None = None   # stays down across gaps up to this; default half its width
+    pen: str | None = None      # the pen library's key (pens.toml), from the tool's tag
+    holder: int | None = None   # the holder it is in, when its tag says what it is
+    source: str = 'profile'     # profile: tools.toml; tag: its tag; stale: a tag from before a hand was there
 
     @property
     def call(self):

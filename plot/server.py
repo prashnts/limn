@@ -26,7 +26,7 @@ from .emit import load, plot
 from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, Placement, ShapePaint
 from .preview import parse
-from .profile import bed_papers
+from .profile import bed_papers, load_pens
 from .slicer import Cache, default_groups, text_shapes
 
 STATIC = Path(__file__).parent / 'static'
@@ -52,6 +52,8 @@ class Workspace:
         self.lock = threading.RLock()
         self.gcode, self.name = None, None
         self.undos, self.redos = [], []
+        self.tags = None            # printer.limn.tools: what the tools' tags say, None: not asked yet
+        self.printer_job = None     # a scan or a tag write running on the printer, see run_on_printer()
 
     def save(self):
         self.job.save(self.job_path)
@@ -82,8 +84,26 @@ class Workspace:
     def drawing(self, o):
         return svg.load_cached(self.data / o.svg, o.tolerance)
 
+    def fetch_tags(self, timeout=2):
+        '''The tags from Klipper, when it can be reached -> whether they changed.'''
+        machine, _ = load(self.job)
+        try:
+            r = requests.get(f'{machine.moonraker.rstrip("/")}/printer/objects/query', params={'limn': 'tools'},
+                             timeout=timeout)
+            r.raise_for_status()
+            tags = (r.json()['result']['status'].get('limn') or {}).get('tools') or {}
+        except Exception:
+            if self.tags is None:
+                self.tags = {}
+            return False
+        changed = tags != self.tags
+        self.tags = tags
+        return changed
+
     def state(self):
-        machine, tools = load(self.job)
+        if self.tags is None:
+            self.fetch_tags()
+        machine, tools = load(self.job, self.tags)
         objects = {}
         for o in self.job.objects:
             d = self.drawing(o)
@@ -102,8 +122,12 @@ class Workspace:
             objects[o.id] = {'size': [d.size[0] * o.scale, d.size[1] * o.scale], 'groups': groups,
                              'texts': texts, 'shapes': len(d.shapes), 'skipped': d.skipped}
         m = machine.model_dump()
+        pens = load_pens()
+        holders = [{'t': f'T{i}', 'holder': h, 'tag': (self.tags or {}).get(str(h))}
+                   for i, h in enumerate(machine.holders)]
         return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine),
                 'tools': {k: {**t.model_dump(), 'spacing': t.spacing} for k, t in tools.items()},
+                'pens': pens, 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
                 'line_fonts': HERSHEY + [f.file for f in self.fonts.fonts() if f.kind == 'line'],
                 'objects': objects}
@@ -123,7 +147,7 @@ class Workspace:
 
     def slice(self):
         t0 = time.monotonic()
-        result, sliced = plot(self.job, self.cache, self.fonts)
+        result, sliced = plot(self.job, self.cache, self.fonts, self.tags)
         self.gcode = result.gcode
         self.name = 'limn-' + '-'.join(o.id for o in self.job.objects)[:60] + '.gcode'
         sim = parse(result.gcode)
@@ -355,13 +379,80 @@ def create_app(data=None):
             r.raise_for_status()
             st = r.json()['result']['status']
         except Exception as e:
-            return {'ok': False, 'url': url, 'error': str(e)}
+            return {'ok': False, 'url': url, 'error': str(e), 'job': ws.printer_job}
         ps, limn = st.get('print_stats', {}), st.get('limn') or {}
         holder = limn.get('tool_holder') or {}
+        tags = limn.get('tools') or {}
+        with ws.lock:
+            changed = tags != ws.tags
+            ws.tags = tags
         return {'ok': True, 'url': url, 'state': ps.get('state'), 'file': ps.get('filename'),
+                'tools': tags, 'tools_changed': changed, 'job': ws.printer_job,
                 'progress': (st.get('virtual_sdcard') or {}).get('progress'),
                 'homed': (st.get('toolhead') or {}).get('homed_axes'),
                 'bed': limn.get('bed'), 'occupied': holder.get('occupied'), 'tag': limn.get('tag')}
+
+    def run_on_printer(what, script):
+        '''A script that moves the machine for a while (a scan, a tag write), in the
+        background: one at a time, never while printing. /api/printer tells how it went.'''
+        job = ws.printer_job
+        if job and not job['done']:
+            raise HTTPException(409, f"the printer is busy with {job['what']}")
+        url = moonraker()
+        try:
+            st = requests.get(f'{url}/printer/objects/query', params={'print_stats': 'state'}, timeout=3)
+            state = st.json()['result']['status']['print_stats']['state']
+        except Exception as e:
+            raise HTTPException(502, f'Moonraker at {url}: {e}')
+        if state in ('printing', 'paused'):
+            raise HTTPException(409, f'the printer is {state}')
+        job = ws.printer_job = {'what': what, 'script': script, 'started': time.time(), 'done': False, 'error': None}
+
+        def go():
+            try:
+                r = requests.post(f'{url}/printer/gcode/script', json={'script': script}, timeout=1800)
+                if r.status_code != 200:
+                    try:
+                        job['error'] = r.json()['error']['message']
+                    except Exception:
+                        job['error'] = f'HTTP {r.status_code}'
+            except Exception as e:
+                job['error'] = str(e)
+            finally:
+                job['done'], job['ended'] = True, time.time()
+                with ws.lock:
+                    ws.fetch_tags()
+        threading.Thread(target=go, daemon=True).start()
+        return {'job': job}
+
+    @app.post('/api/scan')
+    def scan(body: dict = Body(default={})):
+        '''TOOL_SCAN: every occupied holder, or {"holders": [41, 43]}.'''
+        holders = [int(h) for h in body.get('holders') or []]
+        return run_on_printer('scanning the tools', 'TOOL_SCAN' + (f" T={','.join(map(str, holders))}" if holders else ''))
+
+    @app.post('/api/holders/{holder}/tag')
+    def write_tag(holder: int, body: dict = Body(...)):
+        '''{pen, color, name}: onto the tag of the tool in `holder` (TOOL_TAG_SET).'''
+        machine, _ = load(ws.job)
+        if holder not in machine.holders:
+            raise HTTPException(404, f'no holder {holder}')
+        pens = load_pens()
+        pen = (body.get('pen') or '').strip().lower()
+        if pen and pen not in pens:
+            raise HTTPException(400, f'no pen {pen!r} in the library')
+        color = (body.get('color') or '').strip().lstrip('#').lower()
+        if color and (len(color) != 6 or any(c not in '0123456789abcdef' for c in color)):
+            raise HTTPException(400, f'colour {body.get("color")!r}: #rrggbb')
+        name = (body.get('name') or '').strip()
+        if len(name.encode()) > 20 or any(c in name for c in '"\n;#'):
+            raise HTTPException(400, f'name {name!r}: up to 20 characters, no quotes, ; or #')
+        args = ''.join(f' {k}={v}' for k, v in (('PEN', pen), ('COLOR', color)) if v)
+        if name:
+            args += f' NAME="{name}"'
+        if not args:
+            raise HTTPException(400, 'nothing to write: pen, color or name')
+        return run_on_printer(f'writing the tag of {holder}', f'TOOL_TAG_SET T={holder}{args}')
 
     @app.post('/api/printer/upload')
     def upload(body: dict = Body(default={})):

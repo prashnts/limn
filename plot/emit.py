@@ -22,7 +22,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 from .gcode import Writer, num
 from .order import improve, join, order
 from .preview import parse, stats
-from .profile import load_machine, load_tools, reach
+from .profile import load_machine, load_pens, load_tools, reach, with_tags
 from .slicer import Cache
 
 KEEP_OUT = math.inf
@@ -211,13 +211,16 @@ def emit(job, machine, tools, sliced) -> Result:
     return Result(text, problems + e.problems, stats(sim, machine, tools))
 
 
-def load(job):
-    '''The job's machine and tools, with its overrides.'''
+def load(job, tags=None):
+    '''The job's machine and tools, with its overrides. tags: printer.limn.tools, what the
+    tools' tags say they are (with_tags).'''
     def near(name):
         p = job.root / name
         return str(p) if p.suffix == '.toml' and p.exists() else name
     machine = load_machine(near(job.machine), job.machine_overrides)
     tools = load_tools(near(job.tools))
+    if tags:
+        tools = with_tags(tools, load_pens(), tags, machine.holders)
     for tid, over in job.tool_overrides.items():
         if tid in tools and over:
             t = tools[tid]
@@ -225,9 +228,9 @@ def load(job):
     return machine, tools
 
 
-def plot(job, cache=None, fonts=None) -> tuple[Result, dict]:
+def plot(job, cache=None, fonts=None, tags=None) -> tuple[Result, dict]:
     '''Slice what isn't sliced yet (cache), and write the job's G-code.'''
-    machine, tools = load(job)
+    machine, tools = load(job, tags)
     cache = cache or Cache()
     sliced = {obj.id: cache.get(obj, tools, job.root, fonts) for obj in job.objects}
     return emit(job, machine, tools, sliced), sliced

@@ -387,6 +387,34 @@ def test_tag_write():
     assert 'write failed' in raises(lambda: gcode.run('TOOL_TAG_WRITE', DZ=1))
 
 
+def test_tags_are_kept_by_holder():
+    '''What each holder's tool last read, saved (the web UI takes the pens from it);
+    a hand on a holder makes it stale: another tool may be in it now.'''
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(low=(15, 13, 12, 11), pages=tag_pages(), carried=42)
+    printer.events['klippy:connect']()
+    wait(printer, 1)
+    gcode.run('TOOL_TAG_WRITE', PEN='sakura-micron-01', COLOR='1F4AA8', NAME='Micron 01 Blue')
+    t = ext.get_status(0)['tools']['42']
+    assert (t['pen'], t['color'], t['name'], t['dx'], t['stale']) == \
+        ('sakura-micron-01', '#1f4aa8', 'Micron 01 Blue', 1.25, False)
+    assert svv['tool_tags']['42']['pen'] == 'sakura-micron-01'
+    assert 'sakura-micron-01 #1f4aa8' in gcode.said[-1]
+    gcode.run('TOOL_TAGS')
+    assert '42: Micron 01 Blue, sakura-micron-01 #1f4aa8' in gcode.said[-1] and '41: not read' in gcode.said[-1]
+    assert 'COLOR' not in raises(lambda: gcode.run('TOOL_TAG_WRITE', PEN='No Spaces'))
+    assert 'rrggbb' in raises(lambda: gcode.run('TOOL_TAG_WRITE', COLOR='blue'))
+    # Back in its holder by hand, and out again: stale
+    mcp.low.add(14)
+    wait(printer, 1)
+    assert ext.get_status(0)['tools']['42']['stale'] and svv['tool_tags']['42']['stale']
+    gcode.run('TOOL_TAGS')
+    assert 'STALE' in gcode.said[-1]
+    # Saved over a restart
+    ext2, printer2, *_ = make_with_holder()
+    printer2.objects['save_variables'].allVariables['tool_tags'] = svv['tool_tags']
+    assert ext2.get_status(0)['tools']['42']['name'] == 'Micron 01 Blue'
+
+
 def test_leds_at_startup():
     ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
     assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
