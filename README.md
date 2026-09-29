@@ -6,9 +6,24 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 - `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
 - `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1]`. Klipper's user needs to be in the `i2c` group.
 - `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
+- `plot/`: SVG to G-code, and the web UI to place, paint, preview and plot drawings (`plot/README.md`). On the Pi, supervisord runs it on port 4219 (`limn_web.conf`, see *Web UI on the Pi*).
 - `slicer/config.ini`: Sample PrusaSlicer config to make it suitable for plotting.
 - `GEOMETRY.md`: where everything is, in plotter coordinates: axes, body, beds, dock and tools, heights, probe, camera.
 - `step/`: (todo) 3D Printable Parts
+
+
+## Web UI on the Pi
+
+The plot UI runs next to Klipper and talks to Moonraker on the same Pi. Its workspace (the job, dropped SVGs, fonts) is `~/limn/plot-data`.
+
+```sh
+cd ~/limn && git pull && uv sync        # the plot dependencies (shapely, svgelements, fonttools, uharfbuzz, ..)
+sudo ln -sf ~/limn/limn_web.conf /etc/supervisor/conf.d/limn_web.conf
+sudo supervisorctl reread && sudo supervisorctl update
+sudo supervisorctl status limn_web      # then http://<pi>:4219
+```
+
+After a `git pull` that changes `plot/`: `sudo supervisorctl restart limn_web`. It has no login: keep it on the LAN.
 
 
 ## Bed meshes and test marks
