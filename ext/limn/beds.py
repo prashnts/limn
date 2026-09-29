@@ -62,6 +62,8 @@ BEDS = {
             # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
             # dead_rows: row 3's ADC line has no series resistor: any press in
             # a column lifts it to ~500, pressed or not. It tells nothing.
+            # crosstalk_rows: a press in a column lifts row 0 too, less; with a
+            # fine tip split on an edge, as much as the pressed cells (fsr.py, touched).
             # aim: (row, col), in cells from the origin, where the tip first
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
@@ -69,7 +71,7 @@ BEDS = {
             # +3.75mm in X (rows 0-2), -8.75..+11.25mm in Y (8 cols).
             'arrays': [
                 {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 3.5),
-                 'dead_rows': (3,)},
+                 'dead_rows': (3,), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
             'z_cell': (1, 1, 3),                # hop, row, col used for z
@@ -93,6 +95,10 @@ BEDS = {
             'press_limit': 950,     # strength that means pressing too hard: lift now
             'press': 0.3,           # mm below contact for the XY taps
             'prior_margin': 0.4,    # mm below an expected contact z the search may go
+            # The taps follow the sheet with this mesh (the moves are raw, no mesh):
+            # it drops ~0.05mm per mm towards -Y, a fine tip lost 0.25 of its 0.3mm
+            # press over a 5mm search on 2026-09-28.
+            'surface_mesh': 'lrt_fsr',
             'resolution': 0.02,     # mm, edge search stops here
             'repeats': 3,           # z measurements, median
         },
