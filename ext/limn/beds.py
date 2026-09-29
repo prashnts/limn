@@ -101,6 +101,10 @@ BEDS = {
             # it drops ~0.05mm per mm towards -Y, a fine tip lost 0.25 of its 0.3mm
             # press over a 5mm search on 2026-09-28.
             'surface_mesh': 'lrt_fsr',
+            # Between two pens the sheet is wiped (fsr.py, wait_clean): the carried
+            # pen parks at `park`, over the paper and clear of the holders, until
+            # presses on `wipe_cells` cells are seen and then `quiet` s without any.
+            'clean': {'park': (60, 100), 'wipe_cells': 3, 'quiet': 2.0, 'timeout': 600},
             'resolution': 0.02,     # mm, edge search stops here
             'repeats': 3,           # z measurements, median
         },

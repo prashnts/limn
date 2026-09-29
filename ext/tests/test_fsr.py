@@ -27,7 +27,7 @@ class FsrBed:
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
-                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0):
+                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=()):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -49,6 +49,7 @@ class FsrBed:
         self.slope_y = slope_y                  # the sheet rises this much per mm in Y, on top of bed_z
         self.mesh = mesh                        # an lrt_fsr mesh of it, as LRT_MESH_CALIBRATE takes
         self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
+        self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
         self.rng = np.random.default_rng(7)
         self.lowest_z = 99.0
         self.dragged = False
@@ -133,6 +134,9 @@ class FsrBed:
                     s += {3: 530, 0: 220}.get(row, 0)
                 elif row in rows:
                     s += self.row_crosstalk * pressed * rows[row]
+                for t0, t1, cells, strength in self.wipes:
+                    if t0 <= self.t < t1 and (row, col) in cells:
+                        s = strength
                 values.append([row, col, int(s)])
         return values
 
@@ -307,6 +311,28 @@ def test_crosstalk_along_the_row():
     bed.tool = 'T0'
     m = fsr.measure(bed_z, {'tip': (-1.2, 1.1), 'z': None})
     assert abs(m['x'] - profile['fsr_ref']['x'] - 1.3) < 0.03 and abs(m['y'] - profile['fsr_ref']['y'] + 0.95) < 0.03
+
+def test_waits_for_the_sheet_to_be_wiped():
+    '''A cloth over the sheet: presses on several cells, hard, then nothing.'''
+    wipe = (5.0, 7.0, {(0, 1), (1, 2), (2, 4), (1, 6)}, 1000)
+    fsr, bed, dock = setup(wipes=[wipe])
+    bed.tool = 'T1'
+    fsr.wait_clean()
+    clean = fsr.cfg['clean']
+    assert tuple(bed.pos[:2]) == clean['park'] and bed.pos[2] == fsr.cfg['z_park']
+    assert 7.0 + clean['quiet'] <= bed.t < 7.0 + clean['quiet'] + 1.0, bed.t
+    assert bed.ran == ['_BUZZ_WARN', '_BUZZ_DOOP'] and not dock.matrix
+
+def test_a_brush_on_one_cell_is_no_wipe():
+    fsr, bed, dock = setup(wipes=[(1.0, 2.0, {(1, 3)}, 600)])
+    fsr.cfg = {**fsr.cfg, 'clean': {**fsr.cfg['clean'], 'timeout': 20}}
+    bed.tool = 'T1'
+    try:
+        fsr.wait_clean()
+        assert False, 'should give up'
+    except FsrError as e:
+        assert "wasn't wiped" in str(e) and '1 of 3' in str(e), e
+    assert not dock.matrix
 
 def test_dead_sensor_lifts():
     profile = calibrated()

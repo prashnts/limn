@@ -43,6 +43,8 @@ class Fsr:
         self.cfg = cfg
         self.arrays = {a['hop']: a for a in cfg['arrays']}
         self.surface = None         # the array's bed mesh profile, see follow()
+        self.before_measure = None  # called before / after measuring a tool: the wipe
+        self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
     def array(self, hop):
         a = self.arrays[hop]
@@ -59,9 +61,9 @@ class Fsr:
                 if on:
                     raise   # turning it off can fail quietly: the error that got us here matters more
 
-    def read(self, hop):
+    def read(self, hop, limit=True):
         '''After a move: waits for it and for fresh frames -> {(row, col): strength},
-        without the array's dead rows.'''
+        without the array's dead rows. limit: a press over press_limit stops us.'''
         self.machine.wait_moves()
         since = self.machine.now()
         self.machine.pause(self.cfg['settle'])
@@ -78,7 +80,7 @@ class Fsr:
                     cells.setdefault((row, col), []).append(strength)
         strengths = {cell: float(np.median(v)) for cell, v in cells.items()}
         hardest = max(strengths.values(), default=0)
-        if hardest >= self.cfg['press_limit']:
+        if limit and hardest >= self.cfg['press_limit']:
             raise FsrError(f"[LRT] pressing too hard on the FSR at hop {hop} ({hardest:.0f})")
         return strengths
 
@@ -312,6 +314,8 @@ class Fsr:
                 contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
             return contact[hop]
 
+        if self.before_measure:
+            self.before_measure()
         self.matrix(True)
         try:
             z = on(*cfg['z_cell'])
@@ -325,6 +329,8 @@ class Fsr:
                     self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} gap={gap:.3f}")
         finally:
             self.matrix(False)
+            if self.after_measure:
+                self.after_measure()        # it touched the sheet, even when it stopped
         return {
             'z': z,
             'x': float(np.mean(points['x'])),
@@ -332,6 +338,39 @@ class Fsr:
             'gaps': gaps,
             'tip': [float(v) for v in shift[cfg['z_cell'][0]]],
         }
+
+    # Between pens
+    def wait_clean(self):
+        '''Ink from the last pen on the sheet would end up on the next one: park the
+        carried tool away from the array and wait for the sheet to be wiped, that
+        is presses on `wipe_cells` cells or more, then `quiet` seconds with none.'''
+        cfg, clean = self.cfg, self.cfg['clean']
+        self.machine.move(z=cfg['z_park'])
+        self.machine.move(*clean['park'])
+        self.machine.gcode_run("_BUZZ_WARN")
+        self.machine.say(f"[LRT] Wipe the FSR sheet, then take your hand off it (waiting up to {clean['timeout']}s)")
+        seen, quiet_since = set(), None
+        start = self.machine.now()
+        self.matrix(True)
+        try:
+            while True:
+                now = self.machine.now()
+                if now - start > clean['timeout']:
+                    raise FsrError(f"[LRT] the FSR sheet wasn't wiped within {clean['timeout']}s "
+                                   f"({len(seen)} of {clean['wipe_cells']} cells pressed)")
+                pressed = {(hop, c) for hop in self.arrays
+                           for c, s in self.read(hop, limit=False).items() if s >= cfg['respond']}
+                seen |= pressed
+                if pressed or len(seen) < clean['wipe_cells']:
+                    quiet_since = None
+                elif quiet_since is None:
+                    quiet_since = now
+                elif now - quiet_since >= clean['quiet']:
+                    break
+        finally:
+            self.matrix(False)
+        self.machine.gcode_run("_BUZZ_DOOP")
+        self.machine.say(f"[LRT] Sheet wiped ({len(seen)} cells pressed), carrying on")
 
     def calibrate(self):
         '''With the reference tool (T4). -> profile for the [limn] section.'''
