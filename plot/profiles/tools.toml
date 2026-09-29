@@ -1,0 +1,66 @@
+# The tools in the holders, by the macro that picks them up (T0 -> DOCK T=41).
+# Seeded from the extruders in slicer/config.ini: edit to what is in the holders.
+#
+# kind: pen, pencil, brush, laser (plot/tools.py), or "package.module:Class",
+# or a kind from a file in `plugins` (paths relative to this file).
+# width: the line the tool leaves, mm. Fills are spaced width * (1 - overlap).
+# Heights are over the surface (the paper: 0), tag offsets applied; z_min and
+# z_max narrow the machine's limits for this tool.
+
+plugins = []
+
+[T0]
+kind = "pen"
+name = "Stabilo Test Blue"  # its tag; the sacrificial one, for tests
+color = "#3a4fb8"
+width = 0.4
+
+[T1]
+kind = "pen"
+name = "Green 0.5"
+color = "#21ff06"
+width = 0.5
+
+[T2]
+kind = "pen"
+name = "Green 0.5"
+color = "#21ff06"
+width = 0.5
+
+[T3]
+kind = "pen"
+name = "Red 0.5"
+color = "#fb0207"
+width = 0.5
+
+[T4]
+kind = "pen"
+name = "Fineliner 0.5"
+color = "#8000ff"
+width = 0.5
+
+# [T5]
+# kind = "pencil"
+# name = "HB pencil"
+# color = "#555555"
+# width = 0.3
+# z_down = 0.6
+# wear = 0.05          # mm lower per metre drawn, as the lead wears
+# z_min = 0.2          # never press further than this
+#
+# [T6]
+# kind = "brush"
+# name = "Round brush"
+# color = "#1f4fff"
+# width = 2.0
+# reload_every = 120   # mm drawn per dip
+# well = [100, 20]
+# well_z = 0.5
+#
+# [T7]
+# kind = "laser"
+# name = "Laser 1W"
+# color = "#ff6a00"
+# width = 0.15
+# focus = 5
+# power = 180
