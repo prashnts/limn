@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Limn Plot</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">limn<span>plot</span></div>
+  <div class="seg" id="views" role="group" aria-label="View">
+    <button data-view="original">Original</button>
+    <button data-view="tools" class="on">Tools</button>
+    <button data-view="paths">Paths</button>
+  </div>
+  <label class="check"><input type="checkbox" id="show-travel" checked> travel</label>
+  <label class="check"><input type="checkbox" id="show-art" checked> bed art</label>
+  <div class="grow"></div>
+  <div id="slice-status" class="status">—</div>
+  <div id="printer-pill" class="pill" title="Klipper">printer …</div>
+</header>
+
+<main>
+  <aside id="left">
+    <section>
+      <label id="drop" class="drop">
+        <input type="file" id="svg-input" accept=".svg,image/svg+xml" multiple hidden>
+        <b>Drop SVGs</b> on the bed, or click here
+      </label>
+      <ul id="objects" class="list"></ul>
+    </section>
+    <section id="object-panel" hidden></section>
+  </aside>
+
+  <div id="stage">
+    <canvas id="ruler-x" class="ruler x"></canvas>
+    <canvas id="ruler-y" class="ruler y"></canvas>
+    <div class="ruler-corner"></div>
+    <div id="cursor" class="cursor mono"></div>
+    <nav id="rail" class="rail" aria-label="Tools">
+      <button data-mode="select" class="on" title="Select, move, scale, rotate (V)">
+        <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg></button>
+      <button data-mode="pan" title="Pan (H, or hold Space)">
+        <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+      <button data-mode="paint" title="Paint with a tool (P)">
+        <svg viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z M12 6l6 6"/></svg></button>
+      <hr>
+      <button data-act="undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-3"/></svg></button>
+      <button data-act="redo" title="Redo (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h3"/></svg></button>
+      <hr>
+      <button data-act="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    </nav>
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+      <g id="world" transform="scale(1,-1)">
+        <g id="bed-layer"></g>
+        <g id="design-layer"></g>
+        <g id="paths-layer"></g>
+        <g id="overlay-layer"></g>
+      </g>
+    </svg>
+    <div id="hint" class="hint"></div>
+    <div class="zoom">
+      <button id="zoom-fit" title="Fit the bed (F)">Fit</button>
+      <button id="zoom-in" title="Zoom in (+)">+</button>
+      <button id="zoom-out" title="Zoom out (−)">−</button>
+    </div>
+    <div id="scrub" class="scrub">
+      <button id="play" title="Play the plot">▶</button>
+      <input type="range" id="scrubber" min="0" max="0" value="0" aria-label="G-code line">
+      <span id="scrub-line" class="mono">—</span>
+      <button id="gcode-toggle" title="Show the G-code">G-code</button>
+    </div>
+    <pre id="gcode-view" class="gcode" hidden></pre>
+  </div>
+
+  <aside id="right">
+    <section>
+      <h2>Paint</h2>
+      <div class="row">
+        <div class="seg small" id="paint-target" role="group" aria-label="Paint what">
+          <button data-v="both" class="on">both</button>
+          <button data-v="stroke">stroke</button>
+          <button data-v="fill">fill</button>
+        </div>
+        <div class="seg small" id="paint-scope" role="group" aria-label="Paint scope">
+          <button data-v="shape" class="on">shape</button>
+          <button data-v="colour">colour</button>
+        </div>
+      </div>
+      <div id="palette" class="palette"></div>
+      <p class="note">Pick a tool, then click shapes. Shift-click paints the whole colour. Esc stops.</p>
+      <p class="note keys">V select · H pan · P paint · drag corners to scale (Alt: about the middle) · knob to turn (Shift: 15°) · R quarter turn · arrows nudge (Shift 10, Alt 0.1) · Ctrl+D duplicate · Del remove · Ctrl+Z / Ctrl+Shift+Z</p>
+    </section>
+    <section>
+      <h2>Output</h2>
+      <div id="stats" class="stats"></div>
+      <ul id="problems" class="problems"></ul>
+      <div class="buttons">
+        <a id="download" class="button" href="/api/gcode">Download</a>
+        <button id="upload">Upload</button>
+        <button id="print" class="primary">Upload &amp; plot</button>
+      </div>
+    </section>
+    <section>
+      <h2>Machine</h2>
+      <div id="machine" class="form"></div>
+    </section>
+    <section>
+      <h2>Tools</h2>
+      <div id="tools" class="tools"></div>
+    </section>
+    <section>
+      <h2>Fonts</h2>
+      <label class="drop small">
+        <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
+        Upload TTF / OTF (source) or SVG fonts (single line)
+      </label>
+      <ul id="fonts" class="list"></ul>
+    </section>
+    <section>
+      <h2>Printer</h2>
+      <div id="printer" class="form"></div>
+    </section>
+  </aside>
+</main>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

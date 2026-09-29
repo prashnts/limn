@@ -43,6 +43,7 @@ class Fsr:
         self.cfg = cfg
         self.arrays = {a['hop']: a for a in cfg['arrays']}
         self.surface = None         # the array's bed mesh profile, see follow()
+        self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
@@ -197,7 +198,8 @@ class Fsr:
             z, _ = self._descend(hop, None, z, cfg['step'], floor)
             z = self._back_off(hop, z + 2 * cfg['step'])
             z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
-            z_press, z_lift = z - cfg['press'], z + 1.0
+            self.depth[hop] = self.press_depth(hop, None, z)
+            z_press, z_lift = z - self.depth[hop], z + 1.0
             # Which cell: pressed in, where the crosstalk has fallen behind.
             strengths = self.tap(hop, aim, z_press, z_lift, aim)
             touched = self.touched(strengths, hop)
@@ -216,8 +218,29 @@ class Fsr:
                 shift += (tip - np.dot(aim - array.origin, direction)) * direction
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
-        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead (cells {touched})")
+        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead (cells {touched}), "
+                         f"taps press {self.depth[hop]:.2f}mm")
         return shift, z + 2 * cfg['step']
+
+    def press_depth(self, hop, cell, z):
+        '''How far past contact the taps press, the tip at contact (z) over
+        `cell` (None: the strongest): until it reads `press_strength`, `press`
+        at most. A felt tip gets there in ~0.05mm, a fine one needs ~0.3;
+        deeper only adds force: a Stabilo read ~460 at 0.05mm and ~670 at
+        0.3mm, and 0.3mm taps left marks on the sheet (2026-09-29).'''
+        cfg = self.cfg
+        target = cfg.get('press_strength')
+        if not target:
+            return cfg['press']
+        depth = 0.0
+        while depth < cfg['press'] - 1e-9:
+            depth = round(min(depth + cfg['fine_step'], cfg['press']), 3)
+            self.machine.move(z=z - depth, speed=JOG_SPEED)
+            strengths = self.read(hop)
+            strength = strengths.get(tuple(cell), 0) if cell else max(strengths.values(), default=0)
+            if strength >= target:
+                break
+        return depth
 
     # XY
     def follow(self, xy, at):
@@ -265,11 +288,15 @@ class Fsr:
         array = self.array(hop)
         a = array.center(*cell_a) - np.asarray(shift)
         b = array.center(*cell_b) - np.asarray(shift)
-        z_press = z_contact - self.cfg['press']
         z_lift = z_contact + 1.0
         with lifted_on_error(self.machine, self.cfg['z_park']):
             self.machine.move(z=self.cfg['z_park'])
             self.machine.move(float(a[0]), float(a[1]))
+            if hop not in self.depth:       # no locate() before (LRT_FSR_EDGE): find it on cell a
+                self.machine.move(z=z_lift)
+                self.machine.move(z=z_contact, speed=JOG_SPEED)
+                self.depth[hop] = self.press_depth(hop, tuple(cell_a), z_contact)
+            z_press = z_contact - self.depth[hop]
             a_off = self.last_response(hop, tuple(cell_a), a, b, z_press, z_lift, at=a)
             b_on = self.last_response(hop, tuple(cell_b), b, a, z_press, z_lift, at=a)
             self.machine.move(z=self.cfg['z_park'])
@@ -303,6 +330,7 @@ class Fsr:
         tool already, {'tip': (x, y), 'z': contact z}, see locate() and window().'''
         cfg = self.cfg
         shift, contact = {}, {}
+        self.depth = {}             # this tool's, found again
         self.surface = self.machine.mesh_profile(cfg['surface_mesh']) if cfg.get('surface_mesh') else None
         if cfg.get('surface_mesh') and self.surface is None:
             self.machine.say(f"[LRT] no {cfg['surface_mesh']} mesh: the taps take the sheet as flat")

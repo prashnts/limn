@@ -295,6 +295,32 @@ def test_taps_follow_the_sheet():
     fsr.tap(1, at - (0, 5), z_press, z_press + 1.3, at)
     assert depth[0] < 0.1, depth
 
+def test_taps_press_only_as_deep_as_needed():
+    '''A Stabilo read ~460 at 0.05mm past contact and ~670 at 0.3mm, and 0.3mm taps
+    left marks (2026-09-29): a felt tip presses until press_strength, a fine
+    tip as deep as it needs, never more than `press` past contact.'''
+    def deepest(cfg=None, **kw):
+        cfg = cfg or bed_cfg()
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), **kw)
+        profile = fsr.calibrate()
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.35, -0.2), **kw)
+        bed.tool = 'T1'
+        presses, read = [], fsr.read
+        fsr.read = lambda hop, limit=True: presses.append(bed.press()) or read(hop, limit)
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03, (kw, dx, dy)
+        assert not bed.dragged
+        return max(presses), fsr.depth[1]
+    felt = dict(gain=9000)                      # 150 at 0.017mm, 450 at 0.05mm
+    press, depth = deepest(**felt)
+    assert depth <= 0.06 and press < 0.13, (press, depth)
+    old = {**bed_cfg(), 'press_strength': None, 'step': 0.2, 'sure': 700}
+    old_press, _ = deepest(old, **felt)
+    assert old_press > 0.3 and press < old_press / 2.5, (press, old_press)
+    fine = dict(gain=700)                       # 150 at 0.21mm: 450 never within 0.3 past it
+    press, depth = deepest(**fine)
+    assert abs(depth - bed_cfg()['press']) < 1e-9 and press < 0.21 + 0.3 + 0.03, (press, depth)
+
 def test_crosstalk_along_the_row():
     '''A Micron pressing (1,5) at 355 lifted (1,3) to 259 (0.73 of it). Here 0.8:
     it must not count as responding, or the search "finds" the tip there.'''

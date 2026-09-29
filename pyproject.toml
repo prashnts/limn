@@ -21,6 +21,11 @@ dependencies = [
     "fastapi[standard]>=0.141.1",
     "spectra>=0.1.0",
     "pillow>=12.3.0",
+    "svgelements>=1.9.6",
+    "shapely>=2.1.2",
+    "fonttools>=4.66.0",
+    "uharfbuzz>=0.56.2",
+    "hershey-fonts>=2.1.0",
 ]
 
 [dependency-groups]
@@ -30,3 +35,7 @@ dev = [
     "plotly>=6.7.0",
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["plot/tests"]

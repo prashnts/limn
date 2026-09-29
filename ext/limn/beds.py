@@ -83,7 +83,7 @@ BEDS = {
             # tags; the reference tool is ~1.0). The jog starts above the top
             # and never goes below the bottom.
             'tool_z': (-0.5, 3.0),
-            'step': 0.2,            # mm, coarse z steps
+            'step': 0.1,            # mm, coarse z steps: a step can go this far past contact before it is seen
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
@@ -93,9 +93,14 @@ BEDS = {
             # A press also lifts the rest of its row: with a fine tip pressing weakly
             # (a Micron on (1,5) at 355) (1,3) read 259, 0.73 of it, 2026-09-29.
             'dominance': 0.9,       # a cell responds only this close to the strongest
-            'sure': 700,            # another cell this strong: the tip is there, not crosstalk
+            'sure': 450,            # another cell this strong: the tip is there, not crosstalk
             'press_limit': 950,     # strength that means pressing too hard: lift now
-            'press': 0.3,           # mm below contact for the XY taps
+            # The XY taps press past contact until the cell reads press_strength,
+            # `press` mm at most (fsr.py, press_depth): a felt tip ~0.05mm, a fine
+            # one up to 0.3. Deeper only adds force, and 0.3mm taps with a Stabilo
+            # (~670) left marks on the sheet, 2026-09-29.
+            'press_strength': 450,
+            'press': 0.3,           # mm below contact for the XY taps, at most
             'prior_margin': 0.4,    # mm below an expected contact z the search may go
             # The taps follow the sheet with this mesh (the moves are raw, no mesh):
             # it drops ~0.05mm per mm towards -Y, a fine tip lost 0.25 of its 0.3mm
