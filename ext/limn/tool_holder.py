@@ -21,13 +21,14 @@ PAGE_DX, PAGE_NAME = 6, 11      # dx, dy, dz on pages 6, 7, 8; the name on 11..1
 PAGE_FLAGS = 9                  # REFERENCE: the reference tool, anything else: not
 REFERENCE, NOT_REFERENCE = b'LREF', bytes(4)
 NAME_LEN = 20
-# Format 2, after the name (pages 4, 5 stay free: NDEF, what a phone writes, lives there):
-# 16: MARK, 17: the colour R G B and 1 (0 0 0 0: none), 18..21: the pen, a key
-# into the pen library (plot/profiles/pens.toml). A tag without MARK is format 1:
-# no pen, no colour.
-PAGE_MARK, PAGE_COLOR, PAGE_PEN = 16, 17, 18
-MARK = b'LMN\x02'
-PEN_LEN = 16
+# Format 2 fits the smallest tags too (NTAG210 / Ultralight: user pages 4..15, 5x10mm
+# ones among them): the pen, a key into the pen library (plot/profiles/pens.toml),
+# on 4..5, 8 characters; the colour on 10: R G B and FORMAT_2 (FORMAT_2_NO_COLOR: none).
+# Page 10 goes last: a tag written halfway stays format 1. Without it: format 1, no pen,
+# no colour. One read covers 4 pages: 4, 8, 12 read the whole tag.
+PAGE_PEN, PAGE_COLOR = 4, 10
+FORMAT_2, FORMAT_2_NO_COLOR = 0xC2, 0xC0
+PEN_LEN = 8
 PEN_CHARS = set('abcdefghijklmnopqrstuvwxyz0123456789-_.')
 
 
@@ -65,17 +66,21 @@ def decode_name(b):
 
 
 def encode_color(color):
-    '''"#rrggbb" -> 4 bytes, None / "" -> none.'''
+    '''"#rrggbb" -> page 10, None / "" -> none (still format 2).'''
     if not color:
-        return bytes(4)
+        return bytes([0, 0, 0, FORMAT_2_NO_COLOR])
     c = color.lstrip('#')
-    if len(c) != 6:
+    try:
+        rgb = bytes.fromhex(c)
+    except ValueError:
+        rgb = b''
+    if len(rgb) != 3:
         raise ValueError(f"colour {color!r}: give it as #rrggbb")
-    return bytes.fromhex(c) + b'\x01'
+    return rgb + bytes([FORMAT_2])
 
 
 def decode_color(b):
-    return '#' + bytes(b[:3]).hex() if b[3] == 1 else None
+    return '#' + bytes(b[:3]).hex() if b[3] == FORMAT_2 else None
 
 
 def encode_pen(pen):
@@ -256,15 +261,15 @@ class ToolHolder:
         uid = self.nfc.read_uid(timeout)
         if uid is None:
             return None
-        nums = self.nfc.ntag_read(PAGE_DX)
-        name = self.nfc.ntag_read(PAGE_NAME)
-        more = self.nfc.ntag_read(PAGE_NAME + 4)            # the name's last page, then 16..18
+        data = bytes(self.nfc.ntag_read(4)) + bytes(self.nfc.ntag_read(8)) + bytes(self.nfc.ntag_read(12))
+        page = lambda p, n=1: data[(p - 4) * 4:(p - 4 + n) * 4]
+        nums = page(PAGE_DX, 4)
         pen = color = None
-        if bytes(more[4:8]) == MARK:
-            pen = decode_pen(bytes(more[12:16]) + bytes(self.nfc.ntag_read(PAGE_PEN + 1)[:12]))
-            color = decode_color(more[8:12])
+        if page(PAGE_COLOR)[3] in (FORMAT_2, FORMAT_2_NO_COLOR):
+            pen = decode_pen(page(PAGE_PEN, 2))
+            color = decode_color(page(PAGE_COLOR))
         return Tag(uid.hex(), decode_num(nums[0:4]), decode_num(nums[4:8]),
-                   decode_num(nums[8:12]), decode_name(name + more[:4]), bytes(nums[12:16]) == REFERENCE,
+                   decode_num(nums[8:12]), decode_name(page(PAGE_NAME, 5)), bytes(nums[12:16]) == REFERENCE,
                    pen, color)
 
     def write_tag(self, dx=None, dy=None, dz=None, name=None, reference=None, pen=None, color=None,
@@ -289,8 +294,7 @@ class ToolHolder:
             data = encode_pen(pen)
             for i in range(0, PEN_LEN, 4):
                 self.nfc.ntag_write(PAGE_PEN + i // 4, data[i:i + 4])
-            self.nfc.ntag_write(PAGE_COLOR, encode_color(color))
-            self.nfc.ntag_write(PAGE_MARK, MARK)
+            self.nfc.ntag_write(PAGE_COLOR, encode_color(color))       # last: now it is format 2
         for i, value in enumerate((dx, dy, dz)):
             if value is not None:
                 self.nfc.ntag_write(PAGE_DX + i, encode_num(value))
