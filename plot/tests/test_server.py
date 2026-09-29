@@ -227,9 +227,9 @@ def test_undo_redo(client):
 
 TAGS = {'41': {'name': 'Fineliner 0.05', 'pen': None, 'color': None, 'dx': -2.4, 'dy': -0.14, 'dz': 0.75,
                'stale': False},
-        '43': {'name': 'Micron 01 Blue', 'pen': 'sakura-micron-01', 'color': '#1f4aa8', 'dx': -4.44,
+        '43': {'name': 'Micron 01 Blue', 'pen': 'mic-01', 'color': '#1f4aa8', 'dx': -4.44,
                'dy': -0.27, 'dz': 1.45, 'stale': False},
-        '44': {'name': 'Micron 01 Green', 'pen': 'sakura-micron-01', 'color': None, 'dx': 0, 'dy': 0, 'dz': 0,
+        '44': {'name': 'Micron 01 Green', 'pen': 'mic-01', 'color': None, 'dx': 0, 'dy': 0, 'dz': 0,
                'stale': True}}
 
 
@@ -240,10 +240,10 @@ def test_tags_make_the_tools():
     t0, t2, t3, t4 = tools['T0'], tools['T2'], tools['T3'], tools['T4']
     # a pen on the tag: that pen of the library, its colour, the tag's name
     assert (t2.pen, t2.width, t2.color, t2.name, t2.holder, t2.source) == \
-        ('sakura-micron-01', pens['sakura-micron-01']['width'], '#1f4aa8', 'Micron 01 Blue', 43, 'tag')
-    assert t2.macro is None and t2.feed == pens['sakura-micron-01']['feed']
+        ('mic-01', pens['mic-01']['width'], '#1f4aa8', 'Micron 01 Blue', 43, 'tag')
+    assert t2.macro is None and t2.feed == pens['mic-01']['feed']
     # no colour on the tag: the pen's first; a hand on the holder since: stale
-    assert t3.color == list(pens['sakura-micron-01']['colors'].values())[0] and t3.source == 'stale'
+    assert t3.color == list(pens['mic-01']['colors'].values())[0] and t3.source == 'stale'
     # format 1: tools.toml, named as the tag
     assert (t0.pen, t0.name, t0.width, t0.source) == (None, 'Fineliner 0.05', load_tools()['T0'].width, 'tag')
     assert t4 == load_tools()['T4']                  # no tag
@@ -273,14 +273,14 @@ def test_scan_and_write_through_moonraker(client, monkeypatch):
     assert client.get('/api/printer').json()['tools_changed'] is False
     st = client.get('/api/state').json()
     assert st['holders'][2] == {'t': 'T2', 'holder': 43, 'tag': TAGS['43']}
-    assert st['tools']['T2']['name'] == 'Micron 01 Blue' and 'sakura-micron-01' in st['pens']
-    r = client.post('/api/holders/42/tag', json={'pen': 'sakura-micron-01', 'color': '#6A2C8F', 'name': 'Micron 01 Purple'})
+    assert st['tools']['T2']['name'] == 'Micron 01 Blue' and 'mic-01' in st['pens']
+    r = client.post('/api/holders/42/tag', json={'pen': 'mic-01', 'color': '#6A2C8F', 'name': 'Micron 01 Purple'})
     assert r.status_code == 200, r.text
     for _ in range(50):
         if client.get('/api/printer').json()['job']['done']:
             break
         time.sleep(0.02)
-    assert sent[-1] == 'TOOL_TAG_SET T=42 PEN=sakura-micron-01 COLOR=6a2c8f NAME="Micron 01 Purple"'
+    assert sent[-1] == 'TOOL_TAG_SET T=42 PEN=mic-01 COLOR=6a2c8f NAME="Micron 01 Purple"'
     assert client.post('/api/scan', json={'holders': [41, 43]}).status_code == 200
     for _ in range(50):
         if client.get('/api/printer').json()['job']['done']:
@@ -298,3 +298,12 @@ def test_no_tag_writes_while_printing(client, monkeypatch):
     monkeypatch.setattr(server.requests, 'get', lambda *a, **k: R())
     r = client.post('/api/scan', json={})
     assert r.status_code == 409 and 'printing' in r.text
+
+
+def test_pen_keys_fit_a_tag():
+    '''The key goes on the tag: up to 8 of a-z 0-9 - _ . (tool_holder.py encode_pen).'''
+    from plot.profile import load_pens
+    ok = set('abcdefghijklmnopqrstuvwxyz0123456789-_.')
+    for key, pen in load_pens().items():
+        assert len(key) <= 8 and set(key) <= ok, key
+        assert len(pen.get('short', '')) <= 20 and pen.get('width', 0) > 0, key
