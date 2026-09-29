@@ -567,6 +567,15 @@ class Limn:
             strongest = max((v[2] for f in frames for v in f.values if len(v) == 3), default=0)
             gcmd.respond_info(f"[LRT] hop {hop} kind {kind} state {state}: {len(frames)} frames "
                               f"({len(frames) / seconds:.0f}/s), up to {cells} cells, strongest {strongest}")
+            if (kind, state) == (FSR, S_MATRIX):
+                # median of each cell over the frames, strongest first: what the routines go by
+                per_cell = {}
+                for f in frames:
+                    for row, col, v in f.values:
+                        per_cell.setdefault((row, col), []).append(v)
+                median = {c: sorted(v)[len(v) // 2] for c, v in per_cell.items()}
+                top = sorted(median, key=lambda c: -median[c])[:6]
+                gcmd.respond_info(f"[LRT] hop {hop} cells: " + ', '.join(f"{c}={median[c]}" for c in top))
 
     def cmd_CHAIN(self, gcmd):
         if not self.dock.connect():
