@@ -50,6 +50,7 @@ ROUTINE_ERRORS = (RuntimeError, TimeoutError, ConnectionError)
 TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
 HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
 HOLDER_MACROS = '41:T0, 42:T1, 43:T2, 44:T3, 45:T4'
+KEY_ENDSTOP = 'manual_stepper axis_k'       # triggered: the key fully open
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -287,14 +288,25 @@ class Limn:
         except (OSError, RuntimeError):
             return set()
 
+    def _key_open(self):
+        '''The tool lock's endstop triggers with the key fully open: nothing is locked
+        on the carriage. None: no such endstop.'''
+        query = self.printer.lookup_object('query_endstops', None)
+        for endstop, name in getattr(query, 'endstops', ()):
+            if name == KEY_ENDSTOP:
+                return bool(endstop.query_endstop(self.printer.lookup_object('toolhead').get_last_move_time()))
+        return None
+
     def _guess_carried(self, gcmd, tag):
         '''Before the BLTouch probes: a pen on the carriage would run into the bed,
-        or, over the FSR, into the holders. With no tool saved as carried and only one
-        holder empty, that tool is taken as the carried one, so UNDOCK puts it away:
-        undocking it with nothing on the carriage makes the same moves as docking, and
-        its holder check stops there. -> the tool on the carriage, 0: none.'''
+        or, over the FSR, into the holders. With no tool saved as carried, the key
+        locked and only one holder empty, that tool is taken as the carried one, so
+        UNDOCK puts it away: undocking it with nothing on the carriage makes the same
+        moves as docking, and its holder check stops there. With the key open nothing
+        is guessed: an empty carriage is up to whoever emptied it.
+        -> the tool on the carriage, 0: none.'''
         empty = self._empty_holders()
-        if len(empty) == 1 and not self._carried():
+        if len(empty) == 1 and not self._carried() and not self._key_open():
             tool, = empty
             gcmd.respond_info(f"[LRT]{tag} Holder {tool} is empty and no tool is saved as carried: "
                               f"taking {tool} as the one on the carriage, to put it away")
