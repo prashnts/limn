@@ -110,9 +110,14 @@ def test_read_tag():
     assert said == ["[Tag] PN532 firmware 1.6"]
 
 def test_no_tag():
-    reactor, holder, *_ = make(pages=None)
-    assert holder.read_tag() is None
-    assert reactor.t < 0.1
+    # It listens for the whole timeout: a tag that comes into the field late still counts.
+    # 16 activations (0x10) answered "no tag" early and missed tags that were there.
+    reactor, holder, _, nfc, _, _ = make(pages=None)
+    holder.begin_tag_reader()
+    t0 = reactor.t
+    assert holder.read_tag(timeout=0.5) is None
+    assert nfc.retries == 0xFF and nfc.aborted == 1 and 0.4 < reactor.t - t0 < 0.6
+    assert holder.read_tag(timeout=0.5) is None and nfc.aborted == 2      # still talking after the abort
 
 def test_partial_write():
     reactor, holder, _, nfc, _, _ = make(pages=tag_pages())
