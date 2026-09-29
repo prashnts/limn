@@ -155,6 +155,23 @@ class FakeToolhead:
     def manual_move(self, coord, speed):
         self.moves.append((coord, speed))
 
+    def get_last_move_time(self):
+        return 0.0
+
+
+class FakeQueryEndstops:
+    '''Only the tool lock's endstop: triggered with the key fully open.'''
+
+    class Endstop:
+        def __init__(self, triggered):
+            self.triggered = triggered
+
+        def query_endstop(self, print_time):
+            return self.triggered
+
+    def __init__(self, key_open):
+        self.endstops = [(self.Endstop(key_open), 'manual_stepper axis_k')]
+
 
 class FakeConfigfile:
     def __init__(self):
@@ -279,8 +296,10 @@ def test_fsr_matrix_reports_what_arrives():
     assert any('hop 1: no matrix frames' in s for s in gcode.said) and any('nothing at all' in s for s in gcode.said)
 
 
-def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
+def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0, key_open=None):
     ext, printer = make()
+    if key_open is not None:
+        printer.objects['query_endstops'] = FakeQueryEndstops(key_open)
     mcp, nfc = FakeMCP23017(low), FakePN532(pages)
     ext._attach_holder(ToolHolder(printer.reactor, FakeBus(mcp, nfc), parse_pins('15:41, 14:42, 13:45, 12:43, 11:44'),
                                   say=printer.objects['gcode'].respond_info))

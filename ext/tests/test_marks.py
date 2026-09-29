@@ -102,6 +102,9 @@ class FakeToolhead:
     def get_position(self):
         return list(self.pos)
 
+    def get_last_move_time(self):
+        return 0.0
+
     def wait_moves(self):
         self.waits += 1
 
@@ -265,11 +268,20 @@ def test_probe_tool_puts_a_docked_tool_away_to_mesh():
     assert len(p.pen_downs()) == 2
 
 def test_probe_tool_takes_the_only_empty_holder_as_the_carried_tool():
-    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0)   # 42 on, not saved (DOCK_RESET)
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0, key_open=False)   # 42 on, not saved (DOCK_RESET)
     p = Plotter(ext, printer)
     p.run('LRT_PROBE_TOOL')
     assert p.said('taking 42 as the one on the carriage')
     assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked[0] == 42 and p.docked[-1] == 42
+
+def test_an_open_key_carries_nothing_whatever_the_holders_say():
+    # Seen on the printer: holder 45 read empty with its pen put away, the key open.
+    # The guess undocked 45 onto an empty carriage and its holder check stopped it.
+    ext, printer, *_ = make_with_holder(low=(15, 14, 12, 11), carried=0, key_open=True)
+    p = Plotter(ext, printer, bed=reply('BED_5'))
+    p.run('LRT_MESH_CALIBRATE')
+    assert p.meshed and p.undocked == [] and not p.said('taking')
+    assert 'no tool on the carriage' in raises(lambda: p.run('LRT_FSR_Z'))
 
 
 # The bed moved: its z again, and with the reference tool its points too
@@ -426,7 +438,7 @@ def test_fsr_jogs_need_a_tool_on_the_carriage():
 def test_fsr_bltouch_z_puts_away_a_tool_not_saved_as_carried():
     # Over the array the BLTouch puts the carriage in the lane of holder 41: a pen
     # on it that the variables missed (DOCK_RESET) would run into the holders.
-    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0)   # 42 on, not saved
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0, key_open=False)   # 42 on, not saved
     p = Plotter(ext, printer)
 
     class Fsr:
