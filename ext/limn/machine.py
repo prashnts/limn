@@ -49,6 +49,13 @@ class Machine:
         finally:
             session.end_probe_session()
 
+    def mesh_profile(self, name):
+        '''A bed mesh profile as bed_mesh's status has it, None when there is none.'''
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        if bed_mesh is None:
+            return None
+        return bed_mesh.get_status(self.reactor.monotonic()).get('profiles', {}).get(name)
+
     def probe_offsets(self):
         return self.probe_obj.get_offsets()
 

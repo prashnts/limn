@@ -515,6 +515,7 @@ class Limn:
         its tip is, contact z, the edges), only reported: no tag, no profile.'''
         bed = self._bed(gcmd, 'fsr')
         self._need_tool(gcmd)
+        self._ensure_meshes(gcmd)              # the taps follow the sheet with lrt_fsr
         fsr = self._routine(gcmd, bed)
         # What is known of the tool already: a precious pen comes down where expected
         # (TIP=x,y as locate reports it), never far past its contact (Z=), gently (PRESS=).
