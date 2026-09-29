@@ -90,7 +90,9 @@ BEDS = {
             'respond': 150,         # strength (0..1000) that counts as touched
             # A press lifts the other rows of its column too, row 3 (no series
             # resistor on its ADC line) to ~530 while the pressed cell is ~880:
-            'dominance': 0.75,      # a cell responds only this close to the strongest
+            # A press also lifts the rest of its row: with a fine tip pressing weakly
+            # (a Micron on (1,5) at 355) (1,3) read 259, 0.73 of it, 2026-09-29.
+            'dominance': 0.9,       # a cell responds only this close to the strongest
             'sure': 700,            # another cell this strong: the tip is there, not crosstalk
             'press_limit': 950,     # strength that means pressing too hard: lift now
             'press': 0.3,           # mm below contact for the XY taps

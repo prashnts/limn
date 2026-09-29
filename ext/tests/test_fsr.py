@@ -27,7 +27,7 @@ class FsrBed:
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
-                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True):
+                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -48,6 +48,7 @@ class FsrBed:
         self.width = width                      # tip radius: near an edge it presses both cells, each less
         self.slope_y = slope_y                  # the sheet rises this much per mm in Y, on top of bed_z
         self.mesh = mesh                        # an lrt_fsr mesh of it, as LRT_MESH_CALIBRATE takes
+        self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
         self.rng = np.random.default_rng(7)
         self.lowest_z = 99.0
         self.dragged = False
@@ -120,6 +121,8 @@ class FsrBed:
     def frame(self, array):
         shares = self.shares(array)
         columns = {c for _, c in shares}
+        pressed = min(880, self.press() * self.gain)
+        rows = {r: max(v for (rr, _), v in shares.items() if rr == r) for r, _ in shares}
         values = []
         for row in range(array.rows):
             for col in range(array.cols):
@@ -128,6 +131,8 @@ class FsrBed:
                     s = 1000 if self.spike else min(880, self.press() * self.gain) * shares[(row, col)] + s
                 elif self.crosstalk and col in columns:
                     s += {3: 530, 0: 220}.get(row, 0)
+                elif row in rows:
+                    s += self.row_crosstalk * pressed * rows[row]
                 values.append([row, col, int(s)])
         return values
 
@@ -285,6 +290,23 @@ def test_taps_follow_the_sheet():
     fsr.surface, depth[:] = None, []
     fsr.tap(1, at - (0, 5), z_press, z_press + 1.3, at)
     assert depth[0] < 0.1, depth
+
+def test_crosstalk_along_the_row():
+    '''A Micron pressing (1,5) at 355 lifted (1,3) to 259 (0.73 of it). Here 0.8:
+    it must not count as responding, or the search "finds" the tip there.'''
+    fsr, bed, _ = setup(row_crosstalk=0.8)
+    profile = fsr.calibrate()
+    for tip in ((0.35, -0.2), (0.9, 1.6)):
+        fsr, bed, _ = setup(tip=tip, row_crosstalk=0.8)
+        bed.tool = 'T1'
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
+    # The Micron's case: its tip told (it would land on a dead zone otherwise)
+    bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
+    fsr, bed, _ = setup(tip=(-1.3, 0.95), row_crosstalk=0.8)
+    bed.tool = 'T0'
+    m = fsr.measure(bed_z, {'tip': (-1.2, 1.1), 'z': None})
+    assert abs(m['x'] - profile['fsr_ref']['x'] - 1.3) < 0.03 and abs(m['y'] - profile['fsr_ref']['y'] + 0.95) < 0.03
 
 def test_dead_sensor_lifts():
     profile = calibrated()
