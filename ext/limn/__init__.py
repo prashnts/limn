@@ -85,6 +85,7 @@ class Limn:
         self._bed_lines = 0         # bed_detected / bed_removed lines seen
         self.profile = self._load_profile(config)
         self._chain_report_until = 0
+        self._fsr_last = None       # the tool the FSR sheet last had, None: wiped or unknown
 
         self.holder = None
         self.tag = {'ok': False}
@@ -200,6 +201,7 @@ class Limn:
     def _on_bed_moved(self, kind, data):
         self._bed_lines += 1
         self.bed, self.placement = None, None
+        self._fsr_last = None       # off the plotter, it may have been wiped
         if kind == 'bed_removed':
             self.gcode.respond_info("[LRT] The bed was removed: meshes and test marks start over")
 
@@ -234,7 +236,24 @@ class Limn:
         machine = Machine(self.printer, gcmd)
         sensor = bed['sensor']
         cls = Rtp if sensor == 'rtp' else Fsr
-        return cls(machine, self.dock, self.samples, bed[sensor])
+        routine = cls(machine, self.dock, self.samples, bed[sensor])
+        if sensor == 'fsr':
+            self._fsr_hooks(gcmd, routine)
+        return routine
+
+    def _fsr_hooks(self, gcmd, fsr):
+        '''A tool other than the one the FSR sheet last had waits for the sheet to
+        be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
+        def before():
+            carried = self._carried()
+            if self._fsr_last and carried != self._fsr_last and gcmd.get_int('CLEAN', 1):
+                gcmd.respond_info(f"[LRT] The sheet last had tool {self._fsr_last}, now {carried}: wipe it first")
+                fsr.wait_clean()
+
+        def after():
+            self._fsr_last = self._carried()
+
+        fsr.before_measure, fsr.after_measure = before, after
 
     # Meshes: of this placement of the bed (placement.py)
     def _bed_meshes(self, gcmd):

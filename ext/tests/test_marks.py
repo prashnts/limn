@@ -383,6 +383,39 @@ def test_fsr_bltouch_z_puts_the_tool_away():
     assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
     assert p.gcode.scripts[:2] == ['UNDOCK', 'DOCK T=42'] and p.undocked == [42] and p.docked == [42]
 
+def test_the_sheet_is_wiped_between_pens():
+    p = plotter(carried=42, bed=reply('BED_5'))
+    gcmd = FakeGcmd(p.gcode, {})
+
+    class Fsr:
+        wiped = 0
+        before_measure = after_measure = None
+
+        def wait_clean(self):
+            self.wiped += 1
+
+        def measure(self):
+            self.before_measure()
+            self.after_measure()
+
+    fsr = Fsr()
+    p.ext._fsr_hooks(gcmd, fsr)
+    fsr.measure()                                   # nothing known of the sheet: no wait
+    fsr.measure()                                   # the same pen again: no wait
+    assert fsr.wiped == 0
+    p.svv['currently_docked_tool'] = 43
+    fsr.measure()                                   # another pen: wipe first
+    assert fsr.wiped == 1 and p.said('last had tool 42, now 43')
+    p.svv['currently_docked_tool'] = 44
+    p.ext._fsr_hooks(FakeGcmd(p.gcode, {'CLEAN': 0}), fsr)
+    fsr.measure()                                   # CLEAN=0
+    assert fsr.wiped == 1
+    p.svv['currently_docked_tool'] = 45
+    p.ext.dock.handle_line('!LRT>>bed_removed>>["NONE", null]>>')
+    p.ext._fsr_hooks(gcmd, fsr)
+    fsr.measure()                                   # the bed was off the plotter
+    assert fsr.wiped == 1
+
 def test_fsr_jogs_need_a_tool_on_the_carriage():
     ext, printer, *_ = make_with_holder(low=(13,), carried=0)              # only 45 home, nothing on
     p = Plotter(ext, printer, bed=reply('BED_5'))
