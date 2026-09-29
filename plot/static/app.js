@@ -397,7 +397,7 @@ function paintOf(g) {
   // [colour, opacity] of a group in the Tools view
   if (!g) return ['none', 1];
   if (g.tool && S.tools[g.tool]) return [S.tools[g.tool].color, 1];
-  if (g.mask) return ['var(--bed)', 1];
+  if (g.mask) return ['var(--paper)', 1];
   return ['#999', 0.18];
 }
 
@@ -464,7 +464,7 @@ function styleObject(o, g, data) {
       } else {
         if (sh.stroke) [stroke, sop] = paintOf(effGroup(o, sh, 'stroke'));
         if (sh.fill) [fill, fop] = paintOf(effGroup(o, sh, 'fill'));
-        if (fill === 'var(--bed)') { stroke = stroke === 'none' ? 'var(--muted)' : stroke; }
+        if (fill === 'var(--paper)') { stroke = stroke === 'none' ? 'var(--muted)' : stroke; }
       }
     }
     p.setAttribute('stroke', stroke);
@@ -795,29 +795,117 @@ $('#machine').addEventListener('click', async (e) => {
 });
 
 const TOOL_FIELDS = ['width', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max'];
+// Each holder: what its tag says, and what the card would write to it (draft)
+const drafts = {};
+const penName = (key) => (S.pens[key] || {}).name || key || '';
+function colourName(pen, hex) {
+  const c = (S.pens[pen] || {}).colors || {};
+  return Object.keys(c).find((k) => c[k].toLowerCase() === (hex || '').toLowerCase());
+}
+function suggestName(pen, hex) {
+  const n = colourName(pen, hex);
+  const short = (S.pens[pen] || {}).short || penName(pen);
+  const colour = n ? ' ' + n.replace(/\b\w/g, (c) => c.toUpperCase()) : '';
+  return (short + colour).length <= 20 ? (short + colour).trim() : (short.slice(0, 20 - colour.length) + colour).trim();
+}
+function draftOf(t, tag, tool) {
+  const base = JSON.stringify(tag || null);
+  if (!drafts[t] || drafts[t].base !== base) {
+    drafts[t] = { base, pen: (tag && tag.pen) || '', color: (tag && tag.color) || tool.color || '#000000',
+                  name: (tag && tag.name) || '', named: false };
+  }
+  return drafts[t];
+}
 function renderTools() {
   const over = S.job.tool_overrides;
-  $('#tools').innerHTML = Object.values(S.tools).map((t) => {
-    const o = over[t.id] || {};
-    const fields = TOOL_FIELDS.filter((k) => k in t).map((k) =>
-      `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${t[k] === null ? '' : num(t[k], 3)}"${k === 'link' && t[k] === null ? ` placeholder="${num(t.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
-    return `<div class="tool" data-t="${esc(t.id)}">
-      <div class="head"><input type="color" data-k="color" value="${esc(t.color)}" title="Colour"><b>${esc(t.id)} ${esc(t.name)}</b>
-        <span class="note">${esc(t.kind)}</span>${Object.keys(o).length ? '<button class="icon" data-act="reset" title="Back to tools.toml">↺</button>' : ''}</div>
-      <div class="grid">${fields}</div></div>`;
+  const job = printer && printer.job;
+  const busy = !!(job && !job.done);
+  const status = busy ? `${esc(job.what)}…` : job ? (job.error ? `⚠ ${esc(job.error)}` : `${esc(job.what)}: done`) : 'reads every tool’s tag';
+  const head = `<div class="row tools-head"><button data-act="scan"${busy ? ' disabled' : ''} title="TOOL_SCAN: each tool in turn to the tag reader">Scan holders</button>
+    <span class="note">${status}</span></div>`;
+  const cards = S.holders.map(({ t, holder, tag }) => {
+    const tool = S.tools[t] || {};
+    const o = over[t] || {};
+    const d = draftOf(t, tag, tool);
+    const badge = !tag ? '<span class="badge">not scanned</span>'
+      : tag.stale ? '<span class="badge warn" title="A hand was on this holder since: scan it again">stale</span>'
+      : tag.pen ? '<span class="badge ok">tag</span>' : '<span class="badge warn" title="The tag has only a name: give it a pen">name only</span>';
+    const pens = '<option value="">pen…</option>' + Object.entries(S.pens).map(([k, p]) =>
+      `<option value="${esc(k)}"${k === d.pen ? ' selected' : ''}>${esc(p.name)} · ${num(p.width)} mm</option>`).join('');
+    const sws = Object.entries((S.pens[d.pen] || {}).colors || {}).map(([n, hex]) =>
+      `<button class="sw${hex.toLowerCase() === d.color.toLowerCase() ? ' on' : ''}" data-color="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
+    const changed = tag ? (d.pen !== (tag.pen || '') || d.color.toLowerCase() !== (tag.color || '').toLowerCase() || d.name !== (tag.name || ''))
+      : !!d.pen;
+    const fields = TOOL_FIELDS.filter((k) => k in tool).map((k) =>
+      `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
+    const tuned = Object.keys(o).length;
+    return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}">
+      <div class="head"><span class="swatch" style="background:${esc(tool.color || '#000')}"></span><b>${esc(t)}</b>
+        <span class="note">${holder}</span><span class="tname" title="${esc(tool.name)}">${esc((tag && tag.name) || tool.name || '')}</span>${badge}</div>
+      ${tag ? `<div class="note mono">${tag.pen ? esc(penName(tag.pen)) + ' · ' : ''}${num(tool.width)} mm · dx ${num(tag.dx)} dy ${num(tag.dy)} dz ${num(tag.dz)}</div>` : ''}
+      <div class="assign">
+        <select data-d="pen" title="The kind of pen (pens.toml)">${pens}</select>
+        <div class="sws">${sws}<input type="color" data-d="color" value="${esc(d.color)}" title="Any colour"></div>
+        <input data-d="name" maxlength="20" value="${esc(d.name)}" placeholder="${esc(suggestName(d.pen, d.color) || 'name')}" title="The tag's name, up to 20">
+        <button data-act="write" class="${changed ? 'primary' : ''}"${busy || !changed ? ' disabled' : ''} title="Dock ${esc(t)}, write this onto its tag, put it back">Write to tag</button>
+      </div>
+      <details${tuned ? ' open' : ''}><summary>tune: ${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ' · changed here' : ''}</summary>
+        <div class="grid">${fields}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
+    </div>`;
   }).join('');
+  $('#tools').innerHTML = head + cards;
+}
+function redraft(t, update) {
+  const d = drafts[t];
+  Object.assign(d, update);
+  if (!d.named) d.name = suggestName(d.pen, d.color);
+  renderTools();
 }
 $('#tools').addEventListener('change', async (e) => {
-  const t = e.target, card = t.closest('.tool'); if (!card || !t.dataset.k) return;
-  const v = t.type === 'color' ? t.value : (t.value === '' ? null : +t.value);
-  setState(await api('PATCH', '/api/job', { tool_overrides: { [card.dataset.t]: { [t.dataset.k]: v } } }));
+  const el = e.target, card = el.closest('.tool'); if (!card) return;
+  const t = card.dataset.t;
+  if (el.dataset.d === 'pen') {
+    const colors = Object.values((S.pens[el.value] || {}).colors || {});
+    const d = drafts[t];
+    return redraft(t, { pen: el.value, color: colors.map((c) => c.toLowerCase()).includes(d.color.toLowerCase()) ? d.color : (colors[0] || d.color) });
+  }
+  if (el.dataset.d === 'color') return redraft(t, { color: el.value });
+  if (el.dataset.d === 'name') { Object.assign(drafts[t], { name: el.value.trim(), named: !!el.value.trim() }); return renderTools(); }
+  if (!el.dataset.k) return;
+  setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: { [el.dataset.k]: el.value === '' ? null : +el.value } } }));
 });
 $('#tools').addEventListener('click', async (e) => {
-  if (e.target.dataset.act !== 'reset') return;
-  const id = e.target.closest('.tool').dataset.t;
-  const keys = Object.fromEntries(Object.keys(S.job.tool_overrides[id] || {}).map((k) => [k, null]));
-  setState(await api('PATCH', '/api/job', { tool_overrides: { [id]: keys } }));
+  const el = e.target;
+  if (el.dataset.act === 'scan') {
+    if (!confirm('Scan: take each tool to the tag reader in turn and read its tag?')) return;
+    printer = { ...(printer || {}), job: (await api('POST', '/api/scan', {})).job };
+    renderTools(); watchJob();
+    return;
+  }
+  const card = el.closest('.tool'); if (!card) return;
+  const t = card.dataset.t;
+  if (el.dataset.color) return redraft(t, { color: el.dataset.color });
+  if (el.dataset.act === 'write') {
+    const d = drafts[t], holder = card.dataset.holder;
+    const what = [d.pen && penName(d.pen), colourName(d.pen, d.color) || d.color, d.name && `"${d.name}"`].filter(Boolean).join(', ');
+    if (!confirm(`Dock ${t} (holder ${holder}), write ${what} onto its tag, and put it back?`)) return;
+    const r = await api('POST', `/api/holders/${holder}/tag`, { pen: d.pen, color: d.color, name: d.name || suggestName(d.pen, d.color) });
+    printer = { ...(printer || {}), job: r.job };
+    renderTools(); watchJob();
+  } else if (el.dataset.act === 'reset') {
+    const keys = Object.fromEntries(Object.keys(S.job.tool_overrides[t] || {}).map((k) => [k, null]));
+    setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: keys } }));
+  }
 });
+let jobTimer = null;
+function watchJob() {
+  clearTimeout(jobTimer);
+  jobTimer = setTimeout(async () => {
+    await pollPrinter();
+    const job = printer && printer.job;
+    if (job && !job.done) watchJob();
+  }, 2000);
+}
 
 function renderFonts() {
   $('#fonts').innerHTML = S.fonts.map((f) => `
@@ -840,8 +928,17 @@ $('#font-input').addEventListener('change', (e) => { uploadFonts([...e.target.fi
 
 // --- printer ----------------------------------------------------------------
 let printer = null;
+let lastJob = null;
 async function pollPrinter() {
-  try { printer = await api('GET', '/api/printer'); } catch { printer = { ok: false, error: 'server' }; }
+  const before = printer && printer.job;
+  try { printer = await api('GET', '/api/printer'); } catch { printer = { ok: false, error: 'server', job: before }; }
+  const job = printer.job;
+  if (job && job.done && lastJob && !lastJob.done && job.started === lastJob.started) {
+    toast(job.error ? `${job.what}: ${job.error}` : `${job.what}: done`, !!job.error);
+  }
+  lastJob = job;
+  if (printer.tools_changed) setState(await api('GET', '/api/state'));
+  else if (S) renderTools();
   const pill = $('#printer-pill');
   if (!printer.ok) {
     pill.textContent = 'printer offline'; pill.className = 'pill bad'; pill.title = printer.error || '';
@@ -917,6 +1014,13 @@ function setView(v) {
 $('#views').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setView(b.dataset.view); });
 $('#show-travel').addEventListener('change', () => { if (preview) scrubTo(+$('#scrubber').value); });
 $('#show-art').addEventListener('change', () => { bedSig = null; renderBed(); });
+function setPaper(colour) {
+  svg.style.setProperty('--paper', colour);
+  $('#paper-color').value = colour;
+  store.set('paper', colour);
+}
+$('#paper-color').addEventListener('input', (e) => setPaper(e.target.value));
+setPaper(store.get('paper', '#ffffff'));
 $('#zoom-fit').addEventListener('click', fit);
 $('#zoom-in').addEventListener('click', () => zoom(0.8));
 $('#zoom-out').addEventListener('click', () => zoom(1.25));

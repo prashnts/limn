@@ -29,6 +29,7 @@
 import os
 import json
 import logging
+import time
 
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
@@ -89,6 +90,7 @@ class Limn:
 
         self.holder = None
         self.tag = {'ok': False}
+        self._holder_tags = None    # holder -> its tool's last tag, see _tags()
         self.last_manual = None
         self.leds = None
         self._led_states = {}       # led_effect name -> STATE we set, None: stopped
@@ -132,7 +134,9 @@ class Limn:
              "TOOL_HOLDER_CHECK T=41 EXPECT=occupied|empty [ARM=1]: stop unless the holder is so"),
             ('TOOL_TAG_READ', self.cmd_TOOL_TAG_READ, "Read the carried tool's tag [MOVE=0]"),
             ('TOOL_TAG_WRITE', self.cmd_TOOL_TAG_WRITE,
-             "TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1] [MOVE=0]: write these to the carried tool's tag"),
+             "TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1 PEN= COLOR=rrggbb] [MOVE=0]: write these to the "
+             "carried tool's tag"),
+            ('TOOL_TAGS', self.cmd_TOOL_TAGS, "The last tag read of each holder's tool (TOOL_SCAN reads them all)"),
             ('TOOL_CHANGE_PHASE', self.cmd_TOOL_CHANGE_PHASE,
              "TOOL_CHANGE_PHASE PHASE=engage|leave|idle: the tool change's step, for the LEDs"),
             ('TOOL_LEDS', self.cmd_TOOL_LEDS, "Redraw the tool holder and UI LEDs, show their states"),
@@ -664,6 +668,12 @@ class Limn:
         if manual:
             self.last_manual = {'at': self.holder.changed_at, 'added': sorted(added & manual),
                                 'removed': sorted(removed & manual)}
+            tags = self._tags()
+            if any(str(t) in tags and not tags[str(t)].get('stale') for t in manual):
+                for t in manual:
+                    if str(t) in tags:
+                        tags[str(t)]['stale'] = True
+                self._save_vars({'tool_tags': tags})
             self.leds.manual(manual, self.holder.changed_at)
             if not self.holder.busy():
                 self._reconcile(occupied)
@@ -851,12 +861,34 @@ class Limn:
                 self.holder.forget(tool)
                 self._request_leds()
 
+    def _tags(self):
+        '''The last tag read of each holder's tool, by holder (as a string: it goes through
+        JSON), kept as `tool_tags` in the saved variables: the web UI takes the pens from
+        it. `stale`: a hand changed that holder since, it may hold another tool now.'''
+        if self._holder_tags is None:
+            saved = self._vars().get('tool_tags') or {}
+            self._holder_tags = {str(k): dict(v) for k, v in saved.items()} if isinstance(saved, dict) else {}
+        return self._holder_tags
+
     def _apply_tag(self, tag, tries):
         self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
                          'tool_name': tag.name, 'tool_tag_uid': tag.uid})
+        holder = self._carried()
+        if holder:
+            tags = self._tags()
+            tags[str(holder)] = {'uid': tag.uid, 'name': tag.name, 'pen': tag.pen, 'color': tag.color,
+                                 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz, 'reference': tag.reference,
+                                 'at': round(time.time()), 'stale': False}
+            self._save_vars({'tool_tags': tags})
         self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
-                       'name': tag.name, 'reference': tag.reference, 'tries': tries,
-                       'read_at': self.reactor.monotonic()}, 'ok')
+                       'name': tag.name, 'reference': tag.reference, 'pen': tag.pen, 'color': tag.color,
+                       'tries': tries, 'read_at': self.reactor.monotonic()}, 'ok')
+
+    @staticmethod
+    def _describe(tag):
+        extra = ''.join(f" {v}" for v in (tag.pen, tag.color) if v)
+        return (f"{tag.name}{' (reference)' if tag.reference else ''}{extra}: "
+                f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
 
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
@@ -866,23 +898,47 @@ class Limn:
             gcmd.respond_info(f"[Tag] read failed after {tries} tries: {error}")
             return
         self._apply_tag(tag, tries)
-        gcmd.respond_info(f"[Tag] {tag.name}{' (reference)' if tag.reference else ''}: "
-                          f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+        gcmd.respond_info(f"[Tag] {self._describe(tag)}")
 
     def cmd_TOOL_TAG_WRITE(self, gcmd):
         self._require_holder(gcmd)
+        # COLOR without the # (it starts a comment in G-code); COLOR=none clears it
+        color = gcmd.get('COLOR', None)
+        if color is not None:
+            color = '' if color.strip().lower() in ('', 'none') else '#' + color.strip().lstrip('#')
         fields = {'dx': gcmd.get_float('DX', None), 'dy': gcmd.get_float('DY', None),
                   'dz': gcmd.get_float('DZ', None), 'name': gcmd.get('NAME', None),
-                  'reference': gcmd.get_int('REFERENCE', None)}
+                  'reference': gcmd.get_int('REFERENCE', None), 'pen': gcmd.get('PEN', None), 'color': color}
         if all(v is None for v in fields.values()):
-            raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ, NAME or REFERENCE")
+            raise gcmd.error("[Tag] nothing to write, give DX, DY, DZ, NAME, REFERENCE, PEN or COLOR")
+        try:
+            from .tool_holder import encode_color, encode_pen
+            if fields['pen'] is not None:
+                encode_pen(fields['pen'])
+            if color is not None:
+                encode_color(color)
+        except ValueError as e:
+            raise gcmd.error(f"[Tag] {e}")
         tag, tries, error = self._at_reader(gcmd, lambda: self.holder.write_tag(**fields))
         if tag is None:
             self._set_tag({'ok': False, 'error': error, 'tries': tries}, 'error')
             raise gcmd.error(f"[Tag] write failed after {tries} tries: {error}")
         self._apply_tag(tag, tries)
-        gcmd.respond_info(f"[Tag] wrote {tag.name}{' (reference)' if tag.reference else ''}: "
-                          f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+        gcmd.respond_info(f"[Tag] wrote {self._describe(tag)}")
+
+    def cmd_TOOL_TAGS(self, gcmd):
+        tags = self._tags()
+        holders = sorted(self.holder.tools) if self.holder else sorted(int(k) for k in tags)
+        lines = []
+        for h in holders:
+            t = tags.get(str(h))
+            if not t:
+                lines.append(f"{h}: not read")
+                continue
+            pen = ' '.join(v for v in (t.get('pen'), t.get('color')) if v) or 'no pen/colour (format 1)'
+            lines.append(f"{h}: {t['name']}{' (reference)' if t.get('reference') else ''}, {pen}, "
+                         f"dx={t['dx']} dy={t['dy']} dz={t['dz']}{', STALE: rescan' if t.get('stale') else ''}")
+        gcmd.respond_info("[Tag] " + "\n".join(lines))
 
     def get_status(self, eventtime):
         holder = self.holder
@@ -902,6 +958,7 @@ class Limn:
                 'changing': self.leds.active if self.leds else None,
             },
             'tag': self.tag,
+            'tools': self._tags() if self._holder_tags is not None or self.holder else {},
         }
 
 

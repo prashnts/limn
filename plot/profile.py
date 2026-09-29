@@ -53,6 +53,7 @@ class Machine(BaseModel):
     mesh: str = ''
     park: tuple[float, float, float] = (42, 123, 7)
     moonraker: str = 'http://localhost:7125'
+    holders: tuple[int, ...] = (41, 42, 43, 44, 45)     # T0, T1, .. (limn.cfg: T0 -> DOCK T=41)
     start: str = ''
     tool_begin: str = '{tool.call}'
     tool_end: str = ''
@@ -121,3 +122,36 @@ def load_tools(name='tools') -> dict[str, Tool]:
         cls = resolve(spec.get('kind', 'pen'))
         tools[tid] = cls(id=tid, **spec)
     return tools
+
+
+def load_pens(name='pens') -> dict[str, dict]:
+    '''The pen library: key -> {name, colors, and tool keys}.'''
+    path = _path(name)
+    return tomllib.loads(path.read_text()) if path.exists() else {}
+
+
+def with_tags(tools, pens, tags, holders) -> dict[str, Tool]:
+    '''The tools as the holders have them. A tag that names a pen of the library makes
+    that tool this pen, in the tag's colour, under the tag's name; a tag without one
+    (format 1) only names it; no tag: tools.toml. tags: printer.limn.tools, by holder.'''
+    out = dict(tools)
+    for i, holder in enumerate(holders):
+        tag = (tags or {}).get(str(holder))
+        if not tag:
+            continue
+        tid = f'T{i}'
+        base = out.get(tid)
+        source = 'stale' if tag.get('stale') else 'tag'
+        pen = pens.get(tag.get('pen') or '')
+        if pen:
+            spec = {k: v for k, v in pen.items() if k not in ('name', 'short', 'colors')}
+            kind = spec.pop('kind', 'pen')
+            keep = {k: getattr(base, k) for k in ('macro', 'begin', 'end')} if base else {}
+            colors = list((pen.get('colors') or {}).values())
+            out[tid] = resolve(kind)(id=tid, kind=kind, **keep, **spec, name=tag.get('name') or pen.get('name', ''),
+                                     color=tag.get('color') or (colors[0] if colors else '#000000'),
+                                     pen=tag['pen'], holder=holder, source=source)
+        elif base is not None:
+            out[tid] = type(base)(**{**base.model_dump(), 'name': tag.get('name') or base.name,
+                                     'color': tag.get('color') or base.color, 'holder': holder, 'source': source})
+    return out

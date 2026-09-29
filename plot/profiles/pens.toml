@@ -1,0 +1,38 @@
+# The pen library: kinds of pen and how they draw. A tool's tag says which one
+# it is and its colour (TOOL_TAG_SET T=43 PEN=<key> COLOR=rrggbb, or the web UI),
+# and the plot takes the tool from here. The key goes on the tag: up to 16 of
+# a-z 0-9 - _ . and it shouldn't change once tags carry it.
+#
+# Any key of tools.toml works here (kind, width, overlap, feed, z_down, hop, ..),
+# `name` is the kind of pen, `short` how tags name it (with the colour, up to 20
+# characters), `colors` the ones it comes in (the UI offers them).
+# width: the line it leaves, mm. Makers quote the tip or a nominal line; what
+# matters is the line on your paper.
+
+[sakura-micron-01]
+short = "Micron 01"
+name = "Pigma Micron 01"
+width = 0.25                # Sakura: 01 draws 0.25 mm
+feed = 2500
+colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226", orange = "#e8651a", sepia = "#704214" }
+
+[sakura-micron-005]
+short = "Micron 005"
+name = "Pigma Micron 005"
+width = 0.20                # Sakura: 005 draws 0.20 mm
+feed = 2000
+colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226" }
+
+[fineliner-005]
+short = "Fineliner 0.05"
+name = "Fineliner 0.05"
+width = 0.15                # a guess: which pen is it? measure the line
+feed = 2000
+colors = { black = "#1b1b1b" }
+
+[stabilo-point-88]
+short = "Stabilo 88"
+name = "Stabilo point 88"
+width = 0.4
+feed = 3000
+colors = { black = "#1e1e1e", blue = "#3a4fb8", red = "#e03030", green = "#2e9a3e", purple = "#7a3aa0", orange = "#f07820", pink = "#e8508c", turquoise = "#10a8b8", "light green" = "#8ccc3c", yellow = "#f0d020", brown = "#7a4a2a", grey = "#8a8a8a" }

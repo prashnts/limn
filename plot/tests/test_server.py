@@ -1,4 +1,5 @@
 # The web UI's API, and texts in their own font or a line font
+import time
 from pathlib import Path
 
 import numpy as np
@@ -155,7 +156,8 @@ def test_printer_offline(client, monkeypatch):
     def get(*a, **k):
         raise ConnectionError('refused')
     monkeypatch.setattr(server.requests, 'get', get)
-    assert client.get('/api/printer').json() == {'ok': False, 'url': 'http://localhost:7125', 'error': 'refused'}
+    assert client.get('/api/printer').json() == {'ok': False, 'url': 'http://localhost:7125', 'error': 'refused',
+                                                 'job': None}
 
 
 # The fonts on their own
@@ -221,3 +223,78 @@ def test_undo_redo(client):
     assert r['state']['job']['objects'][0]['placement']['x'] == 1
     client.post('/api/undo'); client.post('/api/undo')
     assert client.post('/api/undo').json()['changed'] is False    # before the upload: nothing left
+
+
+TAGS = {'41': {'name': 'Fineliner 0.05', 'pen': None, 'color': None, 'dx': -2.4, 'dy': -0.14, 'dz': 0.75,
+               'stale': False},
+        '43': {'name': 'Micron 01 Blue', 'pen': 'sakura-micron-01', 'color': '#1f4aa8', 'dx': -4.44,
+               'dy': -0.27, 'dz': 1.45, 'stale': False},
+        '44': {'name': 'Micron 01 Green', 'pen': 'sakura-micron-01', 'color': None, 'dx': 0, 'dy': 0, 'dz': 0,
+               'stale': True}}
+
+
+def test_tags_make_the_tools():
+    from plot.profile import load_machine, load_pens, load_tools, with_tags
+    m, pens = load_machine(), load_pens()
+    tools = with_tags(load_tools(), pens, TAGS, m.holders)
+    t0, t2, t3, t4 = tools['T0'], tools['T2'], tools['T3'], tools['T4']
+    # a pen on the tag: that pen of the library, its colour, the tag's name
+    assert (t2.pen, t2.width, t2.color, t2.name, t2.holder, t2.source) == \
+        ('sakura-micron-01', pens['sakura-micron-01']['width'], '#1f4aa8', 'Micron 01 Blue', 43, 'tag')
+    assert t2.macro is None and t2.feed == pens['sakura-micron-01']['feed']
+    # no colour on the tag: the pen's first; a hand on the holder since: stale
+    assert t3.color == list(pens['sakura-micron-01']['colors'].values())[0] and t3.source == 'stale'
+    # format 1: tools.toml, named as the tag
+    assert (t0.pen, t0.name, t0.width, t0.source) == (None, 'Fineliner 0.05', load_tools()['T0'].width, 'tag')
+    assert t4 == load_tools()['T4']                  # no tag
+
+
+def test_scan_and_write_through_moonraker(client, monkeypatch):
+    add(client)
+    sent = []
+
+    class R:
+        status_code = 200
+        def __init__(self, j): self._j = j
+        def raise_for_status(self): pass
+        def json(self): return self._j
+
+    def get(url, params=None, timeout=None):
+        return R({'result': {'status': {'print_stats': {'state': 'standby'}, 'limn': {'tools': TAGS}}}})
+
+    def post(url, json=None, timeout=None, **kw):
+        sent.append(json['script'])
+        return R({'result': 'ok'})
+
+    monkeypatch.setattr(server.requests, 'get', get)
+    monkeypatch.setattr(server.requests, 'post', post)
+    p = client.get('/api/printer').json()               # the UI polls this: it brings the tags
+    assert p['tools_changed'] and p['tools'] == TAGS
+    assert client.get('/api/printer').json()['tools_changed'] is False
+    st = client.get('/api/state').json()
+    assert st['holders'][2] == {'t': 'T2', 'holder': 43, 'tag': TAGS['43']}
+    assert st['tools']['T2']['name'] == 'Micron 01 Blue' and 'sakura-micron-01' in st['pens']
+    r = client.post('/api/holders/42/tag', json={'pen': 'sakura-micron-01', 'color': '#6A2C8F', 'name': 'Micron 01 Purple'})
+    assert r.status_code == 200, r.text
+    for _ in range(50):
+        if client.get('/api/printer').json()['job']['done']:
+            break
+        time.sleep(0.02)
+    assert sent[-1] == 'TOOL_TAG_SET T=42 PEN=sakura-micron-01 COLOR=6a2c8f NAME="Micron 01 Purple"'
+    assert client.post('/api/scan', json={'holders': [41, 43]}).status_code == 200
+    for _ in range(50):
+        if client.get('/api/printer').json()['job']['done']:
+            break
+        time.sleep(0.02)
+    assert sent[-1] == 'TOOL_SCAN T=41,43'
+    for bad in ({'pen': 'crayon'}, {'color': 'blue'}, {'name': 'x"; G28'}, {}):
+        assert client.post('/api/holders/42/tag', json=bad).status_code == 400, bad
+    assert client.post('/api/holders/40/tag', json={'name': 'x'}).status_code == 404
+
+
+def test_no_tag_writes_while_printing(client, monkeypatch):
+    class R:
+        def json(self): return {'result': {'status': {'print_stats': {'state': 'printing'}}}}
+    monkeypatch.setattr(server.requests, 'get', lambda *a, **k: R())
+    r = client.post('/api/scan', json={})
+    assert r.status_code == 409 and 'printing' in r.text
