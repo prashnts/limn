@@ -20,6 +20,7 @@
   </div>
   <label class="check plot-only" title="Show the travel moves (pen up) in the Paths view"><input type="checkbox" id="show-travel" checked> travel</label>
   <label class="check" title="Show the bed's artwork under the drawing, as a guide"><input type="checkbox" id="show-art" checked> bed art</label>
+  <label class="check plot-only" id="under-toggle" hidden title="Show the scan pinned with 'Under the plot' (Scan tab) under the drawings, where it was taken: place drawings on what is on the bed"><input type="checkbox" id="show-under" checked> scan</label>
   <label class="check" title="The paper's colour on the canvas, whatever the theme"><input type="color" id="paper-color" value="#ffffff"> paper</label>
   <div class="grow"></div>
   <div id="slice-status" class="status">—</div>
@@ -29,7 +30,8 @@
 <main>
   <aside id="left">
     <section class="scan-only">
-      <h2 title="Photos taken with the camera tool, kept on the server (the newest 30). Click one to see it">Captures</h2>
+      <h2 title="Photos taken with the camera tool, kept on the server (the newest 30). Click one to see it">Captures
+        <label class="check small" title="Show the newest captures on the bed, where they were taken"><input type="checkbox" id="shots-on-bed" checked> on the bed</label></h2>
       <ul id="captures" class="list captures"></ul>
     </section>
     <section class="plot-only">
@@ -75,6 +77,7 @@
     <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
       <g id="world" transform="scale(1,-1)">
         <g id="bed-layer"></g>
+        <g id="scan-under"></g>
         <g id="design-layer"></g>
         <g id="paths-layer"></g>
         <g id="overlay-layer"></g>

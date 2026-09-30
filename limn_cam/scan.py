@@ -3,6 +3,10 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
+# Positions are where the image's middle is on the bed: the camera's `center`
+# (mm from the tool point) is taken off when it moves, so a scan lines up with
+# what a pen draws at the same x, y.
+#
 # The camera tool (plot/tools.py, Camera) works in the machine's own Z: once
 # it is picked up, the tag offsets and the mesh are cleared. It moves sideways
 # only at its `clear_z` or higher (clear of the bed's raised parts; home is Z8)
@@ -63,6 +67,40 @@ def shift(a, b, width=640):
     dx = dx - w if dx > w / 2 else dx
     dy = dy - h if dy > h / 2 else dy
     return dx * step, dy * step
+
+
+def px_to_mm(du, dv, ppm, turn):
+    '''An offset in the image (px, its y down) as mm on the bed (X, Y). turn: the
+    angle machine +X makes in the image (calibrate()): +Y is +X turned a quarter
+    the other way, the image's y running down.'''
+    t = math.radians(turn)
+    ex, ey = np.array([math.cos(t), math.sin(t)]), np.array([math.sin(t), -math.cos(t)])
+    d = np.array([du, dv], float)
+    return float(d @ ex / ppm), float(d @ ey / ppm)
+
+
+def cross_centre(img, band=0.08):
+    '''Where a drawn cross (+) is in a shot -> (u, v) px, None without one: the row and
+    the column the most ink lies along (its arms), refined around their peaks.'''
+    a = load(img)
+    k = max(3, a.shape[1] // 80)
+    ink = np.clip(0.5 - a / np.maximum(np.median(a), 1e-3) * 0.5, 0, None)     # darker than the paper
+    ink[ink < 0.08] = 0
+    rows, cols = ink.sum(axis=1), ink.sum(axis=0)
+    if rows.max() <= 0 or cols.max() <= 0:
+        return None
+
+    def peak(p):
+        p = np.convolve(p, np.ones(k) / k, mode='same')
+        i = int(np.argmax(p))
+        lo, hi = max(0, i - k), min(len(p), i + k + 1)
+        w = p[lo:hi]
+        return float((np.arange(lo, hi) * w).sum() / w.sum()), float(p[i] / (p.mean() + 1e-9))
+    v, rv = peak(rows)
+    u, ru = peak(cols)
+    if min(rv, ru) < 2.0:                   # no line stands out: no cross
+        return None
+    return u, v
 
 
 def calibrate(size, moved_x, moved_y, step):
@@ -216,23 +254,8 @@ class ScanStore:
         tiles_ = meta.get('tiles', [])
         if not tiles_:
             raise KeyError('no tiles yet')
-        fov, turn = meta['fov'], meta.get('turn', 0.0)
-        fx, fy = footprint(fov, turn)
-        xs = [t['x'] for t in tiles_]
-        ys = [t['y'] for t in tiles_]
-        x0, y0 = min(xs) - fx / 2, min(ys) - fy / 2
-        W = int(round((max(xs) - min(xs) + fx) * px_per_mm))
-        H = int(round((max(ys) - min(ys) + fy) * px_per_mm))
-        canvas = Image.new('RGB', (max(W, 1), max(H, 1)), 'black')
-        for t in tiles_:
-            im = Image.open(d / t['file']).convert('RGB')
-            if turn:
-                im = im.rotate(-turn, expand=True)
-            im = im.resize((max(1, int(round(fx * px_per_mm))), max(1, int(round(fy * px_per_mm)))))
-            # image y down, machine y up: the row for y is counted from the top
-            left = int(round((t['x'] - fx / 2 - x0) * px_per_mm))
-            top = int(round((y0 + (max(ys) - min(ys) + fy) - (t['y'] + fy / 2)) * px_per_mm))
-            canvas.paste(im, (left, top))
+        from .stitch import compose             # where they were sent, no registering: quick
+        canvas, _ = compose(tiles_, lambda f: Image.open(d / f), meta['fov'], meta.get('turn', 0.0), px_per_mm)
         canvas.save(out, quality=90)
         return out
 
@@ -296,6 +319,7 @@ class Job:
             self.mr.gcode(f'LAZY_HOME\n_CLEAR_OFFSETS HOME=1\n{self.camera.call}\n_CLEAR_OFFSETS\n'
                           f'G90\nG1 Z{clear:.3f} F300\nM400', timeout=600)
         else:
+            self.mr.gcode('LAZY_HOME', timeout=300)         # Klipper may have restarted since
             st = self.mr.query(gcode_move='homing_origin', bed_mesh='profile_name')
             if any(abs(v) > 1e-6 for v in st['gcode_move']['homing_origin'][:3]) \
                     or (st.get('bed_mesh') or {}).get('profile_name'):
@@ -326,10 +350,11 @@ class Job:
         settle = self.s.settle if self.s.settle is not None else self.camera.settle
         lines = ['G90']
         there = self.xy is not None and abs(self.xy[0] - x) < 1e-6 and abs(self.xy[1] - y) < 1e-6
+        cx, cy = getattr(self.camera, 'center', (0.0, 0.0))
         if lift and not there:
             lines.append(f'G1 Z{max(self.clear(), z):.3f} F300')
         if not there:
-            lines.append(f'G1 X{x:.3f} Y{y:.3f} F4000')
+            lines.append(f'G1 X{x - cx:.3f} Y{y - cy:.3f} F4000')      # the tool point: the image's middle is at x, y
         if not lift and self.z is not None and z > self.z:
             lines.append(f'G1 Z{z + 0.3:.3f} F300')             # up: overshoot, then down onto it
         lines += [f'G1 Z{z:.3f} F300', 'M400', f'G4 P{int(settle * 1000)}']

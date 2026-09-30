@@ -226,3 +226,26 @@ def test_shift_and_calibrate():
     cal = sc.calibrate((1920, 1080), (-200, 0), (0, 200), 2)
     assert cal['px_per_mm'] == 100 and cal['fov'] == (19.2, 10.8) and cal['turn'] == 0 and not cal['mirrored']
     assert sc.calibrate((1920, 1080), (0, -200), (200, 0), 2)['turn'] == 90
+
+
+def test_a_drawn_cross_and_the_camera_offset():
+    from PIL import ImageDraw
+    im = Image.new('L', (960, 540), 235)
+    d = ImageDraw.Draw(im)
+    d.line([(600, 180), (720, 180)], fill=40, width=5)            # a + at (660, 180)
+    d.line([(660, 120), (660, 240)], fill=40, width=5)
+    u, v = sc.cross_centre(jpeg(im.filter(ImageFilter.GaussianBlur(1))))
+    assert abs(u - 660) < 3 and abs(v - 180) < 3
+    assert sc.cross_centre(jpeg(Image.new('L', (960, 540), 235))) is None
+    # turn 0: image x is +X, image y down is -Y; turn 180: the other way round
+    assert sc.px_to_mm(100, 50, 100, 0) == pytest.approx((1.0, -0.5))
+    assert sc.px_to_mm(100, 50, 100, 180) == pytest.approx((-1.0, 0.5))
+
+
+def test_the_camera_offset_is_taken_off_when_it_moves(tmp_path):
+    mr, store = FakeMoonraker(), sc.ScanStore(tmp_path)
+    cam = camera().model_copy(update={'center': (2.0, -1.0)})
+    job = sc.Job('look', mr, cam, machine(), store, sc.Settings())
+    st = run(job, 'look', 40, 90, 7.5)
+    assert st['error'] is None and (mr.x, mr.y) == (38.0, 91.0)
+    assert store.meta(st['scan'])['tiles'][0]['x'] == 40

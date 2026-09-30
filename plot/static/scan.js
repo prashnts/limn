@@ -8,8 +8,7 @@
 let C = null;                   // /api/camera: settings, cameras, job, captures
 let smode = 'region';           // region | pan | look | focus
 let sdrag = null;               // a region being drawn
-let viewing = null;             // {meta, view: 'mosaic'|'tiles'|file}
-let showOnBed = store.get('scanShowOnBed', true);
+let viewing = null;             // {meta, info, view: 'stitch'|'tiles'|file, ppm}
 let camTimer = null;
 
 const scanTab = () => document.body.classList.contains('tab-scan');
@@ -23,6 +22,7 @@ function setTab(t) {
   if (t === 'scan') loadCamera();
   else closeViewer();
   drawScanLayer();
+  drawUnder();
 }
 $('#ribbon').addEventListener('click', (e) => {
   const b = e.target.closest('[data-tab]');
@@ -241,9 +241,25 @@ $('#captures').addEventListener('click', async (e) => {
   if (li) openCapture(li.dataset.id);
 });
 
-async function openCapture(id, view) {
+// Each capture's meta.json and, for a scan, where its tiles really are (registered)
+const known = {};               // id -> {count, meta, info}
+async function capture(id, count) {
+  const k = known[id];
+  if (k && k.count === count) return k;
   const meta = await api('GET', `/api/captures/${encodeURIComponent(id)}`);
-  viewing = { meta, view: view || (meta.kind === 'scan' && meta.tiles.length > 1 ? 'mosaic' : 'tiles') };
+  let info = null;
+  if (meta.kind === 'scan' && meta.tiles.length) {
+    try { info = await api('GET', `/api/captures/${encodeURIComponent(id)}/stitch/info`); } catch { /* nothing yet */ }
+  }
+  return (known[id] = { count, meta, info });
+}
+const PPMS = [12, 25, 50, 80];
+
+async function openCapture(id, view) {
+  const c = (C.captures || []).find((x) => x.id === id);
+  const k = await capture(id, c ? c.count : -1);
+  viewing = { meta: k.meta, info: k.info, view: view || (k.meta.kind === 'scan' && k.meta.tiles.length > 1 ? 'stitch' : 'tiles'),
+              ppm: store.get('stitchPpm', 25) };
   renderViewer(); renderCaptures(); drawScanLayer();
 }
 function closeViewer() {
@@ -252,15 +268,31 @@ function closeViewer() {
   if (C) renderCaptures();
   drawScanLayer();
 }
-function renderViewer() {
+async function renderViewer() {
   const V = $('#viewer'), m = viewing && viewing.meta;
   if (!m) { V.hidden = true; return; }
   V.hidden = false;
   const id = encodeURIComponent(m.id), view = viewing.view;
   const tiles = m.tiles || [];
+  const pinned = store.get('scanUnder', null) === m.id;
   let body;
-  if (view === 'mosaic') {
-    body = `<img class="big" src="/api/captures/${id}/mosaic?px_per_mm=12&t=${tiles.length}" alt="mosaic" title="The tiles placed where they were taken (not blended). Click a tile in Tiles for its full photo">`;
+  if (view === 'stitch') {
+    const ppm = viewing.ppm, native = (viewing.info && viewing.info.native_ppm) || 126;
+    const opts = [...PPMS, Math.round(native)].map((v) => `<option value="${v}"${v === ppm ? ' selected' : ''}>${v === Math.round(native) ? `${v} px/mm (full)` : `${v} px/mm`}</option>`).join('');
+    let size = '';
+    try {
+      const inf = await api('GET', `/api/captures/${id}/stitch/info?px_per_mm=${ppm}`);
+      size = `${inf.width} × ${inf.height} px, ${inf.mp} MP · ${inf.used} of ${inf.of} overlaps matched, tiles moved up to ${num(inf.moved_max, 2)} mm`
+        + (inf.too_big ? ' · too big: pick a lower px/mm' : '');
+    } catch { size = 'no tiles yet'; }
+    body = `<div class="row stitchbar">
+        <select id="v-ppm" title="Resolution of the stitch: the camera takes ~${Math.round(native)} px/mm; higher is bigger and slower">${opts}</select>
+        <span class="note">${esc(size)}</span>
+        <a class="button" href="/api/captures/${id}/stitch?px_per_mm=${ppm}&download=1" title="Download the stitch at this resolution (JPEG)">⤓ stitched</a></div>
+      <div class="stitching note" id="v-wait">stitching…</div>
+      <img class="big" src="/api/captures/${id}/stitch?px_per_mm=${ppm}&t=${tiles.length}" alt="stitched"
+        onload="document.getElementById('v-wait').remove()" onerror="document.getElementById('v-wait').textContent='could not stitch it'"
+        title="The tiles joined where their overlaps agree (registered), the seams faded">`;
   } else if (view === 'tiles') {
     body = `<div class="grid-tiles">${tiles.map((t) => `<img data-file="${esc(t.file)}" loading="lazy" src="/api/captures/${id}/thumb/${encodeURIComponent(t.file)}"
       title="${esc(t.file)}: X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)}. Click for the full photo">`).join('')}</div>`;
@@ -273,10 +305,10 @@ function renderViewer() {
   fill(V, `<div class="vbar">
       <b title="${esc(m.kind)} taken ${esc(m.id)}">${esc(when(m.id))} · ${esc(m.kind)}</b>
       <div class="seg small">
-        ${m.kind === 'scan' ? `<button data-view="mosaic" class="${view === 'mosaic' ? 'on' : ''}" title="All tiles as one image, placed where they were taken">Mosaic</button>` : ''}
-        <button data-view="tiles" class="${view === 'tiles' ? 'on' : ''}" title="Every shot on its own">Tiles</button>
+        ${m.kind === 'scan' ? `<button data-view="stitch" class="${view === 'stitch' ? 'on' : ''}" title="All tiles as one picture: registered on their overlaps, seams faded">Stitched</button>` : ''}
+        <button data-view="tiles" class="${view === 'tiles' || view.endsWith('.jpg') ? 'on' : ''}" title="Every shot on its own">Tiles</button>
       </div>
-      <label class="check" title="Show the mosaic on the bed, where it was taken"><input type="checkbox" id="v-bed"${showOnBed ? ' checked' : ''}> on the bed</label>
+      ${m.kind === 'scan' ? `<button data-act="pin" class="${pinned ? 'primary' : ''}" title="Show this scan under the drawings on the Plot tab, where it was taken: place a plot on what is on the bed">${pinned ? '✓ under the plot' : 'Under the plot'}</button>` : ''}
       <span class="grow"></span>
       <a class="button" href="/api/captures/${id}/zip" title="Download all its shots (zip)">⤓ zip</a>
       <button data-act="close" title="Close (Esc)">✕</button>
@@ -286,10 +318,16 @@ $('#viewer').addEventListener('click', (e) => {
   const t = e.target;
   if (t.dataset.view) { viewing.view = t.dataset.view; return renderViewer(); }
   if (t.dataset.file) { viewing.view = t.dataset.file; return renderViewer(); }
-  if (t.dataset.act === 'close') closeViewer();
+  if (t.dataset.act === 'close') return closeViewer();
+  if (t.dataset.act === 'pin') {
+    const pinned = store.get('scanUnder', null) === viewing.meta.id;
+    store.set('scanUnder', pinned ? null : viewing.meta.id);
+    toast(pinned ? 'No scan under the plot' : 'Pinned: on the Plot tab it lies under the drawings');
+    renderViewer(); drawUnder();
+  }
 });
 $('#viewer').addEventListener('change', (e) => {
-  if (e.target.id === 'v-bed') { showOnBed = e.target.checked; store.set('scanShowOnBed', showOnBed); drawScanLayer(); }
+  if (e.target.id === 'v-ppm') { viewing.ppm = +e.target.value; store.set('stitchPpm', viewing.ppm); renderViewer(); }
 });
 function stepTile(d) {
   const tiles = viewing.meta.tiles, i = tiles.findIndex((t) => t.file === viewing.view);
@@ -299,18 +337,40 @@ function stepTile(d) {
   return true;
 }
 
-// --- the bed: region, tiles, the shown capture -----------------------------------------------
+// --- the bed: shots where they were taken, the region, its tiles ----------------------------
+function shotImage(L, id, k, extra = {}) {
+  // A scan: its stitch where its tiles really are. A look or a focus: the shot, turned upright
+  const m = k.meta;
+  if (m.kind === 'scan' && k.info) {
+    const [x0, y0, x1, y1] = k.info.extent;
+    return svgEl('image', { href: `/api/captures/${encodeURIComponent(id)}/stitch?px_per_mm=${extra.ppm || 12}&t=${m.tiles.length}`,
+      x: x0, y: -y1, width: x1 - x0, height: y1 - y0, transform: 'scale(1,-1)', preserveAspectRatio: 'none', ...extra.attrs }, L);
+  }
+  const t = m.tiles[m.tiles.length - 1];
+  if (!t) return null;
+  const [w, h] = m.fov, turn = m.turn || 0;
+  return svgEl('image', { href: `/api/captures/${encodeURIComponent(id)}/thumb/${encodeURIComponent(t.file)}`, x: -w / 2, y: -h / 2,
+    width: w, height: h, preserveAspectRatio: 'none', transform: `translate(${t.x} ${t.y}) scale(1,-1) rotate(${-turn})`, ...extra.attrs }, L);
+}
+let layerPending = false;
 function drawScanLayer() {
   const L = $('#scan-layer');
   L.innerHTML = '';
   if (!scanTab() || !C) return;
-  const m = viewing && viewing.meta;
-  if (m && showOnBed && m.kind === 'scan' && m.tiles.length) {
-    const [fx, fy] = footprint(m.fov, m.turn || 0);
-    const xs = m.tiles.map((t) => t.x), ys = m.tiles.map((t) => t.y);
-    const x0 = Math.min(...xs) - fx / 2, x1 = Math.max(...xs) + fx / 2, y0 = Math.min(...ys) - fy / 2, y1 = Math.max(...ys) + fy / 2;
-    svgEl('image', { href: `/api/captures/${encodeURIComponent(m.id)}/mosaic?px_per_mm=12&t=${m.tiles.length}`, x: x0, y: -y1,
-      width: x1 - x0, height: y1 - y0, transform: 'scale(1,-1)', preserveAspectRatio: 'none', opacity: 0.9 }, L);
+  if ($('#shots-on-bed').checked) {
+    const shown = C.captures.filter((c) => c.count).slice(0, 12).reverse();
+    for (const c of shown) {
+      const k = known[c.id];
+      if (!k || k.count !== c.count) {
+        if (!layerPending) {
+          layerPending = true;
+          Promise.all(shown.map((x) => capture(x.id, x.count).catch(() => null))).finally(() => { layerPending = false; drawScanLayer(); });
+        }
+        continue;
+      }
+      const img = shotImage(L, c.id, k, { attrs: { class: 'shot' + (viewing && viewing.meta.id === c.id ? ' on' : '') } });
+      if (img) svgEl('title', {}, img).textContent = `${c.kind} ${c.id}`;
+    }
   }
   const r = sdrag ? [Math.min(sdrag.a.x, sdrag.b.x), Math.min(sdrag.a.y, sdrag.b.y), Math.max(sdrag.a.x, sdrag.b.x), Math.max(sdrag.a.y, sdrag.b.y)]
     : C.settings.region;
@@ -326,9 +386,26 @@ function drawScanLayer() {
     const box = svgEl('rect', { class: 'scan-region', x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1] }, L);
     svgEl('title', {}, box).textContent = `Region ${r.map((v) => num(v, 1)).join(', ')}`;
   }
-  const f = C.job && C.job.result && C.captures.find((c) => c.id === C.job.scan);
-  if (f && f.region) svgEl('circle', { class: 'scan-focus', cx: f.region[0], cy: f.region[1], r: 1.2 }, L);
 }
+$('#shots-on-bed').addEventListener('change', drawScanLayer);
+
+// The scan pinned under the plot (Plot tab): drawings are placed on what is on the bed
+async function drawUnder() {
+  const L = $('#scan-under'), id = store.get('scanUnder', null);
+  $('#under-toggle').hidden = !id;
+  L.innerHTML = '';
+  if (!id || !$('#show-under').checked) return;
+  let k;
+  try {
+    const list = (C && C.captures) || await api('GET', '/api/captures');
+    const c = list.find((x) => x.id === id);
+    if (!c) { store.set('scanUnder', null); $('#under-toggle').hidden = true; return; }
+    k = await capture(id, c.count);
+  } catch { return; }
+  const img = shotImage(L, id, k, { ppm: 25, attrs: { class: 'under' } });
+  if (img) svgEl('title', {}, img).textContent = `The scan ${id}, where it was taken`;
+}
+$('#show-under').addEventListener('change', drawUnder);
 
 // Region, look and focus on the canvas; pan goes on to app.js
 svg.addEventListener('pointerdown', async (e) => {
