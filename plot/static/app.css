@@ -24,6 +24,7 @@
   --accent: #5b8ff0; --stage: #121314; --bed: #26272a; --warn: #e0a040; --bad: #ef6a6a;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }      /* over any display a class gives (the viewer is a flex box) */
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--ink);
@@ -273,3 +274,4 @@ img.last { width: 100%; margin-top: 6px; border-radius: var(--radius); cursor: z
 .stitchbar { width: 100%; gap: 8px; }
 .stitching { align-self: center; }
 h2 .check.small { float: right; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.swatch.cam { border: none; color: var(--accent); font-size: 13px; line-height: 14px; text-align: center; }

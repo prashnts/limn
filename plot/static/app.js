@@ -927,6 +927,15 @@ function renderTools() {
     : '<p class="note">Or by hand: hold a pen to the reader until it beeps, then put it into a holder within 8 s.</p>'}`;
   const cards = S.holders.map(({ t, holder, tag }) => {
     const tool = S.tools[t] || {};
+    if (tool.kind === 'camera') {
+      // A camera: nothing to paint or press with; it is used from the Scan tab
+      return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}" title="A camera tool: it takes photos from the Scan tab">
+        <div class="head"><span class="swatch cam">◉</span><b>${esc(t)}</b><span class="note">${holder}</span>
+          <span class="tname" title="${esc(tool.name)}">${esc((tag && tag.name) || tool.name || '')}</span>
+          ${tag ? '<span class="badge ok" title="Its tag names a camera type">camera</span>' : ''}</div>
+        <div class="note mono" title="One shot, its focus height and the height it moves at (machine Z); in pens.toml">${esc(tool.pen || '')} · ${num(tool.fov[0], 1)} × ${num(tool.fov[1], 1)} mm · focus Z${num(tool.focus_z, 2)} · clear Z${num(tool.clear_z, 2)}</div>
+      </div>`;
+    }
     const o = over[t] || {};
     const d = draftOf(t, tag, tool);
     const badge = !tag ? '<span class="badge">not scanned</span>'
