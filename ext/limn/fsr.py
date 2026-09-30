@@ -339,6 +339,9 @@ class Fsr:
             '''The tip found on this array, and its contact z on (row, col).'''
             if hop not in contact:
                 shift[hop], top = self.locate(hop, bed_z[(hop, row, col)], prior)
+                # top is just above contact at the aim: where the sheet is higher, higher
+                array = self.array(hop)
+                top += max(self.follow(array.center(row, col), array.point(*self.arrays[hop]['aim'])), 0.0)
                 contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
             return contact[hop]
 

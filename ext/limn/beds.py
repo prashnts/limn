@@ -68,17 +68,20 @@ BEDS = {
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
             # off than the array reaches from there is not found: here -3.75..
-            # +3.75mm in X (rows 0-2), -8.75..+11.25mm in Y (8 cols).
+            # +3.75mm in X (rows 0-2), -6.25..+13.75mm in Y (8 cols): mid col 5, clear of col 3.
             'arrays': [
-                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 3.5),
+                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
                  'dead_rows': (3,), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
-            'z_cell': (1, 1, 3),                # hop, row, col used for z
+            # Column 3 is faulty (a glue void from the transfer: preload, a dead
+            # band at col 3/4, 2026-09-29 survey), a 0.05 liner barely lifted it
+            # on 2026-09-30: z and the edges are on column 1 instead, the aim on column 5.
+            'z_cell': (1, 1, 1),                # hop, row, col used for z
             # hop, (row, col) of a cell, (row, col) of its neighbour. The rows
             # run along X here: an edge between rows gives X, between cols Y.
-            'x_edges': [(1, (1, 3), (2, 3))],
-            'y_edges': [(1, (1, 3), (1, 4))],
+            'x_edges': [(1, (1, 1), (2, 1))],
+            'y_edges': [(1, (1, 1), (1, 2))],
             # Where a tool can touch, over the BLTouch z (like DZ on the tool
             # tags; the reference tool is ~1.0). The jog starts above the top
             # and never goes below the bottom.
