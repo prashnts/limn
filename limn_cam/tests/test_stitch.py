@@ -66,3 +66,9 @@ def test_stitch_in_the_store(tmp_path):
     assert info['width'] == pytest.approx((info['extent'][2] - info['extent'][0]) * 30, abs=2)
     path, got = st.stitch(store, sid, 30)
     assert Image.open(path).size == (got['width'], got['height'])
+
+
+def test_a_camera_a_little_askew():
+    assert st._axes((15, 9), -179.2) == (15, 9) and st._axes((15, 9), 90.4) == (9, 15)
+    im = Image.new('RGB', (150, 90), 'white')
+    assert st.upright(im, -179.2).size == (150, 90) and st.upright(im, 90).size == (90, 150)
