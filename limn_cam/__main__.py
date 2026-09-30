@@ -28,11 +28,11 @@ def _machine(bed):
     return load_machine(overrides={'bed_id': bed} if bed else None)
 
 
-def _ladder(pens, z, origin, pitch, length):
+def _ladder(pens, z, origin, pitch, length, row_gap, margin, cross):
     top, bottom, step = (float(v) for v in z.split(':'))
     ox, oy = (float(v) for v in origin.split(','))
     return lad.Ladder(pens=list(pens), z_top=top, z_bottom=bottom, z_step=step, origin=(ox, oy),
-                      pitch=pitch, length=length)
+                      pitch=pitch, length=length, row_gap=row_gap, margin=margin, cross=cross)
 
 
 def _moonraker(url):
@@ -40,15 +40,26 @@ def _moonraker(url):
 
 
 @app.command()
-def ladder(pens: list[str], z: str = typer.Option('2.4:1.0:0.1', help='top:bottom:step, G-code Z'),
-           origin: str = '12,67', pitch: float = 2.5, length: float = 4.0, bed: str = 'BED_5',
+def ladder(pens: list[str] = typer.Argument(None, help="tool macros: T0 T1 .."), z: str = typer.Option('2.4:1.0:0.1', help='top:bottom:step, G-code Z'),
+           origin: str = '12,67', pitch: float = 2.5, length: float = 4.0, row_gap: float = 6.0,
+           margin: float = 5.0, cross: float = 4.0, bed: str = 'BED_5',
            camera: str = 'IR Top', park: str = '0,0,9', url: str = None, backend: str = 'auto',
            touch: float = typer.Option(1.15, help='G-code z the new dz makes a pen touch at: z_down + its press'),
-           plan: bool = False, out: Path = typer.Option(None, '-o')):
+           plan: bool = False, out: Path = typer.Option(None, '-o'),
+           resume: Path = typer.Option(None, help="a ladder's base (…/ladder-<time>) cut short: draws only "
+                                                  "--draw's rows where it had them, no crosses, and reads "
+                                                  "all against its before shot"),
+           draw: str = typer.Option(None, help='with --resume: the pens to draw now, T1,T3')):
     '''Each pen draws strokes at falling z; the camera tells where it starts to draw.'''
-    ld = _ladder(pens, z, origin, pitch, length)
+    if resume:
+        ld = lad.Ladder(**json.loads(Path(f'{resume}.json').read_text()))
+    else:
+        ld = _ladder(pens, z, origin, pitch, length, row_gap, margin, cross)
+    x0, y0, x1, y1 = ld.extent()
+    typer.echo(f'ladder: {len(ld.zs)} z from {ld.zs[0]} to {ld.zs[-1]}, over ({x0:.1f}, {y0:.1f}) .. ({x1:.1f}, {y1:.1f})')
     machine = _machine(bed)
-    text, problems = lad.gcode(ld, machine)
+    only = draw.split(',') if draw else None
+    text, problems = lad.gcode(ld, machine, only, anchors=not resume)
     for p in problems:
         typer.secho(f'! {p}', fg='red', err=True)
     if plan or problems:
@@ -62,14 +73,18 @@ def ladder(pens: list[str], z: str = typer.Option('2.4:1.0:0.1', help='top:botto
         raise typer.Exit(1)
     stamp = time.strftime('%Y%m%d-%H%M%S')
     SHOTS.mkdir(parents=True, exist_ok=True)
-    base = SHOTS / f'ladder-{stamp}'
     px, py, pz = (float(v) for v in park.split(','))
     goto = f'LAZY_HOME\nG90\nG1 Z{pz} F600\nG1 X{px} Y{py} F6000\nM400\nG4 P1500'
-    mr.run(goto)
-    before = mr.snapshot(camera)
-    Path(f'{base}-0-before.jpg').write_bytes(before)
+    if resume:
+        base = Path(f'{resume}-{stamp}')
+        before = Path(f'{resume}-0-before.jpg').read_bytes()
+    else:
+        base = SHOTS / f'ladder-{stamp}'
+        mr.run(goto)
+        before = mr.snapshot(camera)
+        Path(f'{base}-0-before.jpg').write_bytes(before)
+        Path(f'{base}.json').write_text(json.dumps(ld.to_dict()))
     Path(f'{base}.gcode').write_text(text)
-    Path(f'{base}.json').write_text(json.dumps(ld.to_dict()))
     typer.echo(f'plotting {base.name}.gcode ..')
     end = mr.print_file(f'limn-cam-{base.name}.gcode', text)
     if end['state'] != 'complete':

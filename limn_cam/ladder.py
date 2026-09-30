@@ -86,9 +86,10 @@ class Ladder:
         return asdict(self)
 
 
-def gcode(ladder, machine):
+def gcode(ladder, machine, pens=None, anchors=True):
     '''The ladder as plot G-code -> (text, problems). Problems: off the paper, or
-    unsafe (plot.emit.unsafe): then it must not be run.'''
+    unsafe (plot.emit.unsafe): then it must not be run. pens: only these rows
+    (the rest drawn already), anchors: the crosses too, with the first of them.'''
     from plot.emit import unsafe
     from plot.gcode import Writer
     problems = []
@@ -107,7 +108,7 @@ def gcode(ladder, machine):
     by_pen = {}
     for s in ladder.strokes():
         by_pen.setdefault(s[0], []).append(s)
-    for n, pen in enumerate(ladder.pens):
+    for n, pen in enumerate(p for p in ladder.pens if pens is None or p in pens):
         g.comment(f'--- {pen}')
         g.raw(f'_CLEAR_OFFSETS HOME=1\n{pen}\n_APPLY_OFFSETS HOME=1{mesh}')
         g.at(*machine.park)
@@ -117,7 +118,7 @@ def gcode(ladder, machine):
             g.line(z=z, f=ladder.feed_z)
             g.line(x=b[0], y=b[1], f=ladder.feed)
             g.rapid(z=hop, f=ladder.feed_z)
-        if n == 0:
+        if n == 0 and anchors:
             h, z = ladder.cross / 2, ladder.zs[-1]
             for cx, cy in ladder.anchors():
                 for a, b in (((cx - h, cy), (cx + h, cy)), ((cx, cy - h), (cx, cy + h))):
