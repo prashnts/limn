@@ -131,14 +131,14 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(x), float(y))
             self.machine.move(z=z)
-            if self.touched(self.read(hop), hop):
+            if (row, col) in self.touched(self.read(hop), hop):     # other cells: a reading in the air
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             for _ in range(cfg['repeats']):
                 z, _ = self._descend(hop, (row, col), z, cfg['step'], floor)
-                z = self._back_off(hop, z + cfg['back_off'])
+                z = self._back_off(hop, z + cfg['back_off'], (row, col))
                 z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
                 found.append(z)
-                z = self._back_off(hop, z + cfg['back_off'])
+                z = self._back_off(hop, z + cfg['back_off'], (row, col))
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         return float(np.median(found))
@@ -171,9 +171,14 @@ class Fsr:
                 raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
                                f"({self.top(strengths)}): check the array origin")
 
-    def _back_off(self, hop, z):
+    def _back_off(self, hop, z, cell=None):
+        '''Up to z, where nothing may press any more: `cell`, or with none any cell
+        as hard as `sure` (weaker is a reading in the air, see locate).'''
         self.machine.move(z=z, speed=JOG_SPEED)
-        if self.touched(self.read(hop), hop):
+        strengths = self.read(hop)
+        touched = self.touched(strengths, hop)
+        pressing = tuple(cell) in touched if cell else bool(touched) and strengths[touched[0]] >= self.cfg['sure']
+        if pressing:
             raise FsrError(f"[LRT] still touching after backing off to z={z:.2f}")
         return z
 
@@ -195,16 +200,23 @@ class Fsr:
             self.machine.move(z=z)
             if self.touched(self.read(hop), hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
-            z, _ = self._descend(hop, None, z, cfg['step'], floor)
-            z = self._back_off(hop, z + cfg['back_off'])
-            z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
-            self.depth[hop] = self.press_depth(hop, None, z)
-            z_press, z_lift = z - self.depth[hop], z + 1.0
-            # Which cell: pressed in, where the crosstalk has fallen behind.
-            strengths = self.tap(hop, aim, z_press, z_lift, aim)
-            touched = self.touched(strengths, hop)
-            if not touched:
-                raise FsrError(f"[LRT] nothing responds pressed in at {aim.round(2)} ({self.top(strengths)})")
+            while True:
+                z, _ = self._descend(hop, None, z, cfg['step'], floor)
+                z = self._back_off(hop, z + cfg['back_off'])
+                z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
+                self.depth[hop] = self.press_depth(hop, None, z)
+                z_press, z_lift = z - self.depth[hop], z + 1.0
+                # Which cell: pressed in, where the crosstalk has fallen behind.
+                strengths = self.tap(hop, aim, z_press, z_lift, aim)
+                touched = self.touched(strengths, hop)
+                if touched:
+                    break
+                # A reading in the air (a bent 0.05 liner, 2026-09-30): the tip isn't
+                # down yet. On down from where it pressed, to the floor at most.
+                self.machine.say(f"[LRT] a false start at z={z:.2f}, nothing pressed in at {aim.round(2)} "
+                                 f"({self.top(strengths)}): going on down")
+                z = z_press
+                self.machine.move(z=z, speed=JOG_SPEED)
             # Along each axis the tip leaves the strongest cell where it reaches
             # the cell's far side, within two cells. On an edge, that is the edge.
             # (Two cells responding is no edge to go by: the column's crosstalk

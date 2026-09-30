@@ -27,7 +27,7 @@ class FsrBed:
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
-                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=()):
+                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -50,6 +50,7 @@ class FsrBed:
         self.mesh = mesh                        # an lrt_fsr mesh of it, as LRT_MESH_CALIBRATE takes
         self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
         self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
+        self.ghost = ghost                      # (from, to mm over contact, cell, strength): a reading in the air
         self.rng = np.random.default_rng(7)
         self.lowest_z = 99.0
         self.dragged = False
@@ -134,6 +135,9 @@ class FsrBed:
                     s += {3: 530, 0: 220}.get(row, 0)
                 elif row in rows:
                     s += self.row_crosstalk * pressed * rows[row]
+                if self.ghost and self.tool is not None and (row, col) == self.ghost[2] \
+                        and self.ghost[0] <= -self.press() <= self.ghost[1]:
+                    s = max(s, self.ghost[3])
                 for t0, t1, cells, strength in self.wipes:
                     if t0 <= self.t < t1 and (row, col) in cells:
                         s = strength
@@ -467,6 +471,18 @@ def test_unmeasured_array_is_refused():
         assert False
     except FsrError as e:
         assert 'not set' in str(e)
+
+
+def test_a_reading_in_the_air_is_a_false_start():
+    """Seen with a bent 0.05 liner, 2026-09-30: a cell read over `respond` with the
+    tip still in the air, and pressed in from there nothing did. It goes on down."""
+    profile = calibrated()
+    for ghost in ((0.7, 0.95, (0, 4), 170), (0.3, 0.6, (2, 0), 160)):
+        fsr, bed, _ = setup(tip=(0.35, -0.2), ghost=ghost)
+        bed.tool = 'T1'
+        dx, dy, dz = fsr.probe_tool(profile)
+        assert abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03, (ghost, dx, dy)
+        assert not bed.dragged
 
 
 if __name__ == '__main__':
