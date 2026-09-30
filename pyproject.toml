@@ -26,6 +26,7 @@ dependencies = [
     "fonttools>=4.66.0",
     "uharfbuzz>=0.56.2",
     "hershey-fonts>=2.1.0",
+    "opencv-python-headless>=5.0.0.93",
 ]
 
 [dependency-groups]
@@ -38,4 +39,4 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["plot/tests"]
+testpaths = ["plot/tests", "limn_cam/tests"]
