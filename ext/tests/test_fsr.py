@@ -180,8 +180,8 @@ def test_calibrate():
     ref = profile['fsr_ref']
     assert [s.split()[0] for s in bed.ran[:3]] == ['UNDOCK', 'G28', '_CLEAR_OFFSETS']
     assert bed.ran[-1].startswith('WRITE_TOOL_TAG DX=0 DY=0 DZ=')
-    # The edges sit between the cells: x = 111 + 2 * 2.5 between rows, y = 59.6 - 4 * 2.5 between cols.
-    assert abs(ref['x'] - 116.0) < 0.03 and abs(ref['y'] - 49.6) < 0.03
+    # The edges sit between the cells: x = 111 + 2 * 2.5 between rows, y = 59.6 - 2 * 2.5 between cols 1 and 2.
+    assert abs(ref['x'] - 116.0) < 0.03 and abs(ref['y'] - 54.6) < 0.03
     assert all(0.3 < g < 0.5 for g in ref['gaps'])
     assert not bed.dragged
     assert bed.pos[2] == fsr.cfg['z_park']
@@ -236,7 +236,7 @@ def test_prior_z_keeps_a_miss_short():
     bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
     fsr, bed, _ = setup(tip=(-4.5, 0.0))           # off the rows
     bed.tool = 'T0'
-    expected = bed_z[(1, 1, 3)] + 1.0                # where this tool's contact would be
+    expected = bed_z[(1, 1, 1)] + 1.0                # where this tool's contact would be
     try:
         fsr.measure(bed_z, {'tip': None, 'z': expected})
         assert False, 'should stop'
@@ -375,14 +375,14 @@ def test_no_frames_says_what_was_heard():
     fsr, bed, _ = setup(alive_for=0.0)          # nothing at all
     bed.tool = 'T1'
     try:
-        fsr.measure({(1, 1, 3): 1.0})
+        fsr.measure({(1, 1, 1): 1.0})
         assert False, 'should stop'
     except FsrError as e:
         assert 'nothing from any node' in str(e), e
     fsr, bed, _ = setup(alive_for=0.0)          # only touch samples: old firmware
     bed.samples.add(Sample(0.0, 1, FSR, 42, [[1, 3, 400]]))
     try:
-        fsr.measure({(1, 1, 3): 1.0})
+        fsr.measure({(1, 1, 1): 1.0})
         assert False, 'should stop'
     except FsrError as e:
         assert 'hop 1 FSR state 42 x1' in str(e) and 'mcu.py update' in str(e), e
