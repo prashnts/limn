@@ -57,6 +57,8 @@ LADDER = lad.Ladder(pens=['T0', 'T1'], z_top=2.4, z_bottom=1.0, z_step=0.1, orig
 
 @pytest.mark.parametrize('name', ['numpy', 'opencv'])
 def test_touch_heights_from_a_photo(name):
+    if name == 'opencv':
+        pytest.importorskip('cv2')                      # an extra: uv sync --extra cam
     h = camera()
     before = shoot(h, [((30, 100), (60, 110), 0.5)])                        # older ink stays out of it
     touch, solid = {'T0': 2.0, 'T1': 1.5}, {'T0': 1.9, 'T1': 1.4}

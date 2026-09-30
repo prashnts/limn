@@ -6,7 +6,7 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 - `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
 - `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1]`. Klipper's user needs to be in the `i2c` group.
   Pens can also be scanned by hand: hold the pen to the reader until it beeps, then put it into a holder within 8 s. That holder has that pen (`TOOL_TAGS`, the web UI) until a hand empties it again; docking and undocking don't. Between tool changes the reader listens every 2 s (every 5 s while printing, `tool_holder_scan_idle` / `tool_holder_scan_printing` in `[limn]`, 0: off), and every 0.5 s for a minute after a hand was on the holders.
-- `limn_cam/`: What the cameras see of a plot: the Z ladder that finds where each pen touches the paper, from a photo (`uv run python -m limn_cam ladder T0 T1`); homographies, the ink map, ArUco tags. See `notebooks/act-7-camera-ladder.md`.
+- `limn_cam/`: What the cameras see of a plot: the Z ladder that finds where each pen touches the paper, from a photo (`uv run python -m limn_cam ladder T0 T1`); homographies, the ink map, ArUco tags. Optional: nothing else needs it; OpenCV (for the tags) is an extra, `uv sync --extra cam`. See `notebooks/act-7-camera-ladder.md`.
 - `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
 - `plot/`: SVG to G-code, and the web UI to place, paint, preview and plot drawings (`plot/README.md`). On the Pi, supervisord runs it on port 4219 (`limn_web.conf`, see *Web UI on the Pi*).
 - `slicer/`: The old PrusaSlicer setup, retired: `plot/` replaces it. Don't plot its G-code: its pen moves needed the `G1` ACT macro, which is gone, and without it `G1 Z0 ACT1` drives the pen to Z0.
@@ -54,7 +54,8 @@ The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds
 | | off | holder empty (its tool on the carriage, or missing), or holders unreadable |
 | | red | the check at this holder failed |
 | Fluidd tool buttons `T0`..`T4` | dot colour / highlight | green home, no dot empty, red failed / the carried tool (`tool_holder_macros` in `[limn]`) |
-| UI digit | blue, breathing | tool being changed |
+| UI digit | the tool's number: T0 (holder 41) shows 0 | |
+| | blue, breathing | tool being changed |
 | | amber / white | carried tool, tag not read / tag applied |
 | UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
 | UI tag (bottom left) | blue blink / green / red blink | reading / applied / failed |
@@ -68,6 +69,7 @@ The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds
 | | amber, breathing | a tool is unaccounted for, or the carried tool's tag failed |
 | | green, breathing | carrying a tool with its tag read: ready |
 | | dim green, slow | all tools home |
+| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: 10 min, 20 while printing (`tool_dry_idle`, `tool_dry_printing` in `[limn]`). It beeps every 3 s (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
 
 ## Linking the Klipper config
 
