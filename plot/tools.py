@@ -261,6 +261,8 @@ class Camera(Tool):
     clear_z: float = 7.5                # moving sideways: clear of the bed's raised parts (home is Z8)
     focus_z: float = 7.5                # until found: as high as it travels
     turn: float = 0.0                   # degrees the image is turned from the machine's axes
+    center: tuple[float, float] = (0.0, 0.0)    # mm from the tool point to the image's middle: a pen
+                                                # draws where the camera sees at x, y by going to x, y
     settle: float = 0.4                 # s still before a shot (the tether, the frame the stream has queued)
     touches: ClassVar[bool] = False
     draws: ClassVar[bool] = False

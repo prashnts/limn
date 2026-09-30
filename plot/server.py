@@ -185,7 +185,11 @@ def create_app(data=None):
 
     @app.get('/', response_class=HTMLResponse)
     def index():
-        return (STATIC / 'index.html').read_text()
+        # Each script and stylesheet by its version: a browser never runs an old one with a new page
+        html = (STATIC / 'index.html').read_text()
+        for name in ('app.js', 'scan.js', 'app.css'):
+            html = html.replace(f'/static/{name}"', f'/static/{name}?v={int((STATIC / name).stat().st_mtime)}"')
+        return HTMLResponse(html, headers={'Cache-Control': 'no-cache'})
 
     @app.get('/api/state')
     def state():
@@ -552,7 +556,11 @@ def create_app(data=None):
         return {'job': job.state}
 
     def check_spot(x, y):
-        machine, _ = cameras()
+        '''x, y: where the image's middle goes; the tool point is off by the camera's center.'''
+        machine, cams = cameras()
+        cam = cams.get(scan_settings().tool) or next(iter(cams.values()), None)
+        if cam is not None:
+            x, y = x - cam.center[0], y - cam.center[1]
         tx0, ty0, tx1, ty1 = reach(machine)
         if not (tx0 <= x <= tx1 and ty0 <= y <= ty1):
             raise HTTPException(400, f'({x:g}, {y:g}) is out of reach {reach(machine)}')
@@ -635,6 +643,27 @@ def create_app(data=None):
             return FileResponse(captures().mosaic(sid, max(1.0, min(px_per_mm, 60.0))))
         except KeyError as e:
             raise HTTPException(404, f'{sid}: {e}')
+
+    @app.get('/api/captures/{sid}/stitch/info')
+    def capture_stitch_info(sid: str, px_per_mm: float = 0):
+        '''Where the tiles really are (registered), and how big a stitch at px_per_mm would be.'''
+        from limn_cam import stitch
+        try:
+            return stitch.info(captures(), sid, px_per_mm or None)
+        except KeyError as e:
+            raise HTTPException(404, f'{sid}: {e}')
+
+    @app.get('/api/captures/{sid}/stitch')
+    def capture_stitch(sid: str, px_per_mm: float = 25, download: bool = False):
+        '''The scan as one picture: tiles registered on their overlaps, seams faded.'''
+        from limn_cam import stitch
+        try:
+            path, _ = stitch.stitch(captures(), sid, max(1.0, min(px_per_mm, 200.0)))
+        except KeyError as e:
+            raise HTTPException(404, f'{sid}: {e}')
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return FileResponse(path, filename=f'limn-{sid}-{px_per_mm:g}ppmm.jpg' if download else None)
 
     @app.get('/api/captures/{sid}/zip')
     def capture_zip(sid: str):
