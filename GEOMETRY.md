@@ -111,7 +111,7 @@ Five holders sit in a row along Y. Each has a switch on an MCP23017 (I2C bus 1, 
 | Plot start (`plot/`) | (42, 123, 7) | `park` in `plot/profiles/limn.toml`, where `_APPLY_OFFSETS HOME=1` leaves it |
 | Camera snapshots | (5, 5), Z8, no tool | clear of the paper |
 
-`_SAFE_OFFSET_HOME HOME=1` goes to Z8 while the tool's offsets and mesh are still on. With no mesh loaded and a tag dz above 2, that is past Z10 and Klipper refuses it.
+`_SAFE_OFFSET_HOME` goes up (Z8, or Z7) while the tool's offsets and mesh are still on, and `_APPLY_OFFSETS` applies a dz with MOVE=1. Both stay under Z9.5 less the Z offset: a tag dz above 2 would otherwise take Z past 10 (fixed 2026-09-30, the Micron's dz 2.25).
 
 ## Heights
 
