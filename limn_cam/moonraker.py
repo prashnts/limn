@@ -5,7 +5,9 @@
 #
 # A proxy in front of Moonraker may drop a request after a minute while
 # Klipper carries on with it: `run` waits for Klipper to be idle instead.
+import os
 import time
+from urllib.parse import urlsplit
 
 import requests
 
@@ -94,11 +96,19 @@ class Moonraker:
     def webcams(self):
         return {w['name']: w for w in self.get('/server/webcams/list')['webcams']}
 
+    def webcam_base(self):
+        '''Where a webcam's relative URL (/webcam/..) lives: the web server in front
+        (nginx, port 80), not Moonraker's own port. LIMN_WEBCAM_BASE says otherwise.'''
+        if os.environ.get('LIMN_WEBCAM_BASE'):
+            return os.environ['LIMN_WEBCAM_BASE'].rstrip('/')
+        u = urlsplit(self.url)
+        return f'{u.scheme}://{u.hostname}'
+
     def snapshot(self, camera):
         '''JPEG bytes from a webcam, by its name in Moonraker (or a snapshot URL).'''
         url = camera if '/' in camera else self.webcams()[camera]['snapshot_url']
         if url.startswith('/'):
-            url = self.url + url
+            url = self.webcam_base() + url
         r = requests.get(url, timeout=self.timeout)
         r.raise_for_status()
         return r.content
