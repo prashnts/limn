@@ -27,6 +27,39 @@ class Zone(BaseModel):
     z: float | None = None      # its top; None: keep out
 
 
+class Play(BaseModel):
+    '''The Z axis's play (GEOMETRY.md): a pen pressed past touch lifts the axis,
+    and it only lets go of the paper once the axis has come back down. The lift
+    after a stroke is the press, then `clear`, then `extra`: per mm of press, a
+    little or a lot depending on where on the bed (far from the screw it tilts,
+    across it bows). Measured at `spots` by `limn_cam play`, in between the
+    nearer spots count more; with none, `per_press` everywhere.'''
+    model_config = ConfigDict(extra='forbid')
+    clear: float = 0.5                  # mm over the paper once the tip has let go
+    per_press: float = 1.0              # extra lift per mm of press where nothing is measured
+    spots: list[tuple[float, float, float]] = []    # (x, y, extra lift per mm of press), measured
+    max: float = 3.0                    # mm, the most the play can add
+    measured: str = ''                  # by what and when (limn_cam play)
+
+    def factor(self, at):
+        if not self.spots:
+            return self.per_press
+        pts = [(x, y, k) for x, y, k in self.spots]
+        d = [((x - at[0]) ** 2 + (y - at[1]) ** 2) for x, y, _ in pts]
+        if min(d) < 1e-9:
+            return pts[d.index(min(d))][2]
+        w = [1 / v for v in d]
+        return sum(wi * k for wi, (_, _, k) in zip(w, pts)) / sum(w)
+
+    def extra(self, at, press):
+        return min(self.max, max(0.0, self.factor(at) * press))
+
+    def worst(self, press):
+        '''Where the pen was is not known: as much as anywhere.'''
+        k = max([k for _, _, k in self.spots] or [self.per_press])
+        return min(self.max, max(0.0, k * press))
+
+
 class Machine(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -43,6 +76,8 @@ class Machine(BaseModel):
     z_min: float = -2.5
     z_max: float = 7
     z_travel: float = 2.5
+    z_touch: float = 1.2            # G-code z where a pen whose tag is right first touches the paper
+    play: Play = Play()
     safe_z: float = 5               # off the paper (draw_area) the tool stays at or over this
     hop_distance: float = 10
     clearance: float = 1
@@ -71,6 +106,9 @@ def _path(name, suffix='.toml'):
 def load_machine(name='limn', overrides=None) -> Machine:
     path = _path(name)
     data = tomllib.loads(path.read_text())
+    tuned = path.parent / 'play.toml'           # what limn_cam play measured, over the profile's [play]
+    if tuned.exists():
+        data['play'] = {**data.get('play', {}), **tomllib.loads(tuned.read_text())}
     for key in ('bed_art', 'beds'):
         if data.get(key):
             data[key] = str((path.parent / data[key]).resolve())

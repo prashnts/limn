@@ -809,7 +809,7 @@ function renderOutput() {
   }
 }
 
-const MACHINE_FIELDS = [['z_min', 'z min'], ['z_max', 'z max'], ['z_travel', 'z travel'], ['hop_distance', 'hop under'],
+const MACHINE_FIELDS = [['z_touch', 'z touch'], ['z_min', 'z min'], ['z_max', 'z max'], ['z_travel', 'z travel'], ['hop_distance', 'hop under'],
   ['clearance', 'clearance'], ['feed_travel', 'travel F'], ['order_time', 'order s']];
 function renderMachine() {
   const m = S.machine, over = S.job.machine_overrides;
@@ -834,7 +834,7 @@ $('#machine').addEventListener('click', async (e) => {
   if (k) setState(await api('PATCH', '/api/job', { machine_overrides: { [k]: null } }));
 });
 
-const TOOL_FIELDS = ['width', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max'];
+const TOOL_FIELDS = ['width', 'press', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max'];
 // Each holder: what its tag says, and what the card would write to it (draft)
 const drafts = {};
 const openTune = new Set();     // tool cards with their tuning open
@@ -884,7 +884,8 @@ function renderTools() {
       `<button class="sw${hex.toLowerCase() === d.color.toLowerCase() ? ' on' : ''}" data-color="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
     const changed = tag ? (d.pen !== (tag.pen || '') || d.color.toLowerCase() !== (tag.color || '').toLowerCase() || d.name !== (tag.name || ''))
       : !!d.pen;
-    const fields = TOOL_FIELDS.filter((k) => k in tool).map((k) =>
+    // with a press, z_down and hop don't count: pen-down is z_touch less it, the lift comes from it and the play
+    const fields = TOOL_FIELDS.filter((k) => k in tool && !(tool.press != null && (k === 'z_down' || k === 'hop'))).map((k) =>
       `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
     const tuned = Object.keys(o).length;
     return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}">
@@ -985,7 +986,7 @@ $('#font-input').addEventListener('change', (e) => { uploadFonts([...e.target.fi
 // --- pen library (pens.toml) ---------------------------------------------------
 // The kinds of pen a tag can name. The key goes on the tags: set once, never renamed.
 let penEdit = null;             // {key, isNew, spec} being edited
-const PEN_FIRST = ['width', 'feed', 'overlap', 'z_down', 'hop'];
+const PEN_FIRST = ['width', 'press', 'press_max', 'feed', 'overlap'];
 function editPen(key) {
   const spec = key ? JSON.parse(JSON.stringify(S.pens[key])) : { name: '', short: '', width: 0.3, colors: { black: '#1b1b1b' } };
   penEdit = { key: key || '', isNew: !key, spec, colors: Object.entries(spec.colors || {}) };
@@ -1093,10 +1094,10 @@ $('#pens').addEventListener('click', async (e) => {
 const DRAG_STEP = {
   'f-x': 0.5, 'f-y': 0.5, 'f-r': 1, 'f-s': 1, angle: 5, spacing: 0.01,
   z_min: 0.05, z_max: 0.1, z_travel: 0.1, hop_distance: 1, clearance: 0.1, feed_travel: 100, order_time: 0.05,
-  width: 0.01, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
+  width: 0.01, press: 0.02, press_max: 0.02, z_touch: 0.05, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
   focus: 0.1, power: 5, reload_every: 10, well_z: 0.05, dips: 1,
 };
-const NON_NEGATIVE = new Set(['f-s', 'spacing', 'hop_distance', 'clearance', 'feed_travel', 'order_time', 'width', 'overlap',
+const NON_NEGATIVE = new Set(['press', 'press_max', 'f-s', 'spacing', 'hop_distance', 'clearance', 'feed_travel', 'order_time', 'width', 'overlap',
   'feed', 'link', 'plunge_feed', 'wear', 'power', 'reload_every', 'dips']);
 const PX_PER_STEP = 6;
 let numDrag = null;

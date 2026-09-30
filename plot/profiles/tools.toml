@@ -5,7 +5,8 @@
 # or a kind from a file in `plugins` (paths relative to this file).
 # width: the line the tool leaves, mm. Fills are spaced width * (1 - overlap).
 # Heights are over the surface (the paper: 0), tag offsets applied; z_min and
-# z_max narrow the machine's limits for this tool.
+# z_max narrow the machine's limits for this tool. press / press_max: see pens.toml;
+# a pen whose tag names a pen of the library takes them from there.
 
 plugins = []
 
@@ -14,30 +15,40 @@ kind = "pen"
 name = "Stabilo Test Blue"  # its tag; the sacrificial one, for tests
 color = "#3a4fb8"
 width = 0.4
+press = 0.2
+press_max = 0.4
 
 [T1]
 kind = "pen"
 name = "Green 0.5"
 color = "#21ff06"
 width = 0.5
+press = 0.2
+press_max = 0.4
 
 [T2]
 kind = "pen"
 name = "Green 0.5"
 color = "#21ff06"
 width = 0.5
+press = 0.2
+press_max = 0.4
 
 [T3]
 kind = "pen"
 name = "Red 0.5"
 color = "#fb0207"
 width = 0.5
+press = 0.2
+press_max = 0.4
 
 [T4]
 kind = "pen"
 name = "Fineliner 0.5"
 color = "#8000ff"
 width = 0.5
+press = 0.2
+press_max = 0.4
 
 # [T5]
 # kind = "pencil"

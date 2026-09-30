@@ -176,7 +176,7 @@ class Emitter:
     def travel(self, tool, p):
         g, m = self.g, self.m
         here = None if g.x is None or g.y is None else (g.x, g.y)
-        lo = max(self.surface_z, p[2]) + tool.lift()
+        lo = max(self.surface_z, p[2]) + tool.lift(self, here)
         z, why = self.planner.z_for(here, p, lo)
         for w in why:
             self.problem(w)
@@ -260,7 +260,11 @@ def emit(job, machine, tools, sliced) -> Result:
     g.comment('limn-plot 1')
     for tid in used:
         t = tools[tid]
-        g.comment(f'tool {tid}: {t.kind} {t.name!r} {num(t.width)}mm {t.color}')
+        g.comment(f'tool {tid}: {t.kind} {t.name!r} {num(t.width)}mm {t.color}'
+                  + (f' press {num(t.pressed)}' if t.pressed is not None else ''))
+        if t.press is not None and t.press_max is not None and t.press > t.press_max:
+            problems.append(f'{tid} asks for a press of {num(t.press)}, its pen takes {num(t.press_max)} at most: '
+                            f'{num(t.press_max)} it is')
     if not used:
         problems.append('nothing to draw')
         return Result(g.text(), problems)
@@ -307,6 +311,8 @@ def load(job, tags=None):
         tools = with_tags(tools, load_pens(), tags, machine.holders)
     for tid, over in job.tool_overrides.items():
         if tid in tools and over:
+            if 'press_max' in over:
+                raise ValueError(f'{tid}: press_max comes from the pen library, a job cannot raise it')
             t = tools[tid]
             tools[tid] = type(t)(**{**t.model_dump(), **over})
     return machine, tools
