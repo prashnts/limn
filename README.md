@@ -69,7 +69,7 @@ The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds
 | | amber, breathing | a tool is unaccounted for, or the carried tool's tag failed |
 | | green, breathing | carrying a tool with its tag read: ready |
 | | dim green, slow | all tools home |
-| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: 10 min, 20 while printing (`tool_dry_idle`, `tool_dry_printing` in `[limn]`). It beeps every 3 s (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
+| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: its pen's `dry` minutes in `plot/profiles/pens.toml` (fineliners 10, the Stabilo 88's dry-safe ink 240), else 10 min (`tool_dry_idle`); twice that while printing (`tool_dry_printing`). It beeps every 3 s (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
 
 ## Linking the Klipper config
 

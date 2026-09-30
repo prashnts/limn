@@ -184,7 +184,7 @@ def with_tags(tools, pens, tags, holders) -> dict[str, Tool]:
         source = 'stale' if tag.get('stale') else 'tag'
         pen = pens.get(tag.get('pen') or '')
         if pen:
-            spec = {k: v for k, v in pen.items() if k not in ('name', 'short', 'colors')}
+            spec = {k: v for k, v in pen.items() if k not in ('name', 'short', 'colors', 'dry')}
             kind = spec.pop('kind', 'pen')
             keep = {k: getattr(base, k) for k in ('macro', 'begin', 'end')} if base else {}
             colors = list((pen.get('colors') or {}).values())

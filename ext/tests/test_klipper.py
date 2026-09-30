@@ -665,6 +665,8 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     clock = [1000.0]
     ext.clock = lambda: clock[0]
     ext.drying = None
+    import limn as limn_mod
+    assert limn_mod.PENS_FILE.endswith('pens.toml') and ext._pen_dry().get('stb-88') == 240
     nfc = _nfc(ext)
     nfc.pages = tag_pages(name='Stabilo')
     wait(printer, 2.5)

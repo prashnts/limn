@@ -6,7 +6,8 @@
 # A pen whose tag we know (read at a dock, or scanned by hand) and that is in
 # the machine, in its holder or on the carriage, is uncapped: its tip dries.
 # Past `idle` seconds (`printing` while a print runs, when pens are being used)
-# it is overdue, and gets worse by stages: the LEDs go from amber to red and
+# it is overdue; a pen of the library can have its own (`dry` in pens.toml, in
+# `limits`, scaled the same way while printing), and gets worse by stages: the LEDs go from amber to red and
 # blink faster (leds.py), and the machine beeps. Taking it out by hand (to cap
 # it) stops its clock; docking and undocking don't.
 #
@@ -27,6 +28,7 @@ class Drying:
         self.gone = gone
         self.since = {int(k): float(v) for k, v in (since or {}).items()}  # tool -> uncapped since
         self.away = {}              # tool -> not in the machine since
+        self.limits = {}            # tool -> its own idle limit, s (its pen's `dry`)
 
     def update(self, present, now):
         '''present: the known pens in the machine now -> whether anything changed.'''
@@ -48,14 +50,15 @@ class Drying:
             if t in self.since:
                 self.since[t] = now
 
-    def limit(self, printing):
-        return self.printing if printing else self.idle
+    def limit(self, printing, tool=None):
+        idle = self.limits.get(tool, self.idle)
+        return idle * self.printing / self.idle if printing else idle
 
     def stage(self, tool, now, printing):
         '''0: fine, 1..3: overdue, worse and worse.'''
         if tool not in self.since:
             return 0
-        over = now - self.since[tool] - self.limit(printing)
+        over = now - self.since[tool] - self.limit(printing, tool)
         return 0 if over < 0 else sum(1 for s in STAGES if over >= s)
 
     def stages(self, now, printing):
@@ -63,7 +66,7 @@ class Drying:
         return {t: s for t in self.since if (s := self.stage(t, now, printing))}
 
     def status(self, now, printing):
-        return {str(t): {'uncapped': round(now - since), 'limit': self.limit(printing),
+        return {str(t): {'uncapped': round(now - since), 'limit': self.limit(printing, t),
                          'stage': self.stage(t, now, printing)} for t, since in sorted(self.since.items())}
 
     def saved(self):

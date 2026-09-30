@@ -14,6 +14,7 @@
 #   tool_dry_idle: 600                      # s a known pen may be out of its cap in the machine,
 #   tool_dry_printing: 1200                 #   idle / printing; then its LEDs go red and it beeps
 #   tool_dry_beep: 3                        # s between beeps (0: none), on [pwm_cycle_time beeper]
+#   tool_dry_pens: ~/limn/plot/profiles/pens.toml   # a pen's own `dry` minutes, by the pen on its tag
 #   tool_holder_scan_idle: 2                # s between listens for a tag held to the reader
 #   tool_holder_scan_printing: 5            #   by hand, idle / printing; 0: only after a hand
 #                                           #   was on the holders (then every 0.5 s for a minute)
@@ -66,6 +67,7 @@ SCAN_LATE = 60.0        # s after which a scan is forgotten without a word
 SCAN_SAME = 3.0         # s: the same tag again within this is the same scan
 SCAN_FAST = 0.5         # s between listens after a hand was on the holders,
 SCAN_AWAKE = 60.0       #   for this long
+PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -127,6 +129,8 @@ class Limn:
         self._dry_silenced = set()  # overdue pens TOOL_DRY SILENCE=1 was given for
         self._dry_beep_at = 0.0
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
+        self.dry_pens = PENS_FILE
+        self._pens = (None, {})     # (mtime, {pen key: dry minutes}) of the pen library
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -139,6 +143,7 @@ class Limn:
             self.dry_idle = float(config.get('tool_dry_idle', 600))
             self.dry_printing = float(config.get('tool_dry_printing', 1200))
             self.dry_beep = float(config.get('tool_dry_beep', 3))
+            self.dry_pens = os.path.expanduser(config.get('tool_dry_pens', PENS_FILE))
             self.scan_idle = float(config.get('tool_holder_scan_idle', 2.0))
             self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
 
@@ -1104,6 +1109,26 @@ class Limn:
             self.drying = Drying(self.dry_idle, self.dry_printing, self._vars().get('pen_since'))
         if self.drying.update(self._pens_in(), self.clock()):
             self._save_vars({'pen_since': self.drying.saved()})
+        dry = self._pen_dry()
+        self.drying.limits = {int(h): dry[t['pen']] * 60 for h, t in self._tags().items()
+                              if t.get('pen') in dry}
+
+    def _pen_dry(self):
+        '''{pen key: minutes uncapped} from the pen library (plot/profiles/pens.toml),
+        read again when it changes; {} without it.'''
+        try:
+            mtime = os.path.getmtime(self.dry_pens)
+            if mtime != self._pens[0]:
+                import tomllib
+                with open(self.dry_pens, 'rb') as f:
+                    lib = tomllib.load(f)
+                self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items()
+                                      if isinstance(v, dict) and v.get('dry')})
+        except (OSError, ImportError, ValueError) as e:
+            if self._pens[0] != 'missing':
+                logging.info("[Tool holder] no pen library for drying times (%s): %s", self.dry_pens, e)
+            self._pens = ('missing', {})
+        return self._pens[1]
 
     def _dry_tick(self, eventtime):
         self._sync_drying()
