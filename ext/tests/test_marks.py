@@ -186,7 +186,7 @@ class Plotter:
         return any(text in s for s in self.gcode.said)
 
     def pen_downs(self):
-        return [s for s in self.gcode.scripts if s.endswith('ACT1')]
+        return [s for s in self.gcode.scripts if s == f'G1 Z{marks.PEN_Z}']
 
     def restart(self, **kwargs):
         '''Klipper again, with what survives: the saved variables and the meshes.'''
@@ -360,7 +360,20 @@ def test_mark_travels_high_and_away_from_the_holders():
     (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = p.toolhead.moves[-3:]
     assert z0 == z1 == z2 == 9                              # up, over the beds
     assert (x1, y1) == (24.0, 3.0) and (x2, y2) == (24.0, 120.0)    # X first, away from the reader
-    assert p.gcode.scripts.index('_APPLY_OFFSETS MESH=lrt_paper') < p.gcode.scripts.index('G1 Z1 ACT1')
+    assert p.gcode.scripts.index('_APPLY_OFFSETS MESH=lrt_paper') < p.gcode.scripts.index('G1 Z1.0')
+
+def test_mark_pen_is_high_off_the_paper():
+    '''Z moves only over the mark, and up to Z7 before anything leaves the paper.'''
+    p = plotter(carried=42)
+    p.run('LRT_PROBE_TOOL')
+    s = p.gcode.scripts
+    a, b = s.index('_APPLY_OFFSETS MESH=lrt_paper'), len(s) - 1 - s[::-1].index('_CLEAR_OFFSETS')
+    mark = s[a + 1:b]
+    assert not any('ACT' in x for x in s)
+    assert mark[0] == f'G1 F{marks.DRAW_FEED}' and mark[1].startswith('G1 X')    # across at Z7 (_APPLY_OFFSETS)
+    assert mark[-1] == 'G1 Z7.0' and mark[-2] == 'G1 Z2.5'
+    zs = [float(x.split('Z')[1]) for x in mark if x.startswith('G1 Z')]
+    assert set(zs) == {1.0, 2.5, 7.0}
 
 def test_no_mark_when_unsafe():
     p = plotter(carried=42, offsets=(0.2, 0.1, 5.0))

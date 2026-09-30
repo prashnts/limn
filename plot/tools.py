@@ -108,8 +108,8 @@ class Tool(BaseModel):
 @kind('pen')
 class Pen(Tool):
     kind: str = 'pen'
-    z_down: float = 1.0         # over the surface, touching (the old ACT1: Z1)
-    hop: float = 1.2            # over z_down between strokes, the mesh applied (the old ACT2 was Z3).
+    z_down: float = 1.0         # over the surface, touching (as the test marks: Z1)
+    hop: float = 1.2            # over z_down between strokes, the mesh applied.
                                 # 2026-09-29, Stabilo on BED_5: 0.8 drags, 1.0 clears
     plunge_feed: float = 300
 

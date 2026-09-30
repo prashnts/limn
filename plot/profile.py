@@ -43,6 +43,7 @@ class Machine(BaseModel):
     z_min: float = -2.5
     z_max: float = 7
     z_travel: float = 2.5
+    safe_z: float = 5               # off the paper (draw_area) the tool stays at or over this
     hop_distance: float = 10
     clearance: float = 1
     feed_travel: float = 7800

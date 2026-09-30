@@ -8,6 +8,9 @@
 # - short hops (under hop_distance) at the tool's lift over the surface,
 # - longer ones at least at z_travel,
 # - over a zone or an object that is in the way, `clearance` above its top,
+# - off the paper (the draw area), or leaving it, at least at safe_z: the pen
+#   is never under safe_z off the paper. Drawings are clipped to the paper,
+#   and every move written is checked for it (Result.unsafe),
 # - never above z_max: a travel that would need to is a problem.
 # It goes up where it is, across, and down only where it arrives.
 # Every z is kept inside the machine's and the tool's z limits; a z that had
@@ -56,10 +59,72 @@ class ObjectObstacle:
         return self.surface.max_along(a, b)
 
 
+def on_paper(machine, p):
+    '''Whether the point (x, y, ..) is on the paper: the draw area. None: not known.'''
+    if p[0] is None or p[1] is None:
+        return False
+    x0, y0, x1, y1 = machine.draw_area
+    return x0 - 1e-6 <= p[0] <= x1 + 1e-6 and y0 - 1e-6 <= p[1] <= y1 + 1e-6
+
+
+def clip(pts, rect):
+    '''The parts of the polyline `pts` (n, 3) inside `rect`, z carried along.'''
+    x0, y0, x1, y1 = rect
+    if len(pts) == 1:
+        inside = x0 <= pts[0][0] <= x1 and y0 <= pts[0][1] <= y1
+        return [pts] if inside else []
+    parts, cur = [], []
+    for a, b in zip(pts[:-1], pts[1:]):
+        d = b - a
+        t0, t1 = 0.0, 1.0
+        for p, q in ((-d[0], a[0] - x0), (d[0], x1 - a[0]), (-d[1], a[1] - y0), (d[1], y1 - a[1])):
+            if abs(p) < 1e-12:
+                if q < 0:
+                    t0, t1 = 1.0, 0.0
+            elif p < 0:
+                t0 = max(t0, q / p)
+            else:
+                t1 = min(t1, q / p)
+        if t0 > t1:                                 # all of it off the paper
+            if len(cur) > 1:
+                parts.append(np.array(cur))
+            cur = []
+            continue
+        s, e = a + d * t0, a + d * t1
+        if not cur or np.abs(cur[-1] - s).max() > 1e-9:
+            if len(cur) > 1:
+                parts.append(np.array(cur))
+            cur = [s]
+        cur.append(e)
+        if t1 < 1.0:                                # leaves the paper here
+            parts.append(np.array(cur))
+            cur = []
+    if len(cur) > 1:
+        parts.append(np.array(cur))
+    return [p for p in parts if np.abs(p[-1] - p[0]).max() > 1e-9 or len(p) > 2]
+
+
+def unsafe(machine, moves):
+    '''The moves that go under safe_z off the paper, or that can't be told not to.'''
+    out = []
+    for a, b in moves:
+        if a[2] is None or b[2] is None or None in a[:2] or None in b[:2]:
+            out.append(f'a move to ({b[0]}, {b[1]}, {b[2]}) from where a macro left the tool: '
+                       f'its height off the paper is not known')
+        elif not (on_paper(machine, a) and on_paper(machine, b)) and min(a[2], b[2]) < machine.safe_z - 1e-9:
+            p = b if not on_paper(machine, b) else a
+            out.append(f'the tool goes to z {num(min(a[2], b[2]))} at ({num(p[0])}, {num(p[1])}), off the paper: '
+                       f'under safe_z {num(machine.safe_z)}')
+    return out
+
+
 class Planner:
     def __init__(self, machine, obstacles=()):
         self.m = machine
         self.obstacles = list(obstacles)
+
+    def off_paper(self, here, to):
+        return here is None or not on_paper(self.m, here) or not on_paper(self.m, to)
 
     def z_for(self, here, to, lo):
         '''z to travel from `here` (None: unknown) to `to` at, at least `lo`; and why not.'''
@@ -70,6 +135,8 @@ class Planner:
             d = math.dist(here[:2], to[:2])
             z = lo if d <= m.hop_distance else max(lo, m.z_travel)
             geom = LineString([here[:2], to[:2]]) if d > 0 else Point(to[:2])
+        if self.off_paper(here, to):
+            z = max(z, m.safe_z)
         for ob in self.obstacles:
             top = ob.top(geom)
             if top is None:
@@ -114,6 +181,10 @@ class Emitter:
         for w in why:
             self.problem(w)
         z = self.clamp(tool, z)
+        if self.planner.off_paper(here, p) and z < m.safe_z:
+            z = m.safe_z                    # the tool's own limits don't take it under safe_z
+            if z > m.z_max + 1e-9:
+                self.problem(f'safe_z {num(m.safe_z)} is over z_max {num(m.z_max)}')
         if g.z is None or z > g.z:
             g.rapid(z=z, f=m.feed_z)
         g.rapid(x=p[0], y=p[1], f=m.feed_travel)
@@ -134,6 +205,7 @@ class Result:
     gcode: str
     problems: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
+    unsafe: list[str] = field(default_factory=list)     # it must not be sent to the plotter
 
 
 def _fields(machine, tool, tools):
@@ -150,6 +222,21 @@ def _outside(machine, pts):
     return xy[bad][0] if bad.any() else None
 
 
+def _on_paper(machine, oid, tid, placed, problems):
+    '''The paths clipped to the paper; a problem when that cut any.'''
+    out = []
+    for p in placed:
+        off = _outside(machine, p)
+        if off is None:
+            out.append(p)
+            continue
+        if not any(q.startswith(f'{oid}: {tid} draws') for q in problems):
+            problems.append(f'{oid}: {tid} draws at ({num(off[0])}, {num(off[1])}), outside the draw area '
+                            f'{list(machine.draw_area)}: only the part on the paper is drawn')
+        out += clip(p, machine.draw_area)
+    return out
+
+
 def emit(job, machine, tools, sliced) -> Result:
     problems = []
     by_tool: dict[str, list[np.ndarray]] = {}
@@ -163,13 +250,7 @@ def emit(job, machine, tools, sliced) -> Result:
             if tid not in tools:
                 problems.append(f'{obj.id}: no tool {tid}')
                 continue
-            placed = [obj.placement.apply(p) for p in paths]
-            for p in placed:
-                off = _outside(machine, p)
-                if off is not None:
-                    problems.append(f'{obj.id}: {tid} draws at ({num(off[0])}, {num(off[1])}), '
-                                    f'outside the draw area {list(machine.draw_area)}')
-                    break
+            placed = _on_paper(machine, obj.id, tid, [obj.placement.apply(p) for p in paths], problems)
             by_tool.setdefault(tid, []).extend(placed)
 
     first = job.tool_order or list(tools)
@@ -208,7 +289,10 @@ def emit(job, machine, tools, sliced) -> Result:
         x, y = ends[bad][0]
         problems.append(f'a move to ({num(x)}, {num(y)}) is within {num(machine.tool_max_dxy)} of the travel limits: '
                         f'with a tool\'s offset Klipper could refuse it ({int(bad.sum())} such moves)')
-    return Result(text, problems + e.problems, stats(sim, machine, tools))
+    bad = unsafe(machine, g.moves)
+    if bad:
+        problems.append(f'UNSAFE, not for the plotter: {bad[0]}' + (f' (and {len(bad) - 1} more)' if len(bad) > 1 else ''))
+    return Result(text, problems + e.problems, stats(sim, machine, tools), bad)
 
 
 def load(job, tags=None):

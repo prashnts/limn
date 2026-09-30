@@ -100,7 +100,7 @@ def test_moving_doesnt_slice_again(write_svg, job_of):
     job = job_of(p, x=10, y=40, groups=RED)
     cache = Cache()
     a, _ = plot(job, cache)
-    job.objects[0].placement = Placement(x=30, y=50, rotate=90)
+    job.objects[0].placement = Placement(x=105, y=50, rotate=90)      # still on the paper
     b, _ = plot(job, cache)
     assert cache.slices == 1
     sa, sb = parse(a.gcode), parse(b.gcode)
@@ -201,28 +201,67 @@ def test_heightmap_object(write_svg, job_of, tmp_path):
             assert s[2] >= 4        # over the bump, clear of it
 
 
-def test_preview_of_prusa_gcode(machine):
-    # What PrusaSlicer wrote with the ACT substitutions (slicer/config.ini)
-    g = '''
-T0 ; change extruder
-G1 Z10 ACT3 X10 Y10 ; move to first layer point
-G1 Z0 ACT1 ; unretract
-G1 X20 Y10 E1.2
-G3 X30 Y20 I0 J10 E1
-G1 Z5 ACT2 ; retract
-G1 X50 Y50
-G1 Z0 ACT1
-G1 X60 Y50 E1
-'''
-    sim = parse(g)
-    assert not sim.ours and sim.tools == ['T0']
-    drawn = sim.segs[sim.kind == DRAW]
-    assert drawn[:, 2].max() == 1 and np.all(drawn[:, 5] == 1)       # ACT1 is Z1
-    st = stats(sim, machine)
-    arc = np.pi / 2 * 10
-    assert st['draw_mm'] == pytest.approx(10 + arc + 10, rel=1e-2)
-    # The travel at ACT2 (Z3) isn't drawn
-    assert st['tool_changes'] == 1
+def off_paper_lows(machine, gcode):
+    """Moves of the G-code (read back) that touch off the paper under safe_z."""
+    x0, y0, x1, y1 = machine.draw_area
+    on = lambda x, y: x0 - 1e-6 <= x <= x1 + 1e-6 and y0 - 1e-6 <= y <= y1 + 1e-6
+    sim = parse(gcode)
+    return [s for s in sim.segs if not np.isnan(s[[0, 1, 3, 4]]).any()
+            and not (on(s[0], s[1]) and on(s[3], s[4])) and min(s[2], s[5]) < machine.safe_z - 1e-9]
+
+
+def test_off_the_paper_the_pen_stays_over_safe_z(write_svg, job_of):
+    p = write_svg('<path d="M10 10 H20 M80 10 H90" stroke="#ff0000" stroke-width="0.5" fill="none"/>')
+    job = job_of(p, groups=RED)
+    job.machine_overrides = {'park': [150, 100, 7]}     # the tool comes from off the paper
+    r, _ = plot(job)
+    m = load_machine(overrides=job.machine_overrides)
+    assert not r.unsafe and off_paper_lows(m, r.gcode) == []
+    seq = moves(r.gcode)
+    first_xy = next(pr for c, pr in seq if 'X' in pr)
+    assert 'Z' not in first_xy or first_xy['Z'] >= m.safe_z   # across at 7, down only on the paper
+    # Tool limits under safe_z don't take it lower off the paper
+    job.tool_overrides = {'T3': {'z_max': 3}}
+    r, _ = plot(job)
+    assert not r.unsafe and off_paper_lows(m, r.gcode) == [] and any('limits' in p for p in r.problems)
+
+
+def test_drawing_off_the_paper_is_clipped(write_svg, job_of):
+    p = write_svg('<path d="M0 100 H50" stroke="#ff0000" stroke-width="0.5" fill="none"/>')
+    job = job_of(p, x=80, y=100, groups=RED)
+    r, _ = plot(job)
+    m = load_machine()
+    drawn = parse(r.gcode).segs[parse(r.gcode).kind == DRAW]
+    assert drawn[:, [0, 3]].max() == pytest.approx(m.draw_area[2]) and drawn[:, [0, 3]].min() == pytest.approx(80)
+    assert any('only the part on the paper' in p for p in r.problems)
+    assert not r.unsafe and off_paper_lows(m, r.gcode) == []
+
+
+def test_clip():
+    from plot.emit import clip
+    rect = (0, 0, 10, 10)
+    a = np.array([[-5, 5, 0], [5, 5, 1], [15, 5, 2], [15, 8, 2], [5, 8, 3]], float)
+    parts = clip(a, rect)
+    assert [p[:, :2].tolist() for p in parts] == [[[0, 5], [5, 5], [10, 5]], [[10, 8], [5, 8]]]
+    assert parts[0][0, 2] == pytest.approx(0.5)             # z along the cut segment
+    assert clip(np.array([[20, 20, 0], [30, 30, 0]], float), rect) == []
+    assert len(clip(np.array([[1, 1, 0], [2, 2, 0]], float), rect)) == 1
+
+
+def test_unsafe_moves_are_caught():
+    from plot.emit import unsafe
+    from plot.gcode import Writer
+    m = load_machine()
+    g = Writer()
+    g.at(50, 100, 7)
+    g.rapid(x=150, y=100)                                   # off the paper at 7: fine
+    assert unsafe(m, g.moves) == []
+    g.line(z=0.5)                                           # down off the paper: not
+    assert 'under safe_z' in unsafe(m, g.moves)[0]
+    g = Writer()
+    g.raw('T0')
+    g.rapid(z=2)                                            # after a macro: where is it?
+    assert 'not known' in unsafe(m, g.moves)[0]
 
 
 def test_render_has_bed_art_and_tools(write_svg, job_of, machine, tools):
@@ -281,7 +320,8 @@ def test_reach_keeps_tool_offsets_inside_the_axes(write_svg, job_of):
     job = job_of(p, x=2, y=100, groups=RED)
     job.machine_overrides = {'bed_id': 'BED_5'}
     r, _ = plot(job)
-    assert any('travel limits' in p for p in r.problems)
     assert any('outside the draw area' in p for p in r.problems)
+    assert not any('travel limits' in p for p in r.problems)     # clipped to the paper: nothing at X2
+    assert parse(r.gcode).segs[parse(r.gcode).kind == DRAW][:, [0, 3]].min() == pytest.approx(m.draw_area[0])
     job.objects[0].placement = Placement(x=6, y=100)
     assert not plot(job)[0].problems

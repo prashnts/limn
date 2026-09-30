@@ -52,6 +52,7 @@ class Workspace:
         self.cache = Cache()
         self.lock = threading.RLock()
         self.gcode, self.name = None, None
+        self.unsafe = []            # the sliced G-code breaks safe_z: it isn't sent
         self.undos, self.redos = [], []
         self.tags = None            # printer.limn.tools: what the tools' tags say, None: not asked yet
         self.printer_job = None     # a scan or a tag write running on the printer, see run_on_printer()
@@ -159,8 +160,9 @@ class Workspace:
             if b:
                 c = o.placement.apply([[b[0], b[1], 0], [b[2], b[1], 0], [b[2], b[3], 0], [b[0], b[3], 0]])
                 bounds[o.id] = [*c[:, :2].min(axis=0).tolist(), *c[:, :2].max(axis=0).tolist()]
+        self.unsafe = result.unsafe
         return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
-                'problems': result.problems, 'bounds': bounds, 'ms': round((time.monotonic() - t0) * 1000)}
+                'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds, 'ms': round((time.monotonic() - t0) * 1000)}
 
 
 def _unique(names, stem):
@@ -482,7 +484,9 @@ def create_app(data=None):
         with ws.lock:
             if ws.gcode is None:
                 ws.slice()
-            gcode, name = ws.gcode, ws.name
+            gcode, name, bad = ws.gcode, ws.name, ws.unsafe
+        if bad:
+            raise HTTPException(409, f'not sending it, the pen would be too low off the paper: {bad[0]}')
         url = moonraker()
         data = {'print': 'true'} if body.get('start') else {}
         try:
