@@ -65,6 +65,63 @@ function fill(el, html) {
   later.delete(el);
   el.innerHTML = html;
   el._html = html;
+  helpify(el);
+}
+
+// Tooltips for the fields the panels draw: by data-k / data-f / data-pf / data-p / id
+const HELP = {
+  z_touch: 'G-code z where a pen whose tag is right first touches the paper; pen-down is this less the pen\'s press',
+  z_min: 'The lowest z anything goes to (Klipper\'s limit less a tag\'s dz)',
+  z_max: 'The highest z anything goes to',
+  z_travel: 'Height of long travels over the paper',
+  hop_distance: 'Travels shorter than this (mm) only hop the pen\'s lift; longer ones go up to z travel',
+  clearance: 'mm over a zone or an object that a travel crosses',
+  feed_travel: 'Speed of travels, mm/min',
+  order_time: 's spent improving the order of the strokes (shorter travels)',
+  width: 'The line it leaves, mm: fills are spaced by it',
+  press: 'mm past first touch while drawing (z touch less this is pen-down); fineliners 0.15, felt tips 0.3',
+  press_max: 'Never pressed more than this, whatever a job asks: fineliners are delicate',
+  overlap: 'How much of its width neighbouring fill lines share',
+  feed: 'Drawing speed, mm/min',
+  z_down: 'Pen-down over the surface, for a tool without a press',
+  hop: 'Lift over pen-down between strokes, for a tool without a press',
+  link: 'Stays down across gaps up to this (mm); empty: half its width',
+  plunge_feed: 'Speed coming down onto the paper, mm/min',
+  wear: 'A pencil goes this much lower per metre drawn',
+  focus: 'A laser\'s height over the surface',
+  power: 'Laser power, 0-255',
+  reload_every: 'A brush goes back to its well every this many mm',
+  well_z: 'Brush height in the well',
+  dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (twice that while printing)',
+  webcam: 'The camera\'s name in Moonraker\'s webcams',
+  focus_z: 'Camera: the G-code z where what lies on the bed is sharpest',
+  fov: 'Camera: mm across and down one shot, at its focus height',
+  'f-x': 'Where the drawing\'s corner goes, mm along X (drag sideways to change)',
+  'f-y': 'Where the drawing\'s corner goes, mm along Y (drag sideways to change)',
+  'f-r': 'Turn, degrees about its corner',
+  'f-s': 'Size, % of the SVG\'s own',
+  'f-occ': 'Shapes on top hide what is under them, as the SVG shows it',
+  to: 'The tool this colour is drawn with; mask: it hides what is under it; skip: not drawn',
+  fill: 'How insides are filled: lines one way, both ways, rings following the outline, or not at all',
+  angle: 'Fill lines\' angle, degrees',
+  border: 'Draw the outline around a fill too',
+  spacing: 'mm between fill lines; empty: from the tool\'s width and overlap',
+  stroke: 'Outlines: a line down the middle, or as wide as the SVG has them',
+  mode: 'This text in its own font (uploaded), a single-line font, or not at all',
+  line_font: 'The single-line font it is drawn in',
+  font: 'The uploaded font it is drawn in; by family: the one matching the SVG',
+  'm-bed': 'The bed on the plotter: its paper is the draw area',
+  'm-follow': 'Take the bed from Klipper as it changes',
+  key: 'The pen type\'s key, on the tags: up to 8 of a-z 0-9 - _ . , never renamed',
+  name: 'Its name', short: 'How tags name it, with the colour: up to 20 characters',
+  kind: 'What sort of tool: pen, pencil, brush, laser, camera',
+};
+function helpify(root) {
+  for (const el of root.querySelectorAll('input, select, button, label')) {
+    if (el.title) continue;
+    const k = el.dataset.k || el.dataset.f || el.dataset.pf || el.dataset.p || el.id;
+    if (k && HELP[k]) el.title = HELP[k];
+  }
 }
 function flushLater() {
   for (const [el, html] of later) if (!busyIn(el)) { later.delete(el); el.innerHTML = html; el._html = html; }
@@ -168,7 +225,7 @@ const mmPerPx = () => 1 / world.getScreenCTM().a;
 function setMode(m) {
   mode = m;
   if (m !== 'paint') paintTo = null;
-  else if (!paintTo) paintTo = Object.keys(S.tools)[0];
+  else if (!paintTo) paintTo = (Object.values(S.tools).find((t) => t.draws !== false) || {}).id;
   $$('#rail [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
   svg.classList.toggle('pan-mode', m === 'pan');
   renderPalette();
@@ -591,7 +648,7 @@ $('#play').addEventListener('click', async () => {
 // --- panels -------------------------------------------------------------------
 function toolOptions(g) {
   const cur = g && g.tool ? g.tool : g && g.mask ? 'mask' : 'skip';
-  const opts = Object.values(S.tools).map((t) => `<option value="${esc(t.id)}"${cur === t.id ? ' selected' : ''}>${esc(t.id)} ${esc(t.name)}</option>`);
+  const opts = Object.values(S.tools).filter((t) => t.draws !== false).map((t) => `<option value="${esc(t.id)}"${cur === t.id ? ' selected' : ''}>${esc(t.id)} ${esc(t.name)}</option>`);
   opts.push(`<option value="mask"${cur === 'mask' ? ' selected' : ''}>mask</option>`);
   opts.push(`<option value="skip"${cur === 'skip' ? ' selected' : ''}>skip</option>`);
   return opts.join('');
@@ -761,7 +818,7 @@ function centre(o) {
 }
 
 function renderPalette() {
-  const items = Object.values(S.tools).map((t) => `
+  const items = Object.values(S.tools).filter((t) => t.draws !== false).map((t) => `
     <button data-to="${esc(t.id)}" class="${paintTo === t.id ? 'on' : ''}">
       <span class="swatch" style="background:${esc(t.color)}"></span>${esc(t.id)} <span class="sub">${esc(t.name)} ${num(t.width)}</span>
     </button>`);
@@ -1258,6 +1315,7 @@ $('#zoom-out').addEventListener('click', () => zoom(1.25));
 
 window.addEventListener('keydown', async (e) => {
   if (e.target.closest && e.target.closest('input, select, textarea')) return;
+  if (document.body.classList.contains('tab-scan') && window.scanKey && window.scanKey(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod && key === 'z') { e.preventDefault(); return undo(e.shiftKey); }

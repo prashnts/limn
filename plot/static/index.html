@@ -6,16 +6,20 @@
 <title>Limn Plot</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
-<body>
+<body class="tab-plot">
 <header>
   <div class="brand">limn<span>plot</span></div>
-  <div class="seg" id="views" role="group" aria-label="View">
-    <button data-view="original">Original</button>
-    <button data-view="tools" class="on">Tools</button>
-    <button data-view="paths">Paths</button>
+  <nav class="ribbon" id="ribbon" role="tablist" aria-label="What to do">
+    <button role="tab" data-tab="plot" class="on" title="Plot: place drawings on the bed, paint them with tools, slice and send the G-code">Plot</button>
+    <button role="tab" data-tab="scan" title="Scan: take close photos of a region of the bed with the camera tool, focused by height, and browse them">Scan</button>
+  </nav>
+  <div class="seg plot-only" id="views" role="group" aria-label="View">
+    <button data-view="original" title="The drawing as its SVG has it">Original</button>
+    <button data-view="tools" class="on" title="Each shape in the colour of the tool that draws it; grey: not drawn">Tools</button>
+    <button data-view="paths" title="The G-code read back: what the plotter will draw, and its travels">Paths</button>
   </div>
-  <label class="check"><input type="checkbox" id="show-travel" checked> travel</label>
-  <label class="check"><input type="checkbox" id="show-art" checked> bed art</label>
+  <label class="check plot-only" title="Show the travel moves (pen up) in the Paths view"><input type="checkbox" id="show-travel" checked> travel</label>
+  <label class="check" title="Show the bed's artwork under the drawing, as a guide"><input type="checkbox" id="show-art" checked> bed art</label>
   <label class="check" title="The paper's colour on the canvas, whatever the theme"><input type="color" id="paper-color" value="#ffffff"> paper</label>
   <div class="grow"></div>
   <div id="slice-status" class="status">—</div>
@@ -24,14 +28,18 @@
 
 <main>
   <aside id="left">
-    <section>
-      <label id="drop" class="drop">
+    <section class="scan-only">
+      <h2 title="Photos taken with the camera tool, kept on the server (the newest 30). Click one to see it">Captures</h2>
+      <ul id="captures" class="list captures"></ul>
+    </section>
+    <section class="plot-only">
+      <label id="drop" class="drop" title="SVG files to place on the bed: drop them anywhere on the page, or click to pick">
         <input type="file" id="svg-input" accept=".svg,image/svg+xml" multiple hidden>
         <b>Drop SVGs</b> on the bed, or click here
       </label>
       <ul id="objects" class="list"></ul>
     </section>
-    <section id="object-panel" hidden></section>
+    <section id="object-panel" class="plot-only" hidden></section>
   </aside>
 
   <div id="stage">
@@ -39,7 +47,19 @@
     <canvas id="ruler-y" class="ruler y"></canvas>
     <div class="ruler-corner"></div>
     <div id="cursor" class="cursor mono"></div>
-    <nav id="rail" class="rail" aria-label="Tools">
+    <nav id="scan-rail" class="rail scan-only" aria-label="Scan tools">
+      <button data-smode="region" class="on" title="Region (R): drag on the bed to mark what to scan">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-dasharray="3 2"/></svg></button>
+      <button data-smode="pan" title="Pan (H, or hold Space)">
+        <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
+      <button data-smode="look" title="Look (L): click on the bed for one shot there, at the focus height">
+        <svg viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      <button data-smode="focus" title="Focus (F): click on the bed to sweep the height there and find where it is sharpest">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg></button>
+      <hr>
+      <button data-sact="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    </nav>
+    <nav id="rail" class="rail plot-only" aria-label="Tools">
       <button data-mode="select" class="on" title="Select, move, scale, rotate (V)">
         <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg></button>
       <button data-mode="pan" title="Pan (H, or hold Space)">
@@ -58,6 +78,7 @@
         <g id="design-layer"></g>
         <g id="paths-layer"></g>
         <g id="overlay-layer"></g>
+        <g id="scan-layer"></g>
       </g>
     </svg>
     <div id="hint" class="hint"></div>
@@ -66,70 +87,80 @@
       <button id="zoom-in" title="Zoom in (+)">+</button>
       <button id="zoom-out" title="Zoom out (−)">−</button>
     </div>
-    <div id="scrub" class="scrub">
+    <div id="viewer" class="viewer" hidden></div>
+    <div id="scrub" class="scrub plot-only">
       <button id="play" title="Play the plot">▶</button>
-      <input type="range" id="scrubber" min="0" max="0" value="0" aria-label="G-code line">
+      <input type="range" id="scrubber" min="0" max="0" value="0" aria-label="G-code line" title="Drag through the G-code: the plot as far as this line">
       <span id="scrub-line" class="mono">—</span>
       <button id="gcode-toggle" title="Show the G-code">G-code</button>
     </div>
-    <pre id="gcode-view" class="gcode" hidden></pre>
+    <pre id="gcode-view" class="gcode plot-only" hidden></pre>
   </div>
 
   <aside id="right">
-    <section>
-      <h2>Paint</h2>
+    <section class="scan-only">
+      <h2 title="The camera tool: a tool whose tag names a camera type (eg. cam-u20)">Camera</h2>
+      <div id="camera" class="form scan"></div>
+    </section>
+    <section class="scan-only">
+      <h2 title="What the camera is doing, and its last shot">Shots</h2>
+      <div id="camera-job"></div>
+    </section>
+    <section class="plot-only">
+      <h2 title="Paint shapes of the selected drawing with a tool, or mask or skip them">Paint</h2>
       <div class="row">
         <div class="seg small" id="paint-target" role="group" aria-label="Paint what">
-          <button data-v="both" class="on">both</button>
-          <button data-v="stroke">stroke</button>
-          <button data-v="fill">fill</button>
+          <button data-v="both" class="on" title="Paint a shape's outline and its inside">both</button>
+          <button data-v="stroke" title="Paint only the outlines">stroke</button>
+          <button data-v="fill" title="Paint only the insides">fill</button>
         </div>
         <div class="seg small" id="paint-scope" role="group" aria-label="Paint scope">
-          <button data-v="shape" class="on">shape</button>
-          <button data-v="colour">colour</button>
+          <button data-v="shape" class="on" title="Paint the shape clicked">shape</button>
+          <button data-v="colour" title="Paint every shape of the clicked one's colour">colour</button>
         </div>
       </div>
       <div id="palette" class="palette"></div>
       <p class="note">Pick a tool, then click shapes. Shift-click paints the whole colour. Esc stops.</p>
       <p class="note keys">V select · H pan · P paint · drag corners to scale (Alt: about the middle) · knob to turn (Shift: 15°) · R quarter turn · arrows nudge (Shift 10, Alt 0.1) · Ctrl+D duplicate · Del remove · Ctrl+Z / Ctrl+Shift+Z</p>
     </section>
-    <section>
-      <h2>Output</h2>
+    <section class="plot-only">
+      <h2 title="What the plot will take, what may go wrong, and sending it to Klipper">Output</h2>
       <div id="stats" class="stats"></div>
       <ul id="problems" class="problems"></ul>
       <div class="buttons">
-        <a id="download" class="button" href="/api/gcode">Download</a>
-        <button id="upload">Upload</button>
-        <button id="print" class="primary">Upload &amp; plot</button>
+        <a id="download" class="button" href="/api/gcode" title="Save the G-code to this computer">Download</a>
+        <button id="upload" title="Send the G-code to Klipper's files, without starting it">Upload</button>
+        <button id="print" class="primary" title="Send the G-code to Klipper and start plotting it">Upload &amp; plot</button>
       </div>
     </section>
-    <section>
-      <h2>Machine</h2>
+    <section class="plot-only">
+      <h2 title="The plotter's settings for this job: the bed, z limits, travels. A changed one shows ↺ to go back">Machine</h2>
       <div id="machine" class="form"></div>
     </section>
     <section>
-      <h2>Tools</h2>
+      <h2 title="What is in each holder, from its tag: give a tool its pen type and colour, tune how it draws">Tools</h2>
       <div id="tools" class="tools"></div>
     </section>
-    <section>
-      <h2>Pens</h2>
+    <section class="plot-only">
+      <h2 title="The library of tool types (plot/profiles/pens.toml): pens and how they draw, and cameras">Pens</h2>
       <div id="pens" class="pens"></div>
     </section>
-    <section>
-      <h2>Fonts</h2>
-      <label class="drop small">
+    <section class="plot-only">
+      <h2 title="Fonts for the texts of the drawings: TTF/OTF as they are, SVG fonts drawn as single lines">Fonts</h2>
+      <label class="drop small" title="Upload fonts: click to pick, or drop them on the page">
         <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
         Upload TTF / OTF (source) or SVG fonts (single line)
       </label>
       <ul id="fonts" class="list"></ul>
     </section>
     <section>
-      <h2>Printer</h2>
+      <h2 title="Klipper, through Moonraker">Printer</h2>
       <div id="printer" class="form"></div>
     </section>
   </aside>
 </main>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
+<script src="/static/scan.js"></script>
 </body>
 </html>

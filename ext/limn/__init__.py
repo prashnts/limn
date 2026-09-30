@@ -67,6 +67,7 @@ SCAN_LATE = 60.0        # s after which a scan is forgotten without a word
 SCAN_SAME = 3.0         # s: the same tag again within this is the same scan
 SCAN_FAST = 0.5         # s between listens after a hand was on the holders,
 SCAN_AWAKE = 60.0       #   for this long
+INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
@@ -130,7 +131,7 @@ class Limn:
         self._dry_beep_at = 0.0
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         self.dry_pens = PENS_FILE
-        self._pens = (None, {})     # (mtime, {pen key: dry minutes}) of the pen library
+        self._pens = (None, {}, set())  # (mtime, {pen key: dry minutes}, keys with no ink) of the pen library
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -1099,8 +1100,10 @@ class Limn:
         '''The known pens in the machine now: a tag that isn't stale, in its holder or on the carriage.'''
         occupied = self.holder.occupied or frozenset()
         carried = self._carried()
+        self._pen_dry()
+        never = self._pens[2]                   # no ink: a camera, a laser, a knife
         return {int(h) for h, t in self._tags().items()
-                if not t.get('stale') and (int(h) in occupied or int(h) == carried)}
+                if not t.get('stale') and t.get('pen') not in never and (int(h) in occupied or int(h) == carried)}
 
     def _sync_drying(self):
         if not self.holder or self.holder.occupied is None:
@@ -1122,12 +1125,13 @@ class Limn:
                 import tomllib
                 with open(self.dry_pens, 'rb') as f:
                     lib = tomllib.load(f)
-                self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items()
-                                      if isinstance(v, dict) and v.get('dry')})
+                lib = {k: v for k, v in lib.items() if isinstance(v, dict)}
+                self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items() if v.get('dry')},
+                              {k for k, v in lib.items() if v.get('kind', 'pen') not in INKY})
         except (OSError, ImportError, ValueError) as e:
             if self._pens[0] != 'missing':
                 logging.info("[Tool holder] no pen library for drying times (%s): %s", self.dry_pens, e)
-            self._pens = ('missing', {})
+            self._pens = ('missing', {}, set())
         return self._pens[1]
 
     def _dry_tick(self, eventtime):

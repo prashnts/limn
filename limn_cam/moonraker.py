@@ -56,6 +56,27 @@ class Moonraker:
             pass
         self.wait_idle(timeout)
 
+    def gcode(self, script, timeout=120):
+        '''G-code, back once Klipper has run it (the moves too, with an M400 in it).
+        A proxy that gives up first (502/504): then until Klipper is idle.'''
+        try:
+            r = requests.post(self.url + '/printer/gcode/script', json={'script': script}, timeout=min(timeout, 58))
+        except requests.Timeout:
+            self.wait_idle(timeout)
+            return
+        if r.status_code == 200:
+            return
+        if r.status_code == 400:
+            try:
+                msg = r.json()['error']['message']
+            except Exception:
+                msg = r.text[:200]
+            raise RuntimeError(msg)
+        if r.status_code in (502, 504):
+            self.wait_idle(timeout)
+            return
+        r.raise_for_status()
+
     def print_file(self, name, text, timeout=7200):
         '''Uploads and starts it, waits until it is over -> its end state.'''
         r = requests.post(self.url + '/server/files/upload', files={'file': (name, text.encode(), 'text/plain')},

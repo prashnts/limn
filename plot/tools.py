@@ -102,6 +102,7 @@ class Tool(BaseModel):
         return lo, hi
 
     touches: ClassVar[bool] = True      # a laser doesn't: the play never comes into it
+    draws: ClassVar[bool] = True        # a camera doesn't: nothing is painted with it
 
     @property
     def pressed(self):
@@ -243,3 +244,23 @@ class Laser(Tool):
 
     def disengage(self, ctx):
         ctx.g.raw(self.off, moves=False)
+
+
+@kind('camera')
+class Camera(Tool):
+    """A camera on a tool, for scanning (limn_cam/scan.py): it neither draws nor
+    touches. It is focused by height: `focus_z` is the G-code z (its tag's dz and
+    the mesh applied, like a pen's) where what lies on the bed is sharpest, and
+    `fov` how much of it one shot takes, mm, at that height."""
+    kind: str = 'camera'
+    webcam: str = ''                    # its name in Moonraker's webcams
+    fov: tuple[float, float] = (16.0, 9.0)      # mm across the image (its x) and down it (its y), at focus_z
+    focus_z: float = 6.0
+    turn: float = 0.0                   # degrees the image is turned from the machine's axes
+    settle: float = 0.4                 # s still before a shot (the tether, the frame the stream has queued)
+    touches: ClassVar[bool] = False
+    draws: ClassVar[bool] = False
+
+    def lift(self, ctx=None, at=None):
+        return self.focus_z
+

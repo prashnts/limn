@@ -9,6 +9,7 @@
 # placement changed. Plots go to Klipper through Moonraker.
 #
 #   uv run python -m plot serve [--port 4220] [--data plot-data]
+import json
 import os
 import re
 import threading
@@ -18,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import requests
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import pens as pen_library
@@ -27,7 +28,7 @@ from .emit import load, plot
 from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, Placement, ShapePaint
 from .preview import parse
-from .profile import bed_papers, load_pens
+from .profile import bed_papers, load_pens, reach
 from .slicer import Cache, default_groups, text_shapes
 
 STATIC = Path(__file__).parent / 'static'
@@ -56,6 +57,8 @@ class Workspace:
         self.undos, self.redos = [], []
         self.tags = None            # printer.limn.tools: what the tools' tags say, None: not asked yet
         self.printer_job = None     # a scan or a tag write running on the printer, see run_on_printer()
+        self.camera_job = None      # limn_cam.scan.Job: the camera tool focusing, looking or scanning
+        self.scan_path = self.data / 'scan.json'
 
     def save(self):
         self.job.save(self.job_path)
@@ -128,7 +131,7 @@ class Workspace:
         holders = [{'t': f'T{i}', 'holder': h, 'tag': (self.tags or {}).get(str(h))}
                    for i, h in enumerate(machine.holders)]
         return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine),
-                'tools': {k: {**t.model_dump(), 'spacing': t.spacing} for k, t in tools.items()},
+                'tools': {k: {**t.model_dump(), 'spacing': t.spacing, 'draws': t.draws} for k, t in tools.items()},
                 'pens': pens, 'kinds': pen_library.kinds(), 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
                 'line_fonts': HERSHEY + [f.file for f in self.fonts.fonts() if f.kind == 'line'],
@@ -477,6 +480,185 @@ def create_app(data=None):
             except KeyError:
                 raise HTTPException(404, f'no pen {key}')
             return ws.state()
+
+    # The camera tool: focus, look, scan a region (limn_cam/scan.py). limn_cam is only
+    # needed here: without it the rest of the app works on.
+    def scan_settings():
+        from limn_cam.scan import Settings
+        if ws.scan_path.exists():
+            try:
+                return Settings(**json.loads(ws.scan_path.read_text()))
+            except (TypeError, ValueError):
+                pass
+        return Settings()
+
+    def captures():
+        from limn_cam.scan import ScanStore
+        return ScanStore(ws.data / 'captures')
+
+    def cameras():
+        with ws.lock:
+            machine, tools = load(ws.job, ws.tags)
+        return machine, {k: t for k, t in tools.items() if t.kind == 'camera'}
+
+    @app.get('/api/camera')
+    def camera_state():
+        machine, cams = cameras()
+        job = ws.camera_job
+        return {'settings': scan_settings().to_dict(),
+                'cameras': {k: {**t.model_dump(), 'z_limits': t.z_limits(machine)} for k, t in cams.items()},
+                'job': job.state if job else None, 'captures': captures().list(),
+                'travel_area': machine.travel_area, 'zones': [z.model_dump() for z in machine.zones]}
+
+    @app.patch('/api/camera')
+    def camera_settings(body: dict = Body(...)):
+        from limn_cam.scan import Settings
+        s = {**scan_settings().to_dict(), **body}
+        try:
+            settings = Settings(**s)
+            if settings.region is not None:
+                x0, y0, x1, y1 = settings.region
+                settings.region = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+            if not 0 <= settings.overlap < 0.9 or settings.refocus < 0 or settings.refocus_step <= 0:
+                raise ValueError('overlap 0 to 0.9, refocus 0 or more, its step over 0')
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f'scan settings: {e}')
+        ws.scan_path.write_text(json.dumps(settings.to_dict()))
+        return camera_state()
+
+    def camera_job(what, fn_name, *args):
+        from limn_cam.moonraker import Moonraker
+        from limn_cam.scan import Job
+        if ws.camera_job and not ws.camera_job.state['done']:
+            raise HTTPException(409, f"the camera is busy: {ws.camera_job.state['what']}")
+        if ws.printer_job and not ws.printer_job['done']:
+            raise HTTPException(409, f"the printer is busy with {ws.printer_job['what']}")
+        machine, cams = cameras()
+        settings = scan_settings()
+        cam = cams.get(settings.tool) or next(iter(cams.values()), None)
+        if cam is None:
+            raise HTTPException(400, 'no camera tool: write a camera type (eg. cam-u20) onto a tool\'s tag first')
+        if cam.holder is None:
+            raise HTTPException(400, f'{cam.id}: which holder it is in is not known (its tag)')
+        mr = Moonraker(machine.moonraker)
+        try:
+            state = mr.query(print_stats='state')['print_stats']['state']
+        except Exception as e:
+            raise HTTPException(502, f'Moonraker at {machine.moonraker}: {e}')
+        if state in ('printing', 'paused'):
+            raise HTTPException(409, f'the printer is {state}')
+        job = Job(what, mr, cam, machine, captures(), settings)
+        ws.camera_job = job.start(lambda: getattr(job, fn_name)(*args))
+        return {'job': job.state}
+
+    def check_spot(x, y):
+        machine, _ = cameras()
+        tx0, ty0, tx1, ty1 = reach(machine)
+        if not (tx0 <= x <= tx1 and ty0 <= y <= ty1):
+            raise HTTPException(400, f'({x:g}, {y:g}) is out of reach {reach(machine)}')
+        for z in machine.zones:
+            zx0, zy0, zx1, zy1 = z.rect
+            if z.z is None and zx0 <= x <= zx1 and zy0 <= y <= zy1:
+                raise HTTPException(400, f'({x:g}, {y:g}) is in {z.name}, keep out')
+
+    @app.post('/api/camera/focus')
+    def camera_focus(body: dict = Body(...)):
+        '''{x, y}: the sharpest z there, sweeping settings.sweep.'''
+        x, y = float(body['x']), float(body['y'])
+        check_spot(x, y)
+        return camera_job('finding the focus', 'focus', x, y)
+
+    @app.post('/api/camera/look')
+    def camera_look(body: dict = Body(...)):
+        '''{x, y, z}: one shot there.'''
+        x, y, z = float(body['x']), float(body['y']), float(body['z'])
+        check_spot(x, y)
+        return camera_job('looking', 'look', x, y, z)
+
+    @app.post('/api/camera/scan')
+    def camera_scan():
+        '''The region of the settings, tile by tile.'''
+        from limn_cam.scan import tiles
+        s = scan_settings()
+        if not s.region:
+            raise HTTPException(400, 'no region: draw one on the bed')
+        machine, cams = cameras()
+        cam = cams.get(s.tool) or next(iter(cams.values()), None)
+        if cam is None:
+            raise HTTPException(400, 'no camera tool')
+        for _, _, x, y in tiles(s.region, cam.fov, s.overlap, cam.turn):
+            check_spot(x, y)
+        return camera_job('scanning', 'scan')
+
+    @app.post('/api/camera/stop')
+    def camera_stop():
+        if ws.camera_job and not ws.camera_job.state['done']:
+            ws.camera_job.stop()
+        return {'job': ws.camera_job.state if ws.camera_job else None}
+
+    @app.post('/api/camera/park')
+    def camera_park():
+        '''The camera back in its holder.'''
+        if ws.camera_job and not ws.camera_job.state['done']:
+            raise HTTPException(409, 'the camera is busy')
+        return run_on_printer('putting the camera away', 'UNDOCK')
+
+    @app.get('/api/captures')
+    def captures_list():
+        return captures().list()
+
+    @app.get('/api/captures/{sid}')
+    def capture_meta(sid: str):
+        try:
+            return captures().meta(sid)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+
+    @app.get('/api/captures/{sid}/file/{name}')
+    def capture_file(sid: str, name: str, download: bool = False):
+        try:
+            p = captures().file(sid, name)
+        except KeyError:
+            raise HTTPException(404, f'no {name} in {sid}')
+        return FileResponse(p, filename=f'{sid}-{name}' if download else None)
+
+    @app.get('/api/captures/{sid}/thumb/{name}')
+    def capture_thumb(sid: str, name: str, width: int = 320):
+        try:
+            return FileResponse(captures().thumb(sid, name, max(64, min(width, 1200))))
+        except KeyError:
+            raise HTTPException(404, f'no {name} in {sid}')
+
+    @app.get('/api/captures/{sid}/mosaic')
+    def capture_mosaic(sid: str, px_per_mm: float = 12.0):
+        try:
+            return FileResponse(captures().mosaic(sid, max(1.0, min(px_per_mm, 60.0))))
+        except KeyError as e:
+            raise HTTPException(404, f'{sid}: {e}')
+
+    @app.get('/api/captures/{sid}/zip')
+    def capture_zip(sid: str):
+        import io
+        import zipfile
+        try:
+            d = captures().dir(sid)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_STORED) as z:
+            for p in sorted(d.iterdir()):
+                if not p.name.startswith(('thumb-', 'mosaic-')):
+                    z.write(p, f'{sid}/{p.name}')
+        return Response(buf.getvalue(), media_type='application/zip',
+                        headers={'Content-Disposition': f'attachment; filename="limn-{sid}.zip"'})
+
+    @app.delete('/api/captures/{sid}')
+    def capture_delete(sid: str):
+        try:
+            captures().delete(sid)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+        return captures().list()
 
     @app.post('/api/printer/upload')
     def upload(body: dict = Body(default={})):

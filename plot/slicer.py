@@ -52,6 +52,7 @@ def colour_distance(a, b):
 
 
 def nearest_tool(colour, tools):
+    tools = {k: t for k, t in (tools or {}).items() if t.draws}      # not a camera
     if not tools:
         return None
     return min(tools.values(), key=lambda t: colour_distance(colour, t.color)).id

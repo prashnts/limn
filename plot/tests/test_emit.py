@@ -350,6 +350,8 @@ def test_press_and_the_play(write_svg, job_of):
 def test_fineliners_are_never_driven_hard(write_svg, job_of):
     from plot.profile import load_pens
     for key, pen in load_pens().items():
+        if pen.get('kind', 'pen') == 'camera':
+            continue
         assert pen['press'] <= pen['press_max'], key
         if key.startswith(('mic', 'std')):
             assert pen['press_max'] <= 0.25, key
