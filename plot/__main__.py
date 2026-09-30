@@ -134,7 +134,7 @@ def preview_(gcode: Path,
              out: Path = typer.Option(..., '-o'),
              travel: bool = True,
              machine: str = 'limn', tools: str = 'tools'):
-    '''Any G-code (ours, or PrusaSlicer's with ACT) as an SVG over the bed.'''
+    '''Any G-code as an SVG over the bed.'''
     m, t = load_machine(machine), load_tools(tools)
     sim = parse(gcode.read_text())
     st = stats(sim, m, t)

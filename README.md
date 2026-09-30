@@ -8,7 +8,7 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
   Pens can also be scanned by hand: hold the pen to the reader until it beeps, then put it into a holder within 8 s. That holder has that pen (`TOOL_TAGS`, the web UI) until a hand empties it again; docking and undocking don't. Between tool changes the reader listens every 2 s (every 5 s while printing, `tool_holder_scan_idle` / `tool_holder_scan_printing` in `[limn]`, 0: off), and every 0.5 s for a minute after a hand was on the holders.
 - `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
 - `plot/`: SVG to G-code, and the web UI to place, paint, preview and plot drawings (`plot/README.md`). On the Pi, supervisord runs it on port 4219 (`limn_web.conf`, see *Web UI on the Pi*).
-- `slicer/config.ini`: Sample PrusaSlicer config to make it suitable for plotting.
+- `slicer/`: The old PrusaSlicer setup, retired: `plot/` replaces it. Don't plot its G-code: its pen moves needed the `G1` ACT macro, which is gone, and without it `G1 Z0 ACT1` drives the pen to Z0.
 - `GEOMETRY.md`: where everything is, in plotter coordinates: axes, body, beds, dock and tools, heights, probe, camera.
 - `step/`: (todo) 3D Printable Parts
 

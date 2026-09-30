@@ -6,8 +6,7 @@
 # Any G-code, not only ours: the preview shows the file, not what we meant.
 # - Ours ('; limn-plot' at the top): G1 across is drawing, G0 travel.
 # - A laser (M3/M4 .. M5): G1 across with it on is drawing.
-# - Anything else (PrusaSlicer with the ACT substitutions): ACT sets z like the
-#   G1 macro in klipper/limn.cfg, and G1 across at z <= z_draw is drawing.
+# - Anything else: G1 across at z <= z_draw is drawing.
 # A macro (T0, _APPLY_OFFSETS, ..) may move the head: the next move starts
 # from nowhere, it isn't drawn.
 import base64
@@ -18,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 
-ACT_Z = {1: 1.0, 2: 3.0, 3: 5.0}
 TRAVEL, DRAW = 0, 1
 TOOL = re.compile(r'T(\d+)$')
 
@@ -86,8 +84,6 @@ def parse(text, z_draw=1.5, arc_step=0.2) -> Sim:
             if '=' in w:
                 k, v = w.split('=', 1)
                 params[k.upper()] = v
-            elif w.upper().startswith('ACT'):
-                params['ACT'] = w[3:]
             elif w[0].isalpha():
                 params[w[0].upper()] = w[1:]
         if cmd in ('G0', 'G1', 'G2', 'G3'):
@@ -98,8 +94,6 @@ def parse(text, z_draw=1.5, arc_step=0.2) -> Sim:
                     target[i] = v if absolute or pos[i] is None else pos[i] + v
             if 'F' in params:
                 feed = float(params['F'])
-            if not ours and 'ACT' in params and int(params['ACT']) in ACT_Z:
-                target[2] = ACT_Z[int(params['ACT'])]
             start, pos = pos, target
             if None in (start[0], start[1], target[0], target[1]):
                 continue

@@ -23,7 +23,8 @@ z_min = -2.5        # stepper_z position_min -3, less a tag dz of down to -0.5 (
 z_max = 7           # stepper_z position_max 10, less a tag dz of up to 3
 # The mesh keeps z over the paper, so travels stay low: every mm up is a mm
 # down again at max_z_velocity 5, and z is most of a plot's time.
-z_travel = 2.5      # long travels (the old ACT3 went to Z5, from before the bed)
+z_travel = 2.5      # long travels, over the paper
+safe_z = 5          # off the paper the tool never goes under this: travels leaving it go up first
 hop_distance = 10   # mm, shorter travels hop at the tool's lift (a pen: z_down + hop)
 clearance = 1       # mm over zones and objects when a travel crosses them
 

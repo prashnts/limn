@@ -6,7 +6,8 @@
 # G0 is a travel, G1 the tool working (or coming down to work): the preview
 # tells them apart by that. Axes that don't change are left out. After a
 # macro that moves the head the position is unknown until `at()` says where
-# it is, and the next move has all its axes.
+# it is, and the next move has all its axes. `moves` keeps each move's start
+# and end, None where it isn't known, for the checks of emit.py.
 EPS = 5e-4
 
 
@@ -21,6 +22,7 @@ class Writer:
         self.x = self.y = self.z = None
         self.f = None
         self._up = None         # the last line is a G0 of z alone: (z, F) from before it
+        self.moves = []         # ((x, y, z) from, (x, y, z) to) of each move line
 
     def comment(self, text):
         self.lines.append(f'; {text}')
@@ -40,9 +42,11 @@ class Writer:
 
     def _move(self, cmd, x, y, z, f):
         zonly = cmd == 'G0' and x is None and y is None and z is not None
+        start = (self.x, self.y, self.z)
         if zonly and self._up is not None:
             # A z move right after another: one move, from where the first started
             self.lines.pop()
+            start = self.moves.pop()[0]
             self.z, self.f = self._up
         before = (self.z, self.f)
         words = []
@@ -61,6 +65,7 @@ class Writer:
             words.append('F' + num(f))
             self.f = f
         self.lines.append(cmd + ' ' + ' '.join(words))
+        self.moves.append((start, (self.x, self.y, self.z)))
         if zonly:
             self._up = before
         return True

@@ -349,3 +349,14 @@ def test_pencil_kind_in_the_library(client, pens_file):
     st = client.put('/api/pens/hb', json={'name': 'HB pencil', 'kind': 'pencil', 'width': 0.3, 'wear': 0.05}).json()
     assert st['pens']['hb'] == {'name': 'HB pencil', 'kind': 'pencil', 'width': 0.3, 'wear': 0.05}
     assert 'wear' in st['kinds']['pencil'] and 'wear' not in st['kinds']['pen']
+
+
+def test_unsafe_gcode_is_not_sent(client, monkeypatch):
+    add(client)
+    client.post('/api/slice')
+    ws = client.app.state.ws
+    ws.unsafe = ['the tool goes to z 0.5 at (150, 100), off the paper: under safe_z 5']
+    monkeypatch.setattr(server.requests, 'post', lambda *a, **k: (_ for _ in ()).throw(AssertionError('sent')))
+    r = client.post('/api/printer/upload', json={'start': True})
+    assert r.status_code == 409 and 'too low off the paper' in r.text
+    assert client.post('/api/slice').json()['unsafe'] is False

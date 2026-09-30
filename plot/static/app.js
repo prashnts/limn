@@ -803,7 +803,10 @@ function renderOutput() {
       <div>draw ${num(st.draw_mm / 1000, 2)} m · travel ${num(st.travel_mm / 1000, 2)} m</div>${tools}`;
   }
   $('#problems').innerHTML = (preview ? preview.problems : []).map((p) => `<li>${esc(p)}</li>`).join('');
-  for (const b of ['#upload', '#print']) $(b).disabled = !st || !st.draw_mm;
+  for (const b of ['#upload', '#print']) {
+    $(b).disabled = !st || !st.draw_mm || preview.unsafe;
+    $(b).title = preview && preview.unsafe ? 'The pen would go under safe_z off the paper: see the problems' : '';
+  }
 }
 
 const MACHINE_FIELDS = [['z_min', 'z min'], ['z_max', 'z max'], ['z_travel', 'z travel'], ['hop_distance', 'hop under'],

@@ -20,7 +20,7 @@ uv run python -m plot colors drawing.svg                  # its colours, and the
 uv run python -m plot slice drawing.svg --map '#ffcd00=T1' --map '#ffffff=mask' \
     -o out.gcode --preview out.svg --save-job job.json
 uv run python -m plot job job.json -o out.gcode           # after editing the job (placement, groups, ..)
-uv run python -m plot preview any.gcode -o preview.svg    # ours, or PrusaSlicer's with ACT
+uv run python -m plot preview any.gcode -o preview.svg    # any G-code, as the plotter would draw it
 ```
 
 - `profiles/limn.toml`: the bed, its art, the draw area, zones, z limits and travel heights, the G-code around a plot. A job overrides any of it with `machine_overrides`.
@@ -30,4 +30,4 @@ uv run python -m plot preview any.gcode -o preview.svg    # ours, or PrusaSlicer
 - `svg.py` reads a drawing by colour, `slicer.py` makes each colour's paths (fills, occlusion, strokes as wide as the SVG has them), `emit.py` writes the G-code, `preview.py` reads any G-code back.
 - A job's objects are sliced in their own coordinates, their placement applied when the G-code is written: moving or turning one doesn't slice it again.
 
-The G-code is plain `G0` (travel) / `G1` (drawing) with real z, the tool macros (`T0` -> `DOCK`) and `_APPLY_OFFSETS`. It runs with or without the `G1` ACT macro in `klipper/limn.cfg`.
+The G-code is plain `G0` (travel) / `G1` (drawing) with real z, the tool macros (`T0` -> `DOCK`) and `_APPLY_OFFSETS`. Off the paper (the bed's draw area) the tool is never under `safe_z` (Z5): travels that leave or cross it go up first and come down only on the paper, drawings are clipped to it, and every move written is checked for it. A plot that fails the check (`UNSAFE` in its problems) isn't uploaded.
