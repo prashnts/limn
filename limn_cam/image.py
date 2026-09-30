@@ -89,12 +89,12 @@ def paper(img, backend=None):
     sd = np.sqrt(np.maximum(box_blur(a * a, 8) - m * m, 0))
     top = np.percentile(m, 99.5)
     for level in (0.8, 0.75, 0.7):
-        mask = (m > level * top) & (sd < 0.04)
+        mask = (m > level * top) & (sd < 0.08)     # drawn lines are texture too: a full sheet still counts
         blobs = (backend or get()).components(mask, mask.astype(float))
         if not blobs:
             continue
         b = max(blobs, key=lambda b: b.area)
         x0, y0, x1, y1 = b.box
-        if b.area > 0.01 * a.size and b.area > 0.6 * (x1 - x0 + 1) * (y1 - y0 + 1):    # a filled rectangle
+        if b.area > 0.01 * a.size and b.area > 0.5 * (x1 - x0 + 1) * (y1 - y0 + 1):    # a filled rectangle
             return b.box
     return None

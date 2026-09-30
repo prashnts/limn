@@ -38,7 +38,7 @@ def test_structure_and_heights(write_svg, job_of):
     down = m.z_touch - pen.press
     assert all(z == pytest.approx(down) for z in zs(g, 'G1'))     # its press past touch
     travel = zs(g, 'G0')
-    hop = m.z_touch + m.play.clear + m.play.per_press * pen.press
+    hop = m.z_touch + m.play.clear + m.play.extra((0, 0), pen.press)      # the profile's play, measured or not
     assert pytest.approx(hop) in travel              # the short hop: up the press, the clearance, the play
     assert m.z_travel in travel                      # the long travel
     assert max(travel) <= m.z_max

@@ -15,25 +15,31 @@
 IDLE = 600.0            # s uncapped before a pen is overdue, nothing printing
 PRINTING = 1200.0       # while printing
 STAGES = (0.0, 120.0, 300.0)    # s overdue: stage 1, 2, 3
+GONE = 20.0             # s out of the machine before its clock stops: a dock or undock
+                        # has the pen in neither the holder nor the carriage for a moment
 
 
 class Drying:
 
-    def __init__(self, idle=IDLE, printing=PRINTING, since=None):
+    def __init__(self, idle=IDLE, printing=PRINTING, since=None, gone=GONE):
         self.idle = idle
         self.printing = printing
+        self.gone = gone
         self.since = {int(k): float(v) for k, v in (since or {}).items()}  # tool -> uncapped since
+        self.away = {}              # tool -> not in the machine since
 
     def update(self, present, now):
         '''present: the known pens in the machine now -> whether anything changed.'''
         changed = False
         for tool in present:
+            self.away.pop(tool, None)
             if tool not in self.since:
                 self.since[tool] = now
                 changed = True
         for tool in list(self.since):
-            if tool not in present:
+            if tool not in present and now - self.away.setdefault(tool, now) >= self.gone:
                 del self.since[tool]
+                del self.away[tool]
                 changed = True
         return changed
 

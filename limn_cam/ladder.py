@@ -187,7 +187,22 @@ def register(d, ladder, backend=None, t=None):
         w, h = b.box[2] - b.box[0] + 1, b.box[3] - b.box[1] + 1
         return min(w, h) / max(w, h)
 
-    square = [b for b in blobs if squareness(b) >= 0.55 and side(b) >= 5]
+    mask = d > t
+
+    def crossness(b):
+        '''The share of its ink on the middle row and column of its box: ~1 for a cross,
+        less for a block of lines (a ladder's lowest strokes run together).'''
+        x0, y0, x1, y1 = b.box
+        sub = mask[y0:y1 + 1, x0:x1 + 1]
+        h, w = sub.shape
+        k = max(1, round(0.15 * min(h, w)))
+        cy, cx = h // 2, w // 2
+        band = np.zeros_like(sub)
+        band[max(cy - k, 0):cy + k + 1, :] = True
+        band[:, max(cx - k, 0):cx + k + 1] = True
+        return float((sub & band).sum() / max(sub.sum(), 1))
+
+    square = [b for b in blobs if squareness(b) >= 0.55 and side(b) >= 5 and crossness(b) >= 0.75]
     if len(square) < 5:
         raise ValueError(f'{len(square)} cross-like marks in the photo, the ladder has 5: is it in view?')
     square.sort(key=lambda b: -side(b))
@@ -218,7 +233,11 @@ def register(d, ladder, backend=None, t=None):
             best = (score, h5, rms)
     if best is None:
         raise ValueError('the crosses are not where the ladder has them: no fit')
-    return best[1], best[2], t, blobs
+    h, rms = best[1], best[2]
+    if rms > 0.4 * h.scale(anchors[0]):
+        raise ValueError(f'the crosses fit only to {rms:.1f} px ({rms / h.scale(anchors[0]):.2f} mm): '
+                         f'not trusting it, check the photos')
+    return h, rms, t, blobs
 
 
 def measure(d, h, a, b, t, width=0.6, n=None):
