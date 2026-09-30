@@ -14,6 +14,15 @@
 - Z play: gentle (0.3, 2mm strokes) and loaded (0.6, 10mm at 3000mm/min) tests both let go within 0.5mm over touch, the same all over the sheet (`limn_cam play`). The few mm measured by hand don't show on the lift. Still open: tilt while drawing (the pull along X vs Y), which a lift test doesn't see.
 - Cameras aren't essential (OpenCV is the `cam` extra). Next: fixed focus on the axiscam; a camera on the tool for line width and contact; an upward endoscope for tip dx/dy (notebook act-7).
 
+## Scan (the camera tool, limn_cam/scan.py, the Scan tab)
+
+- The camera (holder 41, `cam-u20`, tethered, U20CAM on `/webcam/`, crowsnest `[cam usbcam]`) works in machine Z: `clear_z` 7.5, `z_min` 4 (a guess after the tube was lengthened: measure how low it may go, then lower `z_min` in pens.toml).
+- [ ] Focus: sweep over the paper (Focus, K), put the z found as `focus_z` in pens.toml.
+- [ ] Measure one shot's `fov` (mm) and `turn`: shoot a spot, move a known distance, shoot again (phase correlation of the two), or shoot the plotted crosses. Until then the tile grid and the mosaic are off.
+- [ ] The camera's centre against the tool point (dx/dy): shoot a plotted cross at a known place.
+- [ ] Stitching the mosaic (it is only placed now), and focus stacking for film.
+- Film scanning: the backlit bed, stitched tiles, `refocus` for curled film.
+
 ## ext/, klipper/
 
 - Drying: per pen (`dry` minutes in pens.toml, 240 for the Stabilo 88, 10 for fineliners), twice that printing. To check on a real long plot: the SET_PIN beeps land between moves without a stall. Maybe a Fluidd button for `TOOL_DRY RESET=1`.

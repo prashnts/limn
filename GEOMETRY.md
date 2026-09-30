@@ -142,6 +142,7 @@ Heights in `beds.py` are Klipper Z with no mesh applied. `plot/` heights are G-c
 | 9.2 | dock travel height (`_DOCK_TOOL`) |
 | 9 | `PANEL_ZHOME`: travel over the beds (routines, marks) |
 | 8 | Z endstop; park and approach height at the holders |
+| **7.5** | camera tool: `clear_z`, machine Z with no mesh and no tag dz: it moves sideways only this high, and focuses by going down over the spot it shoots, never under its `z_min` (4, the tube lengthened 2026-09-30) |
 | 7 | after `_APPLY_OFFSETS`; tag reader; **`z_max` for plots** (10 less a dz of up to 3) |
 | 6 | `PAPER_ZHOME`: travel over the paper (routines) |
 | 5.5 | `[bed_mesh] horizontal_move_z` |

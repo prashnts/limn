@@ -48,7 +48,11 @@ async function patchScan(body) {
   renderCamera(); renderJob(); drawScanLayer();
 }
 const cam = () => C && (C.cameras[C.settings.tool] || Object.values(C.cameras)[0]);
-const focusZ = () => (C.settings.z ?? (cam() || {}).focus_z ?? 6);
+const focusZ = () => (C.settings.z ?? (cam() || {}).focus_z ?? 7.5);
+function sweepOf(c) {        // as limn_cam/scan.py Job.sweep(): unset, clear_z down 2.5
+  const [lo] = c.z_limits;
+  return C.settings.sweep || [Math.max(lo, c.clear_z - 2.5), c.clear_z, 0.25];
+}
 
 // Same as limn_cam/scan.py tiles()
 function footprint(fov, turn) {
@@ -91,7 +95,7 @@ function renderCamera() {
     return;
   }
   const c = cam(), s = C.settings, r = s.region || ['', '', '', ''];
-  const [lo, hi] = c.z_limits;
+  const [lo, hi] = c.z_limits, sw = sweepOf(c);
   const n = scanTiles().length;
   const per = (s.settle ?? c.settle) + 1.5 + (s.refocus > 0 ? (2 * s.refocus / s.refocus_step + 1) * 1.6 : 0);
   const [fx, fy] = footprint(c.fov, c.turn || 0);
@@ -107,18 +111,21 @@ function renderCamera() {
       <input data-s="r2" type="number" step="0.5" value="${num(r[2], 1)}" title="Region: to X (mm)">
       <input data-s="r3" type="number" step="0.5" value="${num(r[3], 1)}" title="Region: to Y (mm)">
     </div>
+    <label title="Heights are the machine's own Z (no mesh, no tag offset): home is Z8">Clear at</label>
+    <div class="note" title="It moves sideways only this high or higher, clear of everything raised on the bed (clear_z in pens.toml); it goes down only over the spot it shoots">Z ${num(c.clear_z, 2)} · lowest Z ${num(lo, 2)}</div>
     ${fld('z', 'Focus z', num(s.z, 2), `step="0.05" min="${lo}" max="${hi}" placeholder="${num(c.focus_z, 2)}"`,
-      `G-code z of the camera when shooting: where it is sharpest. Empty: the camera's own (${num(c.focus_z, 2)}). Find it with Focus (K) on the bed. Limits ${lo} to ${hi}`)}
+      `Machine Z of the camera when shooting: where it is sharpest. Empty: the camera's own (${num(c.focus_z, 2)}). Find it with Focus (K) on the bed. From ${lo} (its z_min) to ${hi}`)}
     ${fld('overlap', 'Overlap %', num(s.overlap * 100, 0), 'step="5" min="0" max="80"', 'How much of a shot the next one shares: more for stitching, less for fewer shots')}
     ${fld('refocus', 'Refocus ±', num(s.refocus, 2), 'step="0.05" min="0"', 'mm up and down around the focus z at every tile, keeping the sharpest shot: for film or paper that curls. 0: off (quicker)')}
     ${fld('refocus_step', 'its step', num(s.refocus_step, 2), 'step="0.05" min="0.05"', 'Steps of that refocus sweep, mm')}
     ${fld('settle', 'Settle s', num(s.settle, 2), `step="0.1" min="0" placeholder="${num(c.settle, 1)}"`, `Seconds still before each shot (the tether swinging, frames the camera has queued). Empty: the camera's own (${c.settle})`)}
-    <label title="The focus sweep: from, to, step (G-code z)">Sweep</label>
-    <div class="row region" title="The focus sweep: from, to, step (G-code z)">
-      <input data-s="w0" type="number" step="0.25" value="${num(s.sweep[0], 2)}" title="Focus sweep: from z">
-      <input data-s="w1" type="number" step="0.25" value="${num(s.sweep[1], 2)}" title="Focus sweep: to z">
-      <input data-s="w2" type="number" step="0.05" min="0.05" value="${num(s.sweep[2], 2)}" title="Focus sweep: step">
+    <label title="The focus sweep, machine Z: from, to, step. It goes down from the top, never under the camera's lowest Z">Sweep</label>
+    <div class="row region" title="The focus sweep: from, to, step (machine Z)">
+      <input data-s="w0" type="number" step="0.25" min="${lo}" value="${num(sw[0], 2)}" title="Focus sweep: its lowest z (not under ${lo})">
+      <input data-s="w1" type="number" step="0.25" max="${hi}" value="${num(sw[1], 2)}" title="Focus sweep: its highest z (it starts there)">
+      <input data-s="w2" type="number" step="0.05" min="0.05" value="${num(sw[2], 2)}" title="Focus sweep: step">
     </div>
+    <label></label><label class="check" title="Stay at the shooting z between tiles instead of lifting to the clear height: quicker, only for a flat region with nothing raised in it"><input type="checkbox" data-s="low"${s.low ? ' checked' : ''}> stay low between tiles</label>
     <label></label><div class="note">${n ? `${n} shot${n > 1 ? 's' : ''}, about ${Math.ceil(n * per / 60)} min` : 'Draw a region on the bed (R)'}</div>`);
 }
 $('#camera').addEventListener('change', async (e) => {
@@ -131,8 +138,9 @@ $('#camera').addEventListener('change', async (e) => {
     r[+k[1]] = v ?? 0;
     return patchScan({ region: r });
   }
+  if (k === 'low') return patchScan({ low: t.checked });
   if (k[0] === 'w' && k.length === 2) {
-    const w = [...s.sweep];
+    const w = [...sweepOf(cam())];
     w[+k[1]] = v ?? w[+k[1]];
     return patchScan({ sweep: w });
   }
