@@ -63,13 +63,30 @@ class FakeMoonraker:
                 self.carried = self.holder
 
     def query(self, **objects):
+        out = {}
         if 'save_variables' in objects:
-            return {'save_variables': {'variables': {'currently_docked_tool': self.carried}}}
+            out['save_variables'] = {'variables': {'currently_docked_tool': self.carried}}
         if 'gcode_move' in objects:
-            return {'gcode_move': {'homing_origin': [0, 0, 0.5, 0]}}
-        if 'limn' in objects:
-            return {'limn': {'tools': {str(self.holder): {'dz': 0.5}}}}
-        return {'print_stats': {'state': 'standby'}}
+            out['gcode_move'] = {'homing_origin': [0, 0, 0.5, 0]}
+        if 'bed_mesh' in objects:
+            out['bed_mesh'] = {'profile_name': 'lrt_paper'}
+        if 'print_stats' in objects:
+            out['print_stats'] = {'state': 'standby'}
+        return out
+
+    def sideways_low(self, clear):
+        '''G1 moves along X/Y made under clear_z.'''
+        z, low = None, []
+        for script in self.scripts:
+            for line in script.splitlines():
+                w = line.split()
+                if not w or w[0] != 'G1':
+                    continue
+                vals = {v[0]: float(v[1:]) for v in w[1:] if v[0] in 'XYZ'}
+                z = vals.get('Z', z)
+                if ('X' in vals or 'Y' in vals) and (z is None or z < clear - 1e-9):
+                    low.append(line)
+        return low
 
     def snapshot(self, camera):
         return jpeg(pattern().filter(ImageFilter.GaussianBlur(abs(self.z - 5.0) * 4 + 0.01)))
@@ -100,9 +117,10 @@ def test_focus_sweep_finds_the_sharp_z(tmp_path):
     job = sc.Job('focus', mr, camera(), machine(), store, sc.Settings(sweep=(3.0, 7.0, 0.5)))
     st = run(job, 'focus', 40, 90)
     assert st['error'] is None and st['result']['z'] == pytest.approx(5.0)
-    assert 'T0' in mr.scripts[0] and 'MESH=lrt_paper' in mr.scripts[0]          # picked up, offsets on
-    downs = [z for z in mr.zs]
-    assert max(downs) <= machine().z_max + 1e-9
+    assert 'T0' in mr.scripts[0] and '_CLEAR_OFFSETS\n' in mr.scripts[0] and 'MESH' not in mr.scripts[0]
+    assert mr.sideways_low(7.5) == [] and mr.z == pytest.approx(7.5)            # sideways only up high; left there
+    assert min(mr.zs) >= 4.0 - 1e-9                                               # never under z_min
+    assert max(mr.zs) <= camera().Z_TOP + 1e-9                                   # its own limits, not the plot's
     curve = st['result']['curve']
     assert [z for z, _ in curve] == sorted([z for z, _ in curve], reverse=True)  # from above: the play
     assert store.meta(st['scan'])['kind'] == 'focus' and store.list()[0]['count'] == 1
@@ -117,6 +135,7 @@ def test_scan_takes_every_tile_and_stops_on_request(tmp_path):
     assert st['error'] is None and st['i'] == st['n'] == len(plan)
     meta = store.meta(st['scan'])
     assert [(t['x'], t['y']) for t in meta['tiles']] == [(x, y) for _, _, x, y in plan] and meta['done']
+    assert mr.sideways_low(7.5) == []                                             # lifted between tiles
     mosaic = Image.open(store.mosaic(st['scan'], px_per_mm=4))
     assert abs(mosaic.size[0] - (40 + 0) * 4) <= 8 * 4 and mosaic.size[1] > 0
     assert Image.open(store.thumb(st['scan'], meta['tiles'][0]['file'], 100)).size[0] == 100
@@ -125,6 +144,13 @@ def test_scan_takes_every_tile_and_stops_on_request(tmp_path):
     job.stop()
     st = run(job, 'scan')
     assert st['error'] == 'stopped' and st['i'] == 0
+
+
+def test_stay_low_between_tiles(tmp_path):
+    mr, store = FakeMoonraker(), sc.ScanStore(tmp_path)
+    settings = sc.Settings(region=(20, 60, 60, 80), low=True)
+    st = run(sc.Job('scan', mr, camera(), machine(), store, settings), 'scan')
+    assert st['error'] is None and len(mr.sideways_low(7.5)) == st['n'] - 1      # only the first came from above
 
 
 def test_refocus_at_each_tile(tmp_path):

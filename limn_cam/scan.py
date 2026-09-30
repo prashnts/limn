@@ -3,12 +3,14 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
-# The camera tool (plot/tools.py, Camera) is focused by moving it: at its
-# `focus_z` over the bed (G-code z: its tag's dz and the mesh applied) what lies
-# there is sharpest, and one shot takes `fov` mm. A region is covered by tiles
-# `overlap` apart, in rows that snake back and forth (a tethered camera moves
-# as little as it can), each shot still for `settle` s. Every z comes from
-# above: the Z axis has play (GEOMETRY.md).
+# The camera tool (plot/tools.py, Camera) works in the machine's own Z: once
+# it is picked up, the tag offsets and the mesh are cleared. It moves sideways
+# only at its `clear_z` or higher (clear of the bed's raised parts; home is Z8)
+# and goes down only over the spot it shoots, never under its `z_min`. It is
+# focused by height: at `focus_z` what lies there is sharpest, and one shot
+# takes `fov` mm. A region is covered by tiles `overlap` apart, in rows that
+# snake back and forth (a tethered camera moves as little as it can), each shot
+# still for `settle` s. Every z comes from above: the Z axis has play.
 #
 # Scans live in a folder each (ScanStore): the tiles, meta.json with where each
 # was taken, a mosaic and thumbnails made when asked for. Only the newest `keep`.
@@ -77,7 +79,8 @@ class Settings:
     refocus: float = 0.0                            # mm up and down around z at each tile, 0: none
     refocus_step: float = 0.1
     settle: float | None = None                     # None: the camera's
-    sweep: tuple[float, float, float] = (3.0, 7.0, 0.25)    # the focus sweep: from, to, step
+    sweep: tuple[float, float, float] | None = None # the focus sweep: from, to, step; None: clear_z down 2.5
+    low: bool = False                               # stay at the shooting z between tiles (flat regions only)
 
     def to_dict(self):
         return asdict(self)
@@ -209,6 +212,8 @@ class Job:
                       'started': time.time(), 'scan': None, 'result': None}
         self._stop = False
         self._thread = None
+        self.z = None                   # where the camera is, once known
+        self.xy = None
 
     def start(self, fn):
         def run():
@@ -217,6 +222,12 @@ class Job:
             except Exception as e:
                 self.state['error'] = str(e)
             finally:
+                if self.z is not None and self.z < self.clear():
+                    try:                            # never left low over the bed
+                        self.mr.gcode(f'G90\nG1 Z{self.clear():.3f} F300\nM400', timeout=60)
+                        self.z = self.clear()
+                    except Exception:
+                        pass
                 self.state['done'], self.state['ended'] = True, time.time()
                 if self.state['scan']:
                     try:
@@ -236,45 +247,66 @@ class Job:
 
     # On the plotter
     def carry(self):
-        '''The camera on the carriage, its offsets and the mesh applied.'''
+        '''The camera on the carriage, in the machine's own Z (no offsets, no mesh),
+        at clear_z.'''
         holder = self.camera.holder
         carried = int(self.mr.query(save_variables='variables')['save_variables']['variables']
                       .get('currently_docked_tool', 0) or 0)
-        mesh = f' MESH={self.machine.paper_mesh}' if self.machine.paper_mesh else ''
+        clear = self.clear()
         if carried != holder:
-            self.mr.gcode(f'LAZY_HOME\n_CLEAR_OFFSETS HOME=1\n{self.camera.call}\n_APPLY_OFFSETS HOME=1{mesh}',
-                          timeout=600)
+            self.mr.gcode(f'LAZY_HOME\n_CLEAR_OFFSETS HOME=1\n{self.camera.call}\n_CLEAR_OFFSETS\n'
+                          f'G90\nG1 Z{clear:.3f} F300\nM400', timeout=600)
         else:
-            origin = self.mr.query(gcode_move='homing_origin')['gcode_move']['homing_origin']
-            if abs(origin[2]) < 1e-6 and self.camera_dz():
-                self.mr.gcode(f'_APPLY_OFFSETS HOME=1{mesh}', timeout=300)
-
-    def camera_dz(self):
-        tag = (self.mr.query(limn='tools')['limn'].get('tools') or {}).get(str(self.camera.holder)) or {}
-        return float(tag.get('dz') or 0)
+            st = self.mr.query(gcode_move='homing_origin', bed_mesh='profile_name')
+            if any(abs(v) > 1e-6 for v in st['gcode_move']['homing_origin'][:3]) \
+                    or (st.get('bed_mesh') or {}).get('profile_name'):
+                self.mr.gcode('_CLEAR_OFFSETS', timeout=300)
+            self.mr.gcode(f'G90\nG1 Z{clear:.3f} F300\nM400', timeout=120)
+        self.z = clear
 
     def z_limits(self):
         return self.camera.z_limits(self.machine)
 
-    def goto(self, x, y, z, from_above=True):
-        '''There, still: z from above (the play), then x, y, then settle.'''
+    def clear(self):
+        lo, hi = self.z_limits()
+        return min(max(self.camera.clear_z, lo), hi)
+
+    def sweep(self):
+        '''The focus sweep's z, high to low, within the camera's limits.'''
+        lo, hi = self.z_limits()
+        a, b, step = self.s.sweep or (self.clear() - 2.5, self.clear(), 0.25)
+        a, b = max(min(a, b), lo), min(max(a, b), hi)
+        return sorted(np.arange(a, b + step / 2, step), reverse=True)
+
+    def goto(self, x, y, z, lift=True):
+        '''There, still. Sideways only at clear_z or higher (or, not `lift`, at the
+        height it is at: stepping down in place, or `low` between tiles); down
+        onto z from above (the play); then settle.'''
         lo, hi = self.z_limits()
         z = min(max(z, lo), hi)
         settle = self.s.settle if self.s.settle is not None else self.camera.settle
-        up = min(hi, z + 0.5) if from_above else z
-        self.mr.gcode(f'G90\nG1 Z{up:.3f} F300\nG1 X{x:.3f} Y{y:.3f} F4000\nG1 Z{z:.3f} F300\nM400\n'
-                      f'G4 P{int(settle * 1000)}', timeout=120)
+        lines = ['G90']
+        there = self.xy is not None and abs(self.xy[0] - x) < 1e-6 and abs(self.xy[1] - y) < 1e-6
+        if lift and not there:
+            lines.append(f'G1 Z{max(self.clear(), z):.3f} F300')
+        if not there:
+            lines.append(f'G1 X{x:.3f} Y{y:.3f} F4000')
+        if not lift and self.z is not None and z > self.z:
+            lines.append(f'G1 Z{z + 0.3:.3f} F300')             # up: overshoot, then down onto it
+        lines += [f'G1 Z{z:.3f} F300', 'M400', f'G4 P{int(settle * 1000)}']
+        self.mr.gcode('\n'.join(lines), timeout=120)
+        self.z, self.xy = z, (x, y)
         return z
 
     def shot(self):
         return self.mr.snapshot(self.camera.webcam)
 
-    def best_of(self, x, y, zs):
+    def best_of(self, x, y, zs, lift=True):
         '''The sharpest of shots at these z, from the top down -> (z, jpeg, [(z, score)]).'''
         curve, best = [], None
         for z in sorted(zs, reverse=True):
             self._check()
-            z = self.goto(x, y, z, from_above=not curve)
+            z = self.goto(x, y, z, lift=lift and not curve)
             jpeg = self.shot()
             score = sharpness(jpeg)
             curve.append((round(z, 3), round(score, 2)))
@@ -285,8 +317,7 @@ class Job:
     # What it does
     def focus(self, x, y):
         '''Sweep z over (x, y), keep the sharpest.'''
-        lo, hi, step = self.s.sweep
-        zs = list(np.arange(lo, hi + step / 2, step))
+        zs = self.sweep()
         self.state['n'] = len(zs)
         self.carry()
         sid = self.store.new(self._meta('focus', (x, y, x, y)))
@@ -313,12 +344,13 @@ class Job:
         self.state['scan'] = sid
         for i, (r, c, x, y) in enumerate(plan):
             self._check()
+            lift = i == 0 or not self.s.low
             if self.s.refocus > 0:
                 step = self.s.refocus_step
                 zs = list(np.arange(z0 - self.s.refocus, z0 + self.s.refocus + step / 2, step))
-                z, jpeg, curve = self.best_of(x, y, zs)
+                z, jpeg, curve = self.best_of(x, y, zs, lift=lift)
             else:
-                z = self.goto(x, y, z0, from_above=(i == 0))
+                z = self.goto(x, y, z0, lift=lift)
                 jpeg, curve = self.shot(), None
             self.store.add(sid, f'r{r:02d}c{c:02d}.jpg', jpeg,
                            {'row': r, 'col': c, 'x': x, 'y': y, 'z': round(z, 3), 'curve': curve})
