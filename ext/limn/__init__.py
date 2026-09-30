@@ -11,6 +11,9 @@
 #   tool_holder_tag_address: 0x24
 #   tool_holder_macros: 41:T0, 42:T1, 43:T2, 44:T3, 45:T4     # Fluidd's tool buttons
 #   tool_holder_tag_retries: 2              # reads again after _RFID_NUDGE
+#   tool_dry_idle: 600                      # s a known pen may be out of its cap in the machine,
+#   tool_dry_printing: 1200                 #   idle / printing; then its LEDs go red and it beeps
+#   tool_dry_beep: 3                        # s between beeps (0: none), on [pwm_cycle_time beeper]
 #   tool_holder_scan_idle: 2                # s between listens for a tag held to the reader
 #   tool_holder_scan_printing: 5            #   by hand, idle / printing; 0: only after a hand
 #                                           #   was on the holders (then every 0.5 s for a minute)
@@ -29,6 +32,7 @@
 # i2c.py       the Pi's I2C bus: MCP23017 and PN532
 # tool_holder.py  which holders have their tool, and the tools' tags
 # leds.py      what the dock and UI LEDs show
+# drying.py    how long each known pen has been out of its cap
 import os
 import json
 import logging
@@ -46,6 +50,7 @@ from .fsr import Fsr
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
 from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
+from .drying import Drying
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
@@ -116,6 +121,12 @@ class Limn:
         self._awake_until = 0.0     # listening fast: a hand was on the holders
         self._at_reader_now = False # the carriage brings its own tool to the reader
         self.scan_idle, self.scan_printing = 2.0, 5.0
+        self.clock = time.time      # wall clock, for how long pens have been out of their caps
+        self.drying = None          # Drying: the known pens out of their caps, once the holders are there
+        self._dry_stages = {}       # tool -> stage, what the LEDs show
+        self._dry_silenced = set()  # overdue pens TOOL_DRY SILENCE=1 was given for
+        self._dry_beep_at = 0.0
+        self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -125,6 +136,9 @@ class Limn:
                 say=self.gcode.respond_info))
             self.tool_macros = parse_macros(config.get('tool_holder_macros', HOLDER_MACROS))
             self.tag_retries = config.getint('tool_holder_tag_retries', 2)
+            self.dry_idle = float(config.get('tool_dry_idle', 600))
+            self.dry_printing = float(config.get('tool_dry_printing', 1200))
+            self.dry_beep = float(config.get('tool_dry_beep', 3))
             self.scan_idle = float(config.get('tool_holder_scan_idle', 2.0))
             self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
 
@@ -157,6 +171,8 @@ class Limn:
             ('TOOL_CHANGE_PHASE', self.cmd_TOOL_CHANGE_PHASE,
              "TOOL_CHANGE_PHASE PHASE=engage|leave|idle: the tool change's step, for the LEDs"),
             ('TOOL_LEDS', self.cmd_TOOL_LEDS, "Redraw the tool holder and UI LEDs, show their states"),
+            ('TOOL_DRY', self.cmd_TOOL_DRY,
+             "TOOL_DRY [RESET=1 [T=41]] [SILENCE=1]: how long each known pen has been out of its cap"),
         ):
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
@@ -204,6 +220,7 @@ class Limn:
             self._led_timer = self.reactor.register_timer(self._on_led_timer, self.reactor.NOW)
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
             self.holder.start_scanning(self._scan_gate)
+            self.reactor.register_timer(self._dry_tick, self.reactor.NOW)
 
     def _on_data(self, data):
         if not (isinstance(data, dict) and {'hop', 'kind', 'state', 'values'} <= data.keys()):
@@ -686,6 +703,7 @@ class Limn:
     def _on_holders_ready(self, occupied):
         logging.info("[Tool holder] occupied: %s", sorted(occupied))
         self._reconcile(occupied, startup=True)
+        self._sync_drying()
         self._request_leds()
 
     def _on_holders_change(self, occupied, added, removed, manual):
@@ -713,6 +731,7 @@ class Limn:
             self._wake(now)
             if not self.holder.busy():
                 self._reconcile(occupied)
+        self._sync_drying()
         self._request_leds()
         self.printer.send_event("limn:tool_holder_changed", occupied, added, removed, manual)
 
@@ -801,7 +820,7 @@ class Limn:
     def _render_leds(self):
         self._led_pending = False
         now = self.reactor.monotonic()
-        states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried())
+        states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried(), self._dry_stages)
         for name, state in states.items():
             self._set_led(name, state)
         for tool, button in tool_buttons(states, self._carried()).items():
@@ -928,6 +947,7 @@ class Limn:
             tags = self._tags()
             tags[str(holder)] = self._tag_entry(tag, 'dock')
             self._save_vars({'tool_tags': tags})
+            self._sync_drying()
         self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
                        'name': tag.name, 'reference': tag.reference, 'pen': tag.pen, 'color': tag.color,
                        'tries': tries, 'read_at': self.reactor.monotonic()}, 'ok')
@@ -1069,6 +1089,74 @@ class Limn:
         return {'uid': t.uid, 'name': t.name, 'pen': t.pen, 'color': t.color,
                 'left': round(SCAN_WINDOW - (eventtime - self.scan['seen']), 1)}
 
+    # Pens drying out (drying.py): a known pen in the machine is out of its cap
+    def _pens_in(self):
+        '''The known pens in the machine now: a tag that isn't stale, in its holder or on the carriage.'''
+        occupied = self.holder.occupied or frozenset()
+        carried = self._carried()
+        return {int(h) for h, t in self._tags().items()
+                if not t.get('stale') and (int(h) in occupied or int(h) == carried)}
+
+    def _sync_drying(self):
+        if not self.holder or self.holder.occupied is None:
+            return
+        if self.drying is None:
+            self.drying = Drying(self.dry_idle, self.dry_printing, self._vars().get('pen_since'))
+        if self.drying.update(self._pens_in(), self.clock()):
+            self._save_vars({'pen_since': self.drying.saved()})
+
+    def _dry_tick(self, eventtime):
+        self._sync_drying()
+        if self.drying is None:
+            return eventtime + 1.0
+        stages = self.drying.stages(self.clock(), self._printing())
+        turn = len(stages) > 1 and int(eventtime) % 2 == 0          # several: their digits take turns
+        if stages != self._dry_stages or turn:
+            self._dry_stages = stages
+            self._request_leds()
+        self._dry_silenced &= set(stages)
+        loud = set(stages) - self._dry_silenced
+        if loud and self.dry_beep > 0 and eventtime - self._dry_beep_at >= self.dry_beep:
+            self._dry_beep_at = eventtime
+            self._beep_twice()
+        return eventtime + 1.0
+
+    def _beep_twice(self):
+        '''Beep beep on [pwm_cycle_time beeper] with SET_PIN only: M300 dwells (G4),
+        which would stall a plot that is running.'''
+        on, off = "SET_PIN PIN=beeper VALUE=0.8 CYCLE_TIME=0.00033", "SET_PIN PIN=beeper VALUE=0"
+        now = self.reactor.monotonic()
+        for i, script in enumerate((on, off, on, off)):
+            def run(eventtime, script=script):
+                try:
+                    self.gcode.run_script(script)
+                except Exception:
+                    logging.exception("[Tool holder] beeping")
+                return self.reactor.NEVER
+            self.reactor.register_timer(run, now + 0.12 * i)
+
+    def cmd_TOOL_DRY(self, gcmd):
+        self._require_holder(gcmd)
+        self._sync_drying()
+        if self.drying is None:
+            raise gcmd.error("[Tool holder] the holders haven't been read yet")
+        now = self.clock()
+        if gcmd.get_int('RESET', 0):
+            tool = gcmd.get_int('T', None)
+            self.drying.reset(now, tool)
+            self._save_vars({'pen_since': self.drying.saved()})
+            self._dry_stages = self.drying.stages(now, self._printing())
+            self._request_leds()
+        if gcmd.get_int('SILENCE', 0):
+            self._dry_silenced = set(self.drying.stages(now, self._printing()))
+        status = self.drying.status(now, self._printing())
+        if not status:
+            gcmd.respond_info("[Tool holder] No known pen is out of its cap")
+            return
+        gcmd.respond_info("[Tool holder] Out of their caps:\n" + "\n".join(
+            f"{h}: {s['uncapped'] // 60} min of {s['limit'] // 60:.0f}"
+            + (f", OVERDUE (stage {s['stage']})" if s['stage'] else '') for h, s in status.items()))
+
     def get_status(self, eventtime):
         holder = self.holder
         return {
@@ -1088,6 +1176,7 @@ class Limn:
             },
             'tag': self.tag,
             'scan': self._scan_status(eventtime),
+            'drying': self.drying.status(self.clock(), self._printing()) if self.drying else {},
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
         }
 

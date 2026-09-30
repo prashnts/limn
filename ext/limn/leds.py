@@ -8,8 +8,11 @@
 #
 #   holder_<tool>   the dock strip, one segment per holder, status only:
 #                   occupied, carried / missing (empty: its tool is on the
-#                   carriage / nobody's), error (a check failed there), unknown
-#   ui_tool_<tool>  the tool's digit on the UI strip: target, untagged, carried
+#                   carriage / nobody's), error (a check failed there), unknown,
+#                   drying_1..3 (its pen is drying out: amber to red, faster)
+#   ui_tool_<tool>  the tool's digit on the UI strip (its tool number: 41 is 0,
+#                   T0): target, untagged, carried, drying_1..3 (a pen out of
+#                   its cap for too long, drying.py; several take turns)
 #   ui_traffic_*    the tool change's phase: red approach, yellow engage,
 #                   green (blinking) leave, green done; red blinking: failed
 #   ui_tag          reading, ok, error; a tag held to the reader by hand: listening
@@ -18,6 +21,7 @@
 #   ui_alert        the machine's mood, most urgent first; its colour turns
 #                   its meaning around, its speed says how fresh or urgent:
 #                   error_new, error              red: a check failed, holders unreadable
+#                   drying_1..3                   red and amber going round: a pen is drying out
 #                   busy_approach/engage/leave    blue spinner: a tool change, faster near the holder
 #                   reading                       cyan spinner: a tag read or write
 #                   success                       green blink: a tool change just went well
@@ -27,6 +31,7 @@
 #                   ok                            dim green, slow: all tools home
 CHANGE_PHASES = ('approach', 'engage', 'leave')
 DONE_SHOW = 3.0         # s the green light stays after a tool change
+DRYING_TURN = 2.0       # s each drying pen's digit shows, when several are
 TAG_OK_SHOW = 3.0
 ALERT_SHOW = 5.0        # s the alert calms down over after a hand change
 ATTENTION_STEPS = ((1.5, 'attention_fast'), (3.5, 'attention'), (ALERT_SHOW, 'attention_slow'))
@@ -93,10 +98,12 @@ class ToolLeds:
         times = [t for t in times if t > now]
         return min(times) if times else None
 
-    def _alert(self, now, phase, holders, ok, carried):
+    def _alert(self, now, phase, holders, ok, carried, drying):
         if phase == 'failed' or not ok:
             fresh = self.error_at is not None and now - self.error_at < ERROR_NEW
             return 'error_new' if fresh else 'error'
+        if drying:
+            return f'drying_{max(drying.values())}'
         if phase in CHANGE_PHASES:
             return 'busy_' + phase
         if self.tag_state == 'reading':
@@ -122,14 +129,23 @@ class ToolLeds:
             return 'occupied'
         return 'carried' if tool == carried else 'missing'
 
-    def desired(self, now, occupied, ok, carried):
+    def desired(self, now, occupied, ok, carried, drying=None):
+        '''drying: {tool: stage} of the pens out of their cap for too long.'''
+        drying = {t: s for t, s in (drying or {}).items() if t in self.tools}
         phase = self._phase(now)
         changing = phase in CHANGE_PHASES
         out = {f'holder_{t}': self._holder(t, now, phase, occupied, ok, carried) for t in self.tools}
+        for t, s in drying.items():
+            if out[f'holder_{t}'] not in ('error', 'unknown'):
+                out[f'holder_{t}'] = f'drying_{s}'
 
         out.update({f'ui_tool_{t}': None for t in self.tools})
         shown = self.active if changing else carried
-        if shown in self.tools:
+        if drying and not changing:
+            # The drying pens' numbers, one at a time
+            turn = sorted(drying)[int(now // DRYING_TURN) % len(drying)]
+            out[f'ui_tool_{turn}'] = f'drying_{drying[turn]}'
+        elif shown in self.tools:
             if changing:
                 out[f'ui_tool_{shown}'] = 'target'
             elif self.tag_state == 'ok' and self.tag_tool == carried:
@@ -153,7 +169,7 @@ class ToolLeds:
         out['ui_tag'] = tag
 
         holders = {t: out[f'holder_{t}'] for t in self.tools}
-        out['ui_alert'] = self._alert(now, phase, holders, ok, carried)
+        out['ui_alert'] = self._alert(now, phase, holders, ok, carried, drying)
         return out
 
 

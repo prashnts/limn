@@ -1255,7 +1255,6 @@ dependencies = [
     { name = "ipython" },
     { name = "mpremote" },
     { name = "numpy" },
-    { name = "opencv-python-headless" },
     { name = "pandas" },
     { name = "pillow" },
     { name = "pydantic" },
@@ -1268,6 +1267,11 @@ dependencies = [
     { name = "svgelements" },
     { name = "typer" },
     { name = "uharfbuzz" },
+]
+
+[package.optional-dependencies]
+cam = [
+    { name = "opencv-python-headless" },
 ]
 
 [package.dev-dependencies]
@@ -1289,7 +1293,7 @@ requires-dist = [
     { name = "ipython", specifier = ">=9.12.0" },
     { name = "mpremote", specifier = ">=1.28.0" },
     { name = "numpy", specifier = ">=2.4.4" },
-    { name = "opencv-python-headless", specifier = ">=5.0.0.93" },
+    { name = "opencv-python-headless", marker = "extra == 'cam'", specifier = ">=5.0.0.93" },
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
@@ -1303,6 +1307,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.21.1" },
     { name = "uharfbuzz", specifier = ">=0.56.2" },
 ]
+provides-extras = ["cam"]
 
 [package.metadata.requires-dev]
 dev = [

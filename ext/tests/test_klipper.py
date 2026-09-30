@@ -660,5 +660,38 @@ def test_listening_pace():
     assert ext._scan_gate() is None
 
 
+def test_a_pen_left_uncapped_goes_red_and_beeps():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    clock = [1000.0]
+    ext.clock = lambda: clock[0]
+    ext.drying = None
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Stabilo')
+    wait(printer, 2.5)
+    nfc.pages = None
+    mcp.low.add(11)                                     # scanned, into holder 44: a known pen, uncapped
+    wait(printer, 2)
+    assert ext.get_status(0)['drying']['44']['stage'] == 0 and svv['pen_since'] == {'44': 1000.0}
+    clock[0] += 601                                     # 10 minutes on, nothing printing
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'drying_1' and leds['ui_tool_44'].state == 'drying_1'
+    assert leds['ui_alert'].state == 'drying_1'
+    beeps = [s for s in gcode.scripts if s.startswith('SET_PIN PIN=beeper')]
+    assert beeps and not any(s.startswith('M300') for s in gcode.scripts)      # no dwell, a plot runs on
+    clock[0] += 400
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'drying_3'
+    gcode.run('TOOL_DRY', SILENCE=1)
+    n = len([s for s in gcode.scripts if s.startswith('SET_PIN')])
+    wait(printer, 8)
+    assert len([s for s in gcode.scripts if s.startswith('SET_PIN')]) == n
+    gcode.run('TOOL_DRY', RESET=1, T=44)
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'occupied' and 'uncapped' in ext.get_status(0)['drying']['44']
+    mcp.low.discard(11)                                 # taken out by hand, capped: the clock stops
+    wait(printer, 2)
+    assert ext.get_status(0)['drying'] == {} and svv['pen_since'] == {}
+
+
 if __name__ == '__main__':
     run_tests(globals())
