@@ -11,6 +11,9 @@
 #   tool_holder_tag_address: 0x24
 #   tool_holder_macros: 41:T0, 42:T1, 43:T2, 44:T3, 45:T4     # Fluidd's tool buttons
 #   tool_holder_tag_retries: 2              # reads again after _RFID_NUDGE
+#   tool_holder_scan_idle: 2                # s between listens for a tag held to the reader
+#   tool_holder_scan_printing: 5            #   by hand, idle / printing; 0: only after a hand
+#                                           #   was on the holders (then every 0.5 s for a minute)
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -42,7 +45,7 @@ from .rtp import Rtp
 from .fsr import Fsr
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
-from .leds import ToolLeds, tool_buttons
+from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
@@ -51,6 +54,13 @@ TAG_ERRORS = (OSError, RuntimeError, TimeoutError)
 HOLDER_PINS = '15:41, 14:42, 13:45, 12:43, 11:44'
 HOLDER_MACROS = '41:T0, 42:T1, 43:T2, 44:T3, 45:T4'
 KEY_ENDSTOP = 'manual_stepper axis_k'       # triggered: the key fully open
+# A tool is scanned by hand (held to the reader), then put into a holder within
+# SCAN_WINDOW: that holder has that tool, until a hand empties it.
+SCAN_WINDOW = 8.0       # s from the scan until the tool is in its holder
+SCAN_LATE = 60.0        # s after which a scan is forgotten without a word
+SCAN_SAME = 3.0         # s: the same tag again within this is the same scan
+SCAN_FAST = 0.5         # s between listens after a hand was on the holders,
+SCAN_AWAKE = 60.0       #   for this long
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -102,6 +112,10 @@ class Limn:
         self.tool_macros = {}       # tool -> its T<n> macro, whose variables Fluidd shows
         self.tag_retries = 2
         self._macro_missing = set()
+        self.scan = None            # the tag last held to the reader by hand: {'tag', 'seen'}
+        self._awake_until = 0.0     # listening fast: a hand was on the holders
+        self._at_reader_now = False # the carriage brings its own tool to the reader
+        self.scan_idle, self.scan_printing = 2.0, 5.0
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -111,6 +125,8 @@ class Limn:
                 say=self.gcode.respond_info))
             self.tool_macros = parse_macros(config.get('tool_holder_macros', HOLDER_MACROS))
             self.tag_retries = config.getint('tool_holder_tag_retries', 2)
+            self.scan_idle = float(config.get('tool_holder_scan_idle', 2.0))
+            self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
 
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
@@ -187,6 +203,7 @@ class Limn:
             self._leds_from = self.reactor.monotonic()
             self._led_timer = self.reactor.register_timer(self._on_led_timer, self.reactor.NOW)
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
+            self.holder.start_scanning(self._scan_gate)
 
     def _on_data(self, data):
         if not (isinstance(data, dict) and {'hop', 'kind', 'state', 'values'} <= data.keys()):
@@ -631,6 +648,7 @@ class Limn:
         holder.on('ready', self._on_holders_ready)
         holder.on('change', self._on_holders_change)
         holder.on('status', self._on_holders_status)
+        holder.on('scan', self._on_scan)
 
     def _probe_tag_reader(self):
         try:
@@ -678,15 +696,21 @@ class Limn:
             logging.info(msg)
             self.gcode.respond_info(msg)
         if manual:
-            self.last_manual = {'at': self.holder.changed_at, 'added': sorted(added & manual),
+            now = self.holder.changed_at
+            self.last_manual = {'at': now, 'added': sorted(added & manual),
                                 'removed': sorted(removed & manual)}
+            scanned = self._take_scan(sorted(added & manual), now)
             tags = self._tags()
-            if any(str(t) in tags and not tags[str(t)].get('stale') for t in manual):
+            if scanned or any(str(t) in tags and not tags[str(t)].get('stale') for t in manual):
                 for t in manual:
                     if str(t) in tags:
                         tags[str(t)]['stale'] = True
+                if scanned:
+                    holder, tag = scanned
+                    tags[str(holder)] = self._tag_entry(tag, 'hand')
                 self._save_vars({'tool_tags': tags})
-            self.leds.manual(manual, self.holder.changed_at)
+            self.leds.manual(manual, now)
+            self._wake(now)
             if not self.holder.busy():
                 self._reconcile(occupied)
         self._request_leds()
@@ -821,6 +845,13 @@ class Limn:
     def _at_reader(self, gcmd, attempt):
         '''Goes to the reader and runs `attempt` (-> Tag, None: no tag), nudging the
         reader between tries: it doesn't always extend all the way. -> (Tag, tries, error)'''
+        self._at_reader_now = True
+        try:
+            return self._at_reader_tries(gcmd, attempt)
+        finally:
+            self._at_reader_now = False
+
+    def _at_reader_tries(self, gcmd, attempt):
         move = gcmd.get_int('MOVE', 1)
         tries = 1 + (self.tag_retries if move else 0)
         if move:
@@ -882,15 +913,20 @@ class Limn:
             self._holder_tags = {str(k): dict(v) for k, v in saved.items()} if isinstance(saved, dict) else {}
         return self._holder_tags
 
+    @staticmethod
+    def _tag_entry(tag, by):
+        '''A holder's entry in `tool_tags`; by: dock (read on the carriage) or hand (scanned).'''
+        return {'uid': tag.uid, 'name': tag.name, 'pen': tag.pen, 'color': tag.color,
+                'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz, 'reference': tag.reference,
+                'at': round(time.time()), 'stale': False, 'by': by}
+
     def _apply_tag(self, tag, tries):
         self._save_vars({'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy, 'tool_offset_z': tag.dz,
                          'tool_name': tag.name, 'tool_tag_uid': tag.uid})
         holder = self._carried()
         if holder:
             tags = self._tags()
-            tags[str(holder)] = {'uid': tag.uid, 'name': tag.name, 'pen': tag.pen, 'color': tag.color,
-                                 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz, 'reference': tag.reference,
-                                 'at': round(time.time()), 'stale': False}
+            tags[str(holder)] = self._tag_entry(tag, 'dock')
             self._save_vars({'tool_tags': tags})
         self._set_tag({'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz,
                        'name': tag.name, 'reference': tag.reference, 'pen': tag.pen, 'color': tag.color,
@@ -901,6 +937,78 @@ class Limn:
         extra = ''.join(f" {v}" for v in (tag.pen, tag.color) if v)
         return (f"{tag.name}{' (reference)' if tag.reference else ''}{extra}: "
                 f"dx={tag.dx} dy={tag.dy} dz={tag.dz}")
+
+    # Tags held to the reader by hand (ToolHolder.start_scanning)
+    def _printing(self):
+        stats = self.printer.lookup_object('print_stats', None)
+        return stats is not None and stats.get_status(self.reactor.monotonic()).get('state') == 'printing'
+
+    def _scan_gate(self):
+        '''-> s until the next listen, None: not now. Never in a tool change or a read
+        at the reader: the carriage brings its own tool there.'''
+        if self._at_reader_now or self.holder.busy() or (self.leds and self.leds.phase in CHANGE_PHASES):
+            return None
+        now = self.reactor.monotonic()
+        if now < self._awake_until or (self.scan and now - self.scan['seen'] < SCAN_WINDOW):
+            return SCAN_FAST
+        return (self.scan_printing if self._printing() else self.scan_idle) or None
+
+    def _wake(self, now):
+        '''A hand on the holders: listen fast for a while, the tag LED says so.'''
+        self._awake_until = now + SCAN_AWAKE
+        if not (self.leds.hand_state != 'listening' and now < self.leds.hand_until):
+            self.leds.hand('listening', now, self._awake_until)
+        self._request_leds()
+
+    def _beep(self, macro):
+        '''From a timer: the G-code runs when Klipper has a moment, between a plot's lines.'''
+        def run(eventtime):
+            try:
+                self.gcode.run_script(macro)
+            except Exception:
+                logging.exception("[Tag] %s", macro)
+        self.reactor.register_callback(run)
+
+    def _on_scan(self, tag):
+        now = self.reactor.monotonic()
+        if self._carried() and tag.uid in (self.tag.get('uid'), self._vars().get('tool_tag_uid')):
+            return                  # the carried tool, near the reader
+        last = self.scan
+        self.scan = {'tag': tag, 'seen': now}
+        self.leds.hand('scanned', now, now + SCAN_WINDOW)
+        self._request_leds()
+        if last and last['tag'].uid == tag.uid and now - last['seen'] < SCAN_SAME:
+            return                  # still held there
+        self.gcode.respond_info(f"[Tag] Scanned {self._describe(tag)}: put it into its holder "
+                                f"within {SCAN_WINDOW:.0f} s")
+        self._beep("_BUZZ_RFID_OK")
+
+    def _take_scan(self, added, now):
+        '''The holders a hand just filled -> (holder, Tag) when one took the scanned tool.'''
+        scan = self.scan
+        if not scan or not added:
+            return None
+        age = now - scan['seen']
+        if age > SCAN_LATE:
+            self.scan = None
+            return None
+        self.scan = None
+        name = scan['tag'].name
+        if age > SCAN_WINDOW:
+            why = f"{name} was scanned {age:.0f} s ago, over {SCAN_WINDOW:.0f} s"
+        elif len(added) > 1:
+            why = f"{len(added)} holders filled at once ({', '.join(map(str, added))}), which one has {name}?"
+        else:
+            holder, = added
+            self.gcode.respond_info(f"[Tag] Holder {holder} has {self._describe(scan['tag'])}")
+            self.leds.hand('taken', now, now + SCAN_WINDOW)
+            self._beep("_BUZZ_711")
+            return holder, scan['tag']
+        self.gcode.respond_info(f"[Tag] Not taking the scan: {why}. Scan it again and put it back, "
+                                f"or TOOL_SCAN")
+        self.leds.hand('late', now, now + SCAN_WINDOW)
+        self._beep("_BUZZ_RFID_ERR")
+        return None
 
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
@@ -949,8 +1057,17 @@ class Limn:
                 continue
             pen = ' '.join(v for v in (t.get('pen'), t.get('color')) if v) or 'no pen/colour (format 1)'
             lines.append(f"{h}: {t['name']}{' (reference)' if t.get('reference') else ''}, {pen}, "
-                         f"dx={t['dx']} dy={t['dy']} dz={t['dz']}{', STALE: rescan' if t.get('stale') else ''}")
+                         f"dx={t['dx']} dy={t['dy']} dz={t['dz']}{', scanned by hand' if t.get('by') == 'hand' else ''}"
+                         f"{', STALE: rescan' if t.get('stale') else ''}")
         gcmd.respond_info("[Tag] " + "\n".join(lines))
+
+    def _scan_status(self, eventtime):
+        '''The tag held to the reader last, while a holder can still take it.'''
+        if not self.scan or eventtime - self.scan['seen'] > SCAN_WINDOW:
+            return None
+        t = self.scan['tag']
+        return {'uid': t.uid, 'name': t.name, 'pen': t.pen, 'color': t.color,
+                'left': round(SCAN_WINDOW - (eventtime - self.scan['seen']), 1)}
 
     def get_status(self, eventtime):
         holder = self.holder
@@ -970,6 +1087,7 @@ class Limn:
                 'changing': self.leds.active if self.leds else None,
             },
             'tag': self.tag,
+            'scan': self._scan_status(eventtime),
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
         }
 

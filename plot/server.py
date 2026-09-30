@@ -21,7 +21,8 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import svg
+from . import pens as pen_library
+from . import profile, svg
 from .emit import load, plot
 from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, Placement, ShapePaint
@@ -127,7 +128,7 @@ class Workspace:
                    for i, h in enumerate(machine.holders)]
         return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine),
                 'tools': {k: {**t.model_dump(), 'spacing': t.spacing} for k, t in tools.items()},
-                'pens': pens, 'holders': holders,
+                'pens': pens, 'kinds': pen_library.kinds(), 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
                 'line_fonts': HERSHEY + [f.file for f in self.fonts.fonts() if f.kind == 'line'],
                 'objects': objects}
@@ -390,7 +391,8 @@ def create_app(data=None):
                 'tools': tags, 'tools_changed': changed, 'job': ws.printer_job,
                 'progress': (st.get('virtual_sdcard') or {}).get('progress'),
                 'homed': (st.get('toolhead') or {}).get('homed_axes'),
-                'bed': limn.get('bed'), 'occupied': holder.get('occupied'), 'tag': limn.get('tag')}
+                'bed': limn.get('bed'), 'occupied': holder.get('occupied'), 'tag': limn.get('tag'),
+                'scan': limn.get('scan')}
 
     def run_on_printer(what, script):
         '''A script that moves the machine for a while (a scan, a tag write), in the
@@ -453,6 +455,26 @@ def create_app(data=None):
         if not args:
             raise HTTPException(400, 'nothing to write: pen, color or name')
         return run_on_printer(f'writing the tag of {holder}', f'TOOL_TAG_SET T={holder}{args}')
+
+    @app.put('/api/pens/{key}')
+    def save_pen(key: str, body: dict = Body(...)):
+        '''A pen of the library, new or changed: {name, short, kind, colors: {name: #rrggbb}, width, ..}.
+        The key goes on the tags: it can't be renamed, only added.'''
+        with ws.lock:
+            try:
+                pen_library.save(profile.PENS, key, body)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            return ws.state()
+
+    @app.delete('/api/pens/{key}')
+    def delete_pen(key: str):
+        with ws.lock:
+            try:
+                pen_library.delete(profile.PENS, key)
+            except KeyError:
+                raise HTTPException(404, f'no pen {key}')
+            return ws.state()
 
     @app.post('/api/printer/upload')
     def upload(body: dict = Body(default={})):

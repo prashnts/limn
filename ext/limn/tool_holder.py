@@ -7,6 +7,8 @@
 # PN532 reads the tag of the tool on the carriage. Both are on the Pi's I2C.
 # A timer watches the holders and tells the listeners of `change` what moved;
 # changes nobody `expect`ed are `manual`: someone's hand was on the holders.
+# Between the tool changes the reader listens for a tag held to it by hand
+# (`scan`), so a tool put into a holder by hand can be told apart.
 from dataclasses import dataclass
 
 from .i2c import MCP23017, PN532
@@ -16,6 +18,8 @@ SETTLE = 2              # equal reads before a new state counts
 SAMPLE_GAP = 0.02       # s between the reads of `sample`
 EXPECT_WINDOW = 120     # s an expected change stays expected
 ANY = 'any'             # expect(): any change, until forget()
+SCAN_LISTEN = 0.2       # s each listen for a tag held to the reader lasts
+SCAN_RETRY = 10         # s before trying a PN532 that failed again
 
 PAGE_DX, PAGE_NAME = 6, 11      # dx, dy, dz on pages 6, 7, 8; the name on 11..15
 PAGE_FLAGS = 9                  # REFERENCE: the reference tool, anything else: not
@@ -126,6 +130,9 @@ class ToolHolder:
         self.expected = {}          # tool -> (occupied, until)
         self._pending = None
         self._count = 0
+        self._nfc_busy = False      # a read or write of a tag is on its way: one at a time
+        self.scan_timer = None
+        self.scan_gate = lambda: None   # -> s until the next listen, None: not now
 
     @property
     def tools(self):
@@ -236,6 +243,26 @@ class ToolHolder:
         self._emit('change', state, added, removed, manual)
 
     # Tags
+    def start_scanning(self, gate):
+        '''Listens for tags held to the reader by hand, telling the listeners of `scan`;
+        gate() -> s until the next listen, None: not now (it asks again in a second).'''
+        self.scan_gate = gate
+        if self.scan_timer is None:
+            self.scan_timer = self.reactor.register_timer(self._scan_tick, self.reactor.NOW)
+
+    def _scan_tick(self, eventtime):
+        interval = self.scan_gate()
+        if interval is None or self._nfc_busy:
+            return eventtime + 1.0
+        try:
+            tag = self._tag_io(lambda: self._read_tag(SCAN_LISTEN))
+        except (OSError, TimeoutError, RuntimeError):
+            # a tag taken away halfway, or no PN532
+            return self.reactor.monotonic() + (interval if self.nfc_ready else SCAN_RETRY)
+        if tag is not None:
+            self._emit('scan', tag)
+        return self.reactor.monotonic() + interval
+
     def _begin_nfc(self):
         if not self.nfc_ready:
             ic, ver, rev, _ = self.nfc.begin()
@@ -243,12 +270,17 @@ class ToolHolder:
             self.say(f"[Tag] PN532 firmware {ver}.{rev}")
 
     def _tag_io(self, fn):
+        while self._nfc_busy:           # a listen: SCAN_LISTEN and a read at most
+            self._pause(0.05)
+        self._nfc_busy = True
         try:
             self._begin_nfc()
             return fn()
         except (OSError, TimeoutError, RuntimeError):
             self.nfc_ready = False
             raise
+        finally:
+            self._nfc_busy = False
 
     def begin_tag_reader(self):
         self._tag_io(lambda: None)

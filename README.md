@@ -5,6 +5,7 @@ Limn is a pen plotter with a toolchanger. This repository contains the various k
 - `klipper/`: Klipper configuration for the toolchanger and printer.
 - `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
 - `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1]`. Klipper's user needs to be in the `i2c` group.
+  Pens can also be scanned by hand: hold the pen to the reader until it beeps, then put it into a holder within 8 s. That holder has that pen (`TOOL_TAGS`, the web UI) until a hand empties it again; docking and undocking don't. Between tool changes the reader listens every 2 s (every 5 s while printing, `tool_holder_scan_idle` / `tool_holder_scan_printing` in `[limn]`, 0: off), and every 0.5 s for a minute after a hand was on the holders.
 - `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
 - `plot/`: SVG to G-code, and the web UI to place, paint, preview and plot drawings (`plot/README.md`). On the Pi, supervisord runs it on port 4219 (`limn_web.conf`, see *Web UI on the Pi*).
 - `slicer/config.ini`: Sample PrusaSlicer config to make it suitable for plotting.
@@ -56,6 +57,8 @@ The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds
 | | amber / white | carried tool, tag not read / tag applied |
 | UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
 | UI tag (bottom left) | blue blink / green / red blink | reading / applied / failed |
+| | dim cyan, breathing / cyan, quick blink | listening for a pen held to the reader (a hand was on the holders) / a pen was scanned: into its holder now |
+| | green / red blink | a holder took the scanned pen / it went in too late, or into two holders at once |
 | UI alert (top left), most urgent first | red, fast then slow blink | a check failed or the holders can't be read (fast for the first 3 s) |
 | | blue spinner, faster near the holder | tool change: travelling, at the holder, leaving |
 | | cyan spinner | reading or writing a tag |

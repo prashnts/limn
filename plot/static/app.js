@@ -51,12 +51,33 @@ function toast(msg, bad = false) {
   toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 6000 : 3000);
 }
 
-function setState(s, { slice = true } = {}) {
+// Panels are redrawn whole. A redraw the printer poll brings (not something done
+// here) waits while you are in that panel: it would close an open select, drop a
+// half-typed value or end a drag. It comes once you leave the panel.
+let background = false;
+const later = new Map();        // panel -> the html it waits to show
+const busyIn = (el) => el.contains(document.activeElement) || !!(numDrag && el.contains(numDrag.input));
+function fill(el, html) {
+  if (background) {
+    if (el._html === html) return;
+    if (busyIn(el)) { later.set(el, html); return; }
+  }
+  later.delete(el);
+  el.innerHTML = html;
+  el._html = html;
+}
+function flushLater() {
+  for (const [el, html] of later) if (!busyIn(el)) { later.delete(el); el.innerHTML = html; el._html = html; }
+}
+document.addEventListener('focusout', () => setTimeout(flushLater, 0));
+function quietly(fn) { background = true; try { fn(); } finally { background = false; } }
+
+function setState(s, { slice = true, quiet = false } = {}) {
   S = s;
   if (sel && !S.job.objects.some((o) => o.id === sel)) sel = null;
   if (!sel && S.job.objects.length) sel = S.job.objects[0].id;
   store.set('sel', sel);
-  render();
+  quiet ? quietly(render) : render();
   if (slice) scheduleSlice();
 }
 
@@ -578,12 +599,12 @@ function toolOptions(g) {
 const opt = (v, cur, label) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label ?? v)}</option>`;
 
 function renderObjectList() {
-  $('#objects').innerHTML = S.job.objects.map((o) => `
+  fill($('#objects'), S.job.objects.map((o) => `
     <li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}">
       <span class="name">${esc(o.id)}</span>
       <button class="icon" data-act="dup" title="Duplicate">⧉</button>
       <button class="icon" data-act="del" title="Remove">✕</button>
-    </li>`).join('');
+    </li>`).join(''));
 }
 $('#objects').addEventListener('click', async (e) => {
   const li = e.target.closest('li'); if (!li) return;
@@ -637,7 +658,7 @@ function renderObjectPanel() {
       </div></div>`;
   }).join('');
   const painted = Object.keys(o.shapes).length;
-  P.innerHTML = `
+  fill(P, `
     <h2>${esc(o.id)}</h2>
     <div class="form">
       <label for="f-x">X</label><div class="row"><input id="f-x" type="number" step="0.5" value="${num(o.placement.x)}"> <label for="f-y">Y</label><input id="f-y" type="number" step="0.5" value="${num(o.placement.y)}"></div>
@@ -650,7 +671,7 @@ function renderObjectPanel() {
     <table class="groups"><tbody>${groups}</tbody></table>
     ${I.texts.length ? `<h3>Texts (${I.texts.length})</h3>${texts}` : ''}
     ${painted ? `<h3>Painted shapes</h3><div class="row">${painted} shape${painted > 1 ? 's' : ''} painted apart from their colour <button data-act="unpaint">Clear</button></div>` : ''}
-    ${Object.keys(I.skipped || {}).length ? `<p class="note">Not drawn: ${esc(Object.entries(I.skipped).map(([k, v]) => `${v} ${k}`).join(', '))}</p>` : ''}`;
+    ${Object.keys(I.skipped || {}).length ? `<p class="note">Not drawn: ${esc(Object.entries(I.skipped).map(([k, v]) => `${v} ${k}`).join(', '))}</p>` : ''}`);
 }
 
 async function patchObj(id, body) { setState(await api('PATCH', `/api/objects/${id}`, body)); }
@@ -681,6 +702,22 @@ $('#object-panel').addEventListener('change', async (e) => {
     const spec = { ...(o.texts[i] || o.text), [t.dataset.f]: t.value === '' ? null : t.value };
     return patchObj(o.id, { texts: { ...o.texts, [i]: spec } });
   }
+});
+// Dragging X, Y, rotate or scale moves the drawing along; the server hears of it at the end
+$('#object-panel').addEventListener('input', (e) => {
+  const o = obj(sel);
+  if (!o || !numDrag || !info(o.id)) return;
+  const id = e.target.id;
+  if (id === 'f-x' || id === 'f-y' || id === 'f-r') {
+    o.placement = { x: +$('#f-x').value, y: +$('#f-y').value, rotate: +$('#f-r').value };
+    placeObject(o);
+  } else if (id === 'f-s') {
+    const [w, h] = info(o.id).size, k = Math.max(0.01, +e.target.value / 100 / o.scale);
+    placeObject({ ...o, placement: { ...o.placement, x: o.placement.x - (w * k - w) / 2, y: o.placement.y - (h * k - h) / 2 } }, k);
+  } else return;
+  $('#paths-layer').classList.add('stale');
+  drawHandles();
+  drawRulers();
 });
 $('#object-panel').addEventListener('click', async (e) => {
   const o = obj(sel); if (!o) return;
@@ -731,7 +768,7 @@ function renderPalette() {
   for (const [v, label] of [['mask', 'Mask (hides)'], ['skip', 'Skip'], ['reset', 'Reset']]) {
     items.push(`<button data-to="${v}" class="${paintTo === v ? 'on' : ''}">${label}</button>`);
   }
-  $('#palette').innerHTML = items.join('');
+  fill($('#palette'), items.join(''));
   svg.classList.toggle('painting', mode === 'paint' && !!paintTo);
   if (!drag) hint('');
 }
@@ -775,13 +812,13 @@ function renderMachine() {
   const m = S.machine, over = S.job.machine_overrides;
   const beds = Object.keys(S.beds);
   const follow = store.get('followBed', true);
-  $('#machine').innerHTML = `
+  fill($('#machine'), `
     <label for="m-bed">Bed</label>
     <select id="m-bed">${opt('', m.bed_id || '', 'none')}${beds.map((b) => opt(b, m.bed_id)).join('')}</select>
     <label></label><label class="check"><input type="checkbox" id="m-follow"${follow ? ' checked' : ''}> follow Klipper</label>
     <label>Paper</label><div class="mono">${m.draw_area.map((v) => num(v, 1)).join(', ')}</div>
     <label>Mesh</label><div class="mono">${esc(m.mesh || '(last loaded)')}</div>
-    ${MACHINE_FIELDS.map(([k, l]) => `<label for="m-${k}">${l}</label><div class="row"><input id="m-${k}" data-k="${k}" type="number" step="0.1" value="${num(m[k])}"${k in over ? ' class="changed"' : ''}>${k in over ? ` <button class="icon" data-reset="${k}" title="Back to the profile">↺</button>` : ''}</div>`).join('')}`;
+    ${MACHINE_FIELDS.map(([k, l]) => `<label for="m-${k}">${l}</label><div class="row"><input id="m-${k}" data-k="${k}" type="number" step="0.1" value="${num(m[k])}"${k in over ? ' class="changed"' : ''}>${k in over ? ` <button class="icon" data-reset="${k}" title="Back to the profile">↺</button>` : ''}</div>`).join('')}`);
 }
 $('#machine').addEventListener('change', async (e) => {
   const t = e.target;
@@ -797,6 +834,7 @@ $('#machine').addEventListener('click', async (e) => {
 const TOOL_FIELDS = ['width', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max'];
 // Each holder: what its tag says, and what the card would write to it (draft)
 const drafts = {};
+const openTune = new Set();     // tool cards with their tuning open
 const penName = (key) => (S.pens[key] || {}).name || key || '';
 function colourName(pen, hex) {
   const c = (S.pens[pen] || {}).colors || {};
@@ -821,17 +859,24 @@ function renderTools() {
   const job = printer && printer.job;
   const busy = !!(job && !job.done);
   const status = busy ? `${esc(job.what)}…` : job ? (job.error ? `⚠ ${esc(job.error)}` : `${esc(job.what)}: done`) : 'reads every tool’s tag';
+  const scan = printer && printer.scan;
   const head = `<div class="row tools-head"><button data-act="scan"${busy ? ' disabled' : ''} title="TOOL_SCAN: each tool in turn to the tag reader">Scan holders</button>
-    <span class="note">${status}</span></div>`;
+    <span class="note">${status}</span></div>
+    ${scan ? `<div class="scan-now"><span class="swatch" style="background:${esc(scan.color || '#888')}"></span>
+      <b>${esc(scan.name)}</b> scanned: into its holder, ${Math.max(0, Math.round(scan.left))} s</div>`
+    : '<p class="note">Or by hand: hold a pen to the reader until it beeps, then put it into a holder within 8 s.</p>'}`;
   const cards = S.holders.map(({ t, holder, tag }) => {
     const tool = S.tools[t] || {};
     const o = over[t] || {};
     const d = draftOf(t, tag, tool);
     const badge = !tag ? '<span class="badge">not scanned</span>'
-      : tag.stale ? '<span class="badge warn" title="A hand was on this holder since: scan it again">stale</span>'
-      : tag.pen ? '<span class="badge ok">tag</span>' : '<span class="badge warn" title="The tag has only a name: give it a pen">name only</span>';
+      : tag.stale ? '<span class="badge warn" title="A hand was on this holder since: scan it again, at the reader by hand or with Scan holders">stale</span>'
+      : !tag.pen ? '<span class="badge warn" title="The tag has only a name: give it a pen">name only</span>'
+      : tag.by === 'hand' ? '<span class="badge ok" title="Scanned by hand at the reader, then put into this holder">scanned</span>'
+      : '<span class="badge ok">tag</span>';
     const pens = '<option value="">pen…</option>' + Object.entries(S.pens).map(([k, p]) =>
-      `<option value="${esc(k)}"${k === d.pen ? ' selected' : ''}>${esc(p.name)} · ${num(p.width)} mm</option>`).join('');
+      `<option value="${esc(k)}"${k === d.pen ? ' selected' : ''}>${esc(p.name)} · ${num(p.width)} mm</option>`).join('')
+      + '<option value="__new">new pen type…</option>';
     const sws = Object.entries((S.pens[d.pen] || {}).colors || {}).map(([n, hex]) =>
       `<button class="sw${hex.toLowerCase() === d.color.toLowerCase() ? ' on' : ''}" data-color="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
     const changed = tag ? (d.pen !== (tag.pen || '') || d.color.toLowerCase() !== (tag.color || '').toLowerCase() || d.name !== (tag.name || ''))
@@ -849,11 +894,11 @@ function renderTools() {
         <input data-d="name" maxlength="20" value="${esc(d.name)}" placeholder="${esc(suggestName(d.pen, d.color) || 'name')}" title="The tag's name, up to 20">
         <button data-act="write" class="${changed ? 'primary' : ''}"${busy || !changed ? ' disabled' : ''} title="Dock ${esc(t)}, write this onto its tag, put it back">Write to tag</button>
       </div>
-      <details${tuned ? ' open' : ''}><summary>tune: ${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ' · changed here' : ''}</summary>
+      <details data-tune="${esc(t)}"${tuned || openTune.has(t) ? ' open' : ''}><summary>tune: ${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ' · changed here' : ''}</summary>
         <div class="grid">${fields}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
     </div>`;
   }).join('');
-  $('#tools').innerHTML = head + cards;
+  fill($('#tools'), head + cards);
 }
 function redraft(t, update) {
   const d = drafts[t];
@@ -864,6 +909,10 @@ function redraft(t, update) {
 $('#tools').addEventListener('change', async (e) => {
   const el = e.target, card = el.closest('.tool'); if (!card) return;
   const t = card.dataset.t;
+  if (el.dataset.d === 'pen' && el.value === '__new') {
+    el.value = drafts[t].pen;
+    return editPen(null);
+  }
   if (el.dataset.d === 'pen') {
     const colors = Object.values((S.pens[el.value] || {}).colors || {});
     const d = drafts[t];
@@ -897,6 +946,10 @@ $('#tools').addEventListener('click', async (e) => {
     setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: keys } }));
   }
 });
+$('#tools').addEventListener('toggle', (e) => {
+  const t = e.target.dataset && e.target.dataset.tune;
+  if (t) e.target.open ? openTune.add(t) : openTune.delete(t);
+}, true);
 let jobTimer = null;
 function watchJob() {
   clearTimeout(jobTimer);
@@ -908,9 +961,9 @@ function watchJob() {
 }
 
 function renderFonts() {
-  $('#fonts').innerHTML = S.fonts.map((f) => `
+  fill($('#fonts'), S.fonts.map((f) => `
     <li><span class="name" title="${esc(f.file)}">${esc(f.family)} <span class="note">${esc(f.style)} · ${f.kind === 'line' ? 'line' : 'source'}</span></span>
-    <button class="icon" data-del="${esc(f.file)}" title="Remove">✕</button></li>`).join('') || '<li class="note">No fonts uploaded: texts use line fonts.</li>';
+    <button class="icon" data-del="${esc(f.file)}" title="Remove">✕</button></li>`).join('') || '<li class="note">No fonts uploaded: texts use line fonts.</li>');
 }
 $('#fonts').addEventListener('click', async (e) => {
   const f = e.target.dataset.del;
@@ -926,6 +979,176 @@ async function uploadFonts(files) {
 }
 $('#font-input').addEventListener('change', (e) => { uploadFonts([...e.target.files]); e.target.value = ''; });
 
+// --- pen library (pens.toml) ---------------------------------------------------
+// The kinds of pen a tag can name. The key goes on the tags: set once, never renamed.
+let penEdit = null;             // {key, isNew, spec} being edited
+const PEN_FIRST = ['width', 'feed', 'overlap', 'z_down', 'hop'];
+function editPen(key) {
+  const spec = key ? JSON.parse(JSON.stringify(S.pens[key])) : { name: '', short: '', width: 0.3, colors: { black: '#1b1b1b' } };
+  penEdit = { key: key || '', isNew: !key, spec, colors: Object.entries(spec.colors || {}) };
+  renderPens();
+  $('#pens').scrollIntoView({ block: 'nearest' });
+  const first = $(key ? '#pens [data-p=name]' : '#pens [data-p=key]');
+  if (first) first.focus();
+}
+function penFields(kind) {
+  const fields = Object.keys((S.kinds || {})[kind] || (S.kinds || {}).pen || {});
+  return [...PEN_FIRST.filter((f) => fields.includes(f)), ...fields.filter((f) => !PEN_FIRST.includes(f))];
+}
+function renderPens() {
+  const users = (key) => S.holders.filter((h) => h.tag && h.tag.pen === key).map((h) => h.holder);
+  const list = Object.entries(S.pens).map(([k, p]) => {
+    const sws = Object.values(p.colors || {}).slice(0, 8).map((c) => `<span class="dot" style="background:${esc(c)}"></span>`).join('');
+    const on = users(k);
+    return `<li data-pen="${esc(k)}" class="${penEdit && penEdit.key === k ? 'on' : ''}">
+      <span class="name">${esc(p.name)} <span class="note">${num(p.width)} mm${p.kind && p.kind !== 'pen' ? ' · ' + esc(p.kind) : ''}${on.length ? ' · in ' + on.join(', ') : ''}</span></span>
+      <span class="dots">${sws}</span><span class="note mono">${esc(k)}</span></li>`;
+  }).join('');
+  let editor = '';
+  if (penEdit) {
+    const sp = penEdit.spec, kind = sp.kind || 'pen', defaults = (S.kinds || {})[kind] || {};
+    const fields = penFields(kind).map((f) => {
+      const d = defaults[f];
+      return `<label>${f.replace('_', ' ')}<input type="number" step="any" data-pf="${f}" value="${sp[f] ?? ''}" placeholder="${d === null || d === undefined ? 'machine' : num(d, 3)}"></label>`;
+    }).join('');
+    const colors = penEdit.colors.map(([n, c], i) => `<div class="row pen-colour" data-i="${i}">
+        <input type="color" data-c="hex" value="${esc(c)}"><input data-c="name" value="${esc(n)}" placeholder="colour name">
+        <button class="icon" data-act="uncolour" title="Remove">✕</button></div>`).join('');
+    editor = `<div class="pen-edit">
+      <div class="form">
+        <label>Key</label><input data-p="key" maxlength="8" value="${esc(penEdit.key)}"${penEdit.isNew ? '' : ' disabled'} placeholder="eg. uni-01" title="Goes on the tags: up to 8 of a-z 0-9 - _ . , never renamed">
+        <label>Name</label><input data-p="name" value="${esc(sp.name || '')}" placeholder="Uni Pin 0.1">
+        <label>Short</label><input data-p="short" maxlength="20" value="${esc(sp.short || '')}" placeholder="for tag names, ≤ 20" title="How tags name it, with the colour: up to 20 characters">
+        <label>Kind</label><select data-p="kind">${Object.keys(S.kinds || { pen: 1 }).map((k) => opt(k, kind)).join('')}</select>
+      </div>
+      <div class="grid">${fields}</div>
+      <h3>Colours</h3>${colors}
+      <button class="icon" data-act="colour">+ colour</button>
+      <div class="buttons"><button class="primary" data-act="save-pen">${penEdit.isNew ? 'Add pen' : 'Save'}</button>
+        <button data-act="cancel-pen">Cancel</button>
+        ${penEdit.isNew ? '' : '<button data-act="delete-pen" class="danger">Delete</button>'}</div>
+    </div>`;
+  }
+  fill($('#pens'), `<ul class="list">${list}</ul>${editor}${penEdit && penEdit.isNew ? '' : '<button data-act="new-pen">+ New pen type</button>'}`);
+}
+// The draft follows what is typed, without a redraw: the caret stays
+$('#pens').addEventListener('input', (e) => {
+  if (!penEdit) return;
+  const t = e.target;
+  if (t.dataset.p === 'key') penEdit.key = t.value.trim().toLowerCase();
+  else if (t.dataset.p && t.dataset.p !== 'kind') penEdit.spec[t.dataset.p] = t.value;
+  else if (t.dataset.pf) penEdit.spec[t.dataset.pf] = t.value === '' ? undefined : +t.value;
+  else if (t.dataset.c) {
+    const i = +t.closest('.pen-colour').dataset.i;
+    penEdit.colors[i][t.dataset.c === 'hex' ? 1 : 0] = t.value;
+  }
+});
+$('#pens').addEventListener('change', (e) => {
+  if (penEdit && e.target.dataset.p === 'kind') {
+    penEdit.spec.kind = e.target.value;
+    const keep = new Set(penFields(e.target.value));
+    for (const f of Object.keys(penEdit.spec)) if (!['name', 'short', 'kind', 'colors'].includes(f) && !keep.has(f)) delete penEdit.spec[f];
+    renderPens();
+  }
+});
+$('#pens').addEventListener('click', async (e) => {
+  const t = e.target;
+  const li = t.closest('li[data-pen]');
+  if (li) return editPen(li.dataset.pen);
+  const act = t.dataset.act;
+  if (act === 'new-pen') return editPen(null);
+  if (!penEdit) return;
+  if (act === 'colour') { penEdit.colors.push(['', '#000000']); renderPens(); }
+  else if (act === 'uncolour') { penEdit.colors.splice(+t.closest('.pen-colour').dataset.i, 1); renderPens(); }
+  else if (act === 'cancel-pen') { penEdit = null; renderPens(); }
+  else if (act === 'save-pen') {
+    const spec = {};
+    for (const [k, v] of Object.entries(penEdit.spec)) {
+      if (k === 'colors' || v === undefined || v === '' || (typeof v === 'number' && Number.isNaN(v))) continue;
+      spec[k] = typeof v === 'string' ? v.trim() : v;
+    }
+    spec.colors = Object.fromEntries(penEdit.colors.filter(([n]) => n.trim()).map(([n, c]) => [n.trim(), c]));
+    const key = penEdit.key;
+    const st = await api('PUT', `/api/pens/${encodeURIComponent(key)}`, spec);
+    penEdit = null;
+    setState(st);
+    toast(`Pen ${key} saved`);
+  } else if (act === 'delete-pen') {
+    const key = penEdit.key;
+    const on = S.holders.filter((h) => h.tag && h.tag.pen === key).map((h) => h.holder);
+    if (!confirm(`Delete the pen ${key} from the library?${on.length ? ` Holders ${on.join(', ')} have it on their tags: they fall back to tools.toml.` : ''}`)) return;
+    const st = await api('DELETE', `/api/pens/${encodeURIComponent(key)}`);
+    penEdit = null;
+    setState(st);
+    toast(`Pen ${key} deleted`);
+  }
+});
+
+// --- number fields: drag sideways ------------------------------------------------
+// Press and drag a number field left or right to change it, Shift finer, Ctrl coarser;
+// a click without moving types into it. `input` events while dragging, one `change` at the end.
+const DRAG_STEP = {
+  'f-x': 0.5, 'f-y': 0.5, 'f-r': 1, 'f-s': 1, angle: 5, spacing: 0.01,
+  z_min: 0.05, z_max: 0.1, z_travel: 0.1, hop_distance: 1, clearance: 0.1, feed_travel: 100, order_time: 0.05,
+  width: 0.01, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
+  focus: 0.1, power: 5, reload_every: 10, well_z: 0.05, dips: 1,
+};
+const NON_NEGATIVE = new Set(['f-s', 'spacing', 'hop_distance', 'clearance', 'feed_travel', 'order_time', 'width', 'overlap',
+  'feed', 'link', 'plunge_feed', 'wear', 'power', 'reload_every', 'dips']);
+const PX_PER_STEP = 6;
+let numDrag = null;
+const fieldOf = (input) => input.dataset.k || input.dataset.f || input.dataset.pf || input.id;
+function dragStep(input) {
+  const s = DRAG_STEP[fieldOf(input)];
+  if (s) return s;
+  if (input.step && input.step !== 'any' && +input.step > 0) return +input.step;
+  const v = Math.abs(parseFloat(input.value) || parseFloat(input.placeholder) || 0);
+  return v ? Math.max(0.01, 10 ** Math.floor(Math.log10(v)) / 10) : 0.01;
+}
+const decimals = (step) => Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+document.addEventListener('pointerdown', (e) => {
+  const input = e.target.closest && e.target.closest('input[type=number]');
+  if (!input || e.button !== 0 || input.disabled || document.activeElement === input) return;
+  e.preventDefault();         // no focus, no text selection: it may be a drag
+  const v0 = parseFloat(input.value);
+  numDrag = { input, lastX: e.clientX, x0: e.clientX, start: input.value, value: Number.isNaN(v0) ? (parseFloat(input.placeholder) || 0) : v0, moved: false };
+  try { input.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+});
+document.addEventListener('pointermove', (e) => {
+  const d = numDrag;
+  if (!d) return;
+  if (!d.moved && Math.abs(e.clientX - d.x0) < 3) return;
+  d.moved = true;
+  document.body.classList.add('num-dragging');
+  const step = dragStep(d.input) * (e.shiftKey ? 0.1 : (e.ctrlKey || e.metaKey) ? 10 : 1);
+  d.value += (e.clientX - d.lastX) / PX_PER_STEP * step;
+  d.lastX = e.clientX;
+  let v = Math.round(d.value / step) * step;
+  const min = d.input.min !== '' ? +d.input.min : NON_NEGATIVE.has(fieldOf(d.input)) ? 0 : -Infinity;
+  const max = d.input.max !== '' ? +d.input.max : Infinity;
+  v = Math.min(max, Math.max(min, v));
+  const text = String(+v.toFixed(decimals(step)));
+  if (d.input.value !== text) {
+    d.input.value = text;
+    d.input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+});
+function endNumDrag() {
+  const d = numDrag;
+  if (!d) return;
+  numDrag = null;
+  document.body.classList.remove('num-dragging');
+  if (d.moved) {
+    if (d.input.value !== d.start) d.input.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    d.input.focus();
+    d.input.select();
+  }
+  setTimeout(flushLater, 0);
+}
+document.addEventListener('pointerup', endNumDrag);
+document.addEventListener('pointercancel', endNumDrag);
+
 // --- printer ----------------------------------------------------------------
 let printer = null;
 let lastJob = null;
@@ -937,8 +1160,8 @@ async function pollPrinter() {
     toast(job.error ? `${job.what}: ${job.error}` : `${job.what}: done`, !!job.error);
   }
   lastJob = job;
-  if (printer.tools_changed) setState(await api('GET', '/api/state'));
-  else if (S) renderTools();
+  if (printer.tools_changed) setState(await api('GET', '/api/state'), { quiet: true });
+  else if (S) quietly(renderTools);
   const pill = $('#printer-pill');
   if (!printer.ok) {
     pill.textContent = 'printer offline'; pill.className = 'pill bad'; pill.title = printer.error || '';
@@ -951,22 +1174,22 @@ async function pollPrinter() {
     const bed = printer.bed && printer.bed !== 'NONE' ? printer.bed : '';
     if (store.get('followBed', true) && S && printer.bed !== undefined && bed !== (S.machine.bed_id || '')
         && (bed === '' || bed in S.beds)) {
-      setState(await api('PATCH', '/api/job', { machine_overrides: { bed_id: bed || null } }));
+      setState(await api('PATCH', '/api/job', { machine_overrides: { bed_id: bed || null } }), { quiet: true });
       toast(`Bed from Klipper: ${bed || 'none'}`);
     }
   }
-  renderPrinter();
+  quietly(renderPrinter);
 }
 function renderPrinter() {
   const p = printer;
   if (!p) return;
-  $('#printer').innerHTML = p.ok ? `
+  fill($('#printer'), p.ok ? `
     <label>State</label><div>${esc(p.state)}${p.file ? ' · ' + esc(p.file) : ''}</div>
     <label>Bed</label><div>${esc(p.bed ?? '?')}</div>
     <label>Tools home</label><div>${p.occupied ? esc(p.occupied.join(', ')) || 'none' : '?'}</div>
     <label>Homed</label><div>${esc(p.homed || 'no')}</div>
     <label>At</label><div class="mono note">${esc(p.url)}</div>`
-    : `<div class="full note">Can't reach Moonraker at ${esc(p.url || '?')}: ${esc(p.error || '')}</div>`;
+    : `<div class="full note">Can't reach Moonraker at ${esc(p.url || '?')}: ${esc(p.error || '')}</div>`);
 }
 async function send(start) {
   if (start && !confirm('Send this plot to Klipper and start it?')) return;
@@ -1090,6 +1313,7 @@ function render() {
   renderPalette();
   renderMachine();
   renderTools();
+  renderPens();
   renderFonts();
   renderOutput();
 }
@@ -1100,5 +1324,11 @@ function render() {
   setView(view);
   setState(S);
   pollPrinter();
-  setInterval(() => { if (!document.hidden) pollPrinter(); }, 5000);
+  // Quicker while a tool scanned by hand waits for its holder
+  (function poll() {
+    setTimeout(async () => {
+      if (!document.hidden) { try { await pollPrinter(); } catch { /* offline: shown */ } }
+      poll();
+    }, printer && printer.scan ? 1000 : 3000);
+  })();
 })();

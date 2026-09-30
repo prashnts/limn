@@ -90,6 +90,9 @@ class FakeGcode:
         if self.on_script:
             self.on_script(script)
 
+    def run_script(self, script):
+        self.scripts.append(script)
+
     def create_gcode_command(self, command, commandline, params):
         return FakeGcmd(self, params)
 
@@ -575,6 +578,86 @@ def test_nudge_without_reentering():
     flaky_reader(nfc, gcode, 1)
     gcode.run('TOOL_TAG_READ')
     assert gcode.scripts[-1] == '_RFID_NUDGE ATTEMPT=1 T=0'
+
+
+def _nfc(ext):
+    return ext.holder.nfc.bus.devices[0x24]
+
+def test_hand_scan_names_the_holder_it_goes_into():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    assert any('Scanned Micron Red' in m for m in gcode.said)
+    assert gcode.scripts.count('_BUZZ_RFID_OK') == 1           # once, however long it is held there
+    assert leds['ui_tag'].state == 'scanned'
+    assert ext.get_status(printer.reactor.t)['scan']['name'] == 'Micron Red'
+    nfc.pages = None
+    wait(printer, 2)
+    mcp.low.add(11)                                     # into holder 44 by hand
+    wait(printer, 1)
+    t = ext.get_status(0)['tools']['44']
+    assert (t['name'], t['by'], t['stale'], t['dx']) == ('Micron Red', 'hand', False, 1.25)
+    assert svv['tool_tags']['44']['by'] == 'hand' and '_BUZZ_711' in gcode.scripts
+    assert ext.scan is None and leds['ui_tag'].state == 'taken'
+    # Out again by hand: stale; a dock / undock would not
+    mcp.low.discard(11)
+    wait(printer, 1)
+    assert ext.get_status(0)['tools']['44']['stale']
+
+def test_hand_scan_too_late():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    nfc.pages = None
+    wait(printer, 9)
+    mcp.low.add(11)
+    wait(printer, 1)
+    assert '44' not in ext.get_status(0)['tools']
+    assert any('over 8 s' in m for m in gcode.said) and '_BUZZ_RFID_ERR' in gcode.scripts
+    assert leds['ui_tag'].state == 'late'
+
+def test_hand_scan_two_holders_at_once():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    nfc.pages = None
+    mcp.low.update((11, 12))
+    wait(printer, 1)
+    assert '43' not in ext.get_status(0)['tools'] and '44' not in ext.get_status(0)['tools']
+    assert any('which one' in m for m in gcode.said)
+
+def test_carried_tool_at_the_reader_is_no_scan():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
+    svv['tool_tag_uid'] = '04112233445566'
+    _nfc(ext).pages = tag_pages()
+    wait(printer, 3)
+    assert ext.scan is None and not any('Scanned' in m for m in gcode.said)
+
+def test_listening_only_after_a_hand_when_idle_is_off():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12, 11))
+    ext.scan_idle = 0
+    nfc = _nfc(ext)
+    wait(printer, 3)                                    # an idle listen may be on its way
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 5)
+    assert ext.scan is None
+    mcp.low.discard(15)                                 # a hand takes 41 out
+    wait(printer, 2)
+    assert leds['ui_tag'].state in ('listening', 'scanned')
+    assert ext.scan and ext.scan['tag'].name == 'Micron Red'
+
+def test_listening_pace():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12, 11))
+    assert ext._scan_gate() == 2.0
+    printer.objects['print_stats'] = type('PS', (), {'get_status': lambda self, t: {'state': 'printing'}})()
+    assert ext._scan_gate() == 5.0
+    ext._wake(printer.reactor.t)
+    assert ext._scan_gate() == 0.5
+    ext.leds.set_phase('engage')                        # a tool change: the carriage may be at the reader
+    assert ext._scan_gate() is None
 
 
 if __name__ == '__main__':

@@ -24,6 +24,8 @@ uv run python -m plot preview any.gcode -o preview.svg    # ours, or PrusaSlicer
 ```
 
 - `profiles/limn.toml`: the bed, its art, the draw area, zones, z limits and travel heights, the G-code around a plot. A job overrides any of it with `machine_overrides`.
+- `profiles/pens.toml`: the pen library, the kinds of pen a tool's tag can name. The web UI's *Pens* adds and edits them in this file (`pens.py`, comments stay); a key goes on the tags, so it is never renamed.
+- Number fields in the UI drag sideways (Shift finer, Ctrl coarser); a click types into them.
 - `profiles/tools.toml`: what is in the holders. Tool kinds are in `tools.py` (pen, pencil, brush, laser); your own go in a file listed in `plugins`.
 - `svg.py` reads a drawing by colour, `slicer.py` makes each colour's paths (fills, occlusion, strokes as wide as the SVG has them), `emit.py` writes the G-code, `preview.py` reads any G-code back.
 - A job's objects are sliced in their own coordinates, their placement applied when the G-code is written: moving or turning one doesn't slice it again.
