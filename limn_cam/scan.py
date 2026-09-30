@@ -41,6 +41,45 @@ def sharpness(img, width=480):
     return float(lap.var() * 1e4)
 
 
+def shift(a, b, width=640):
+    '''How far `b`'s picture has moved from `a`'s, pixels at full size (phase
+    correlation, sub-pixel by a parabola) -> (dx, dy). Up to half a frame.'''
+    ga, gb = load(a), load(b)
+    step = max(1, ga.shape[1] // width)
+    ga, gb = ga[::step, ::step], gb[::step, ::step]
+    win = np.outer(np.hanning(ga.shape[0]), np.hanning(ga.shape[1]))
+    fa, fb = np.fft.fft2((ga - ga.mean()) * win), np.fft.fft2((gb - gb.mean()) * win)
+    r = np.fft.ifft2(fb * np.conj(fa) / (np.abs(fb * np.conj(fa)) + 1e-9)).real
+    iy, ix = np.unravel_index(np.argmax(r), r.shape)
+    h, w = r.shape
+
+    def sub(c, m, n):
+        if not 0 < c < n - 1:
+            return 0.0
+        d = m[c - 1] - 2 * m[c] + m[c + 1]
+        return 0.5 * (m[c - 1] - m[c + 1]) / d if d else 0.0
+    dx = ix + sub(ix, r[iy, :], w)
+    dy = iy + sub(iy, r[:, ix], h)
+    dx = dx - w if dx > w / 2 else dx
+    dy = dy - h if dy > h / 2 else dy
+    return dx * step, dy * step
+
+
+def calibrate(size, moved_x, moved_y, step):
+    '''One shot's size and turn from the picture's shift for a move of `step` mm
+    along X (moved_x, px) and along Y (moved_y). size: the image (w, h) px.
+    -> {px_per_mm, fov: (w, h) mm, turn: degrees, mirrored}'''
+    sx, sy = np.array(moved_x) / step, np.array(moved_y) / step      # px per mm of move
+    ppm = (np.linalg.norm(sx) + np.linalg.norm(sy)) / 2
+    # The scene moves the other way: the camera going +X moves it -sx in the image
+    turn = math.degrees(math.atan2(-sx[1], -sx[0]))
+    # From above, +X right and +Y up the image (image y runs down): the cross is < 0. More: mirrored
+    mirrored = bool(np.cross(-sx, -sy) > 0)
+    return {'px_per_mm': round(float(ppm), 2), 'fov': (round(size[0] / ppm, 2), round(size[1] / ppm, 2)),
+            'turn': round(turn, 1), 'mirrored': mirrored,
+            'skew': round(float(abs(np.dot(sx, sy)) / (np.linalg.norm(sx) * np.linalg.norm(sy))), 3)}
+
+
 def footprint(fov, turn):
     '''mm the shot covers along X and Y, the image turned `turn` degrees.'''
     w, h = fov
@@ -301,11 +340,14 @@ class Job:
     def shot(self):
         return self.mr.snapshot(self.camera.webcam)
 
-    def best_of(self, x, y, zs, lift=True):
-        '''The sharpest of shots at these z, from the top down -> (z, jpeg, [(z, score)]).'''
+    def best_of(self, x, y, zs, lift=True, count=False):
+        '''The sharpest of shots at these z, from the top down -> (z, jpeg, [(z, score)]).
+        count: each shot is a step of the job's progress.'''
         curve, best = [], None
         for z in sorted(zs, reverse=True):
             self._check()
+            if count:
+                self.state['i'] = len(curve)
             z = self.goto(x, y, z, lift=lift and not curve)
             jpeg = self.shot()
             score = sharpness(jpeg)
@@ -322,7 +364,8 @@ class Job:
         self.carry()
         sid = self.store.new(self._meta('focus', (x, y, x, y)))
         self.state['scan'] = sid
-        z, jpeg, curve = self.best_of(x, y, zs)
+        z, jpeg, curve = self.best_of(x, y, zs, count=True)
+        self.state['i'] = len(zs)
         self.store.add(sid, 'best.jpg', jpeg, {'x': x, 'y': y, 'z': z})
         self.store.update(sid, curve=curve, z=z)
         self.state['result'] = {'z': z, 'curve': curve}

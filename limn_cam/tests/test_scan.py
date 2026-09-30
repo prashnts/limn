@@ -214,3 +214,15 @@ def test_webcam_urls_go_to_the_web_server(monkeypatch):
     assert Moonraker('https://limn.nb.malow.im').webcam_base() == 'https://limn.nb.malow.im'
     monkeypatch.setenv('LIMN_WEBCAM_BASE', 'http://pi:8080/')
     assert Moonraker('http://127.0.0.1:7125').webcam_base() == 'http://pi:8080'
+
+
+def test_shift_and_calibrate():
+    base = np.asarray(pattern(3, (960, 540)).filter(ImageFilter.GaussianBlur(1)))
+    moved = np.roll(np.roll(base, -60, axis=1), 24, axis=0)          # the scene 60px left, 24px down
+    dx, dy = sc.shift(jpeg(Image.fromarray(base)), jpeg(Image.fromarray(moved)))
+    assert abs(dx + 60) < 2 and abs(dy - 24) < 2
+    # A camera looking down, image x along +X and up along +Y, 100 px/mm: a 2mm move in X
+    # moves the scene 200px left, in Y 200px down (the image's y runs down)
+    cal = sc.calibrate((1920, 1080), (-200, 0), (0, 200), 2)
+    assert cal['px_per_mm'] == 100 and cal['fov'] == (19.2, 10.8) and cal['turn'] == 0 and not cal['mirrored']
+    assert sc.calibrate((1920, 1080), (0, -200), (200, 0), 2)['turn'] == 90
