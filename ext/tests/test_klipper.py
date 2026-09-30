@@ -667,6 +667,7 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     ext.drying = None
     import limn as limn_mod
     assert limn_mod.PENS_FILE.endswith('pens.toml') and ext._pen_dry().get('stb-88') == 240
+    assert 'cam-u20' in ext._pens[2] and 'stb-88' not in ext._pens[2]          # a camera never dries
     nfc = _nfc(ext)
     nfc.pages = tag_pages(name='Stabilo')
     wait(printer, 2.5)

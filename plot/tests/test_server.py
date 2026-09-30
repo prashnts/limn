@@ -306,7 +306,9 @@ def test_pen_keys_fit_a_tag():
     ok = set('abcdefghijklmnopqrstuvwxyz0123456789-_.')
     for key, pen in load_pens().items():
         assert len(key) <= 8 and set(key) <= ok, key
-        assert len(pen.get('short', '')) <= 20 and pen.get('width', 0) > 0, key
+        assert len(pen.get('short', '')) <= 20, key
+        if pen.get('kind', 'pen') != 'camera':
+            assert pen.get('width', 0) > 0, key
 
 
 @pytest.fixture

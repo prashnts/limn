@@ -250,6 +250,9 @@ def emit(job, machine, tools, sliced) -> Result:
             if tid not in tools:
                 problems.append(f'{obj.id}: no tool {tid}')
                 continue
+            if not tools[tid].draws:
+                problems.append(f'{obj.id}: {tid} is a {tools[tid].kind}, it doesn\'t draw: not drawn')
+                continue
             placed = _on_paper(machine, obj.id, tid, [obj.placement.apply(p) for p in paths], problems)
             by_tool.setdefault(tid, []).extend(placed)
 

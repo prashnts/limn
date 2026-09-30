@@ -76,3 +76,13 @@ press = 0.3               # a felt tip: it wants more to lay its ink down
 press_max = 0.6
 dry = 240                   # dry-safe ink: Stabilo says it keeps for days uncapped
 colors = { black = "#1e1e1e", blue = "#3a4fb8", red = "#e03030", green = "#2e9a3e", purple = "#7a3aa0", orange = "#f07820", pink = "#e8508c", turquoise = "#10a8b8", "light green" = "#8ccc3c", yellow = "#f0d020", brown = "#7a4a2a", grey = "#8a8a8a" }
+
+# Not pens: tools of the library that don't draw. The tag names them the same way.
+
+[cam-u20]
+short = "Camera U20"
+name = "Innomaker U20CAM 1080p"
+kind = "camera"
+webcam = "tethered_camera_tool"   # its name in Moonraker's webcams (crowsnest [cam usbcam])
+fov = [16.0, 9.0]                 # mm across and down one shot, at focus_z: until measured
+focus_z = 6.0                     # until measured: the Scan tab finds it by sweeping z
