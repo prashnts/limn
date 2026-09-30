@@ -12,7 +12,9 @@
 #   ui_tool_<tool>  the tool's digit on the UI strip: target, untagged, carried
 #   ui_traffic_*    the tool change's phase: red approach, yellow engage,
 #                   green (blinking) leave, green done; red blinking: failed
-#   ui_tag          reading, ok, error
+#   ui_tag          reading, ok, error; a tag held to the reader by hand: listening
+#                   (a hand was on the holders), scanned (into a holder, quick),
+#                   taken (a holder took it), late (it didn't)
 #   ui_alert        the machine's mood, most urgent first; its colour turns
 #                   its meaning around, its speed says how fresh or urgent:
 #                   error_new, error              red: a check failed, holders unreadable
@@ -43,6 +45,8 @@ class ToolLeds:
         self.tag_state = None       # 'reading', 'ok', 'error'
         self.tag_tool = None        # the tool carried when the tag was read
         self.tag_until = 0.0
+        self.hand_state = None      # 'listening', 'scanned', 'taken', 'late'
+        self.hand_until = 0.0
 
     # What happened
     def start(self, tool):
@@ -70,6 +74,9 @@ class ToolLeds:
         self.tag_state, self.tag_tool = state, tool
         self.tag_until = now + TAG_OK_SHOW
 
+    def hand(self, state, now, until):
+        self.hand_state, self.hand_until = state, until
+
     # What to show
     def _phase(self, now):
         if self.phase == 'done' and now >= self.phase_until:
@@ -78,7 +85,7 @@ class ToolLeds:
 
     def next_change(self, now):
         '''When `desired` changes by itself next, None if it doesn't.'''
-        times = [self.phase_until, self.tag_until]
+        times = [self.phase_until, self.tag_until, self.hand_until]
         if self.alert_at is not None:
             times += [self.alert_at + after for after, _ in ATTENTION_STEPS]
         if self.error_at is not None:
@@ -137,6 +144,8 @@ class ToolLeds:
         tag = None
         if self.tag_state == 'reading':
             tag = 'reading'
+        elif self.hand_state and now < self.hand_until:
+            tag = self.hand_state
         elif self.tag_state == 'ok' and self.tag_until > now:
             tag = 'ok'
         elif self.tag_state == 'error' and self.tag_tool == carried and carried:

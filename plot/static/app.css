@@ -213,3 +213,23 @@ h3 { font-size: 12px; margin: 12px 0 6px; }
 .sws .sw.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 .sws input[type=color] { width: 22px; height: 20px; }
 .tools details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 2px 0; }
+
+/* number fields drag sideways (app.js); the arrows would fight the drag */
+input[type=number] { cursor: ew-resize; -moz-appearance: textfield; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number]:focus { cursor: text; }
+body.num-dragging, body.num-dragging * { cursor: ew-resize !important; user-select: none; }
+
+.scan-now { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 5px 8px; border-radius: var(--radius);
+  border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); font-size: 12px; }
+.pens .list { margin: 0 0 6px; }
+.pens .dots { display: inline-flex; gap: 2px; }
+.pens .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line); }
+.pen-edit { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; margin-bottom: 6px; }
+.pen-edit .form input, .pen-edit .form select { width: 100%; }
+.pen-edit .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px 6px; margin-top: 8px; }
+.pen-edit .grid label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }
+.pen-edit .grid input { width: 100%; padding: 2px 4px; }
+.pen-colour { margin-bottom: 3px; flex-wrap: nowrap; }
+.pen-colour input[data-c=name] { flex: 1; min-width: 0; }
+button.danger { color: var(--bad); border-color: var(--bad); margin-left: auto; }

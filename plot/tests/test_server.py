@@ -307,3 +307,45 @@ def test_pen_keys_fit_a_tag():
     for key, pen in load_pens().items():
         assert len(key) <= 8 and set(key) <= ok, key
         assert len(pen.get('short', '')) <= 20 and pen.get('width', 0) > 0, key
+
+
+@pytest.fixture
+def pens_file(tmp_path, monkeypatch):
+    from plot import profile
+    p = tmp_path / 'pens.toml'
+    p.write_text(profile.PENS.read_text())
+    monkeypatch.setattr(profile, 'PENS', p)
+    return p
+
+
+def test_pen_library_add_edit_delete(client, pens_file):
+    import tomllib
+    before = pens_file.read_text()
+    new = {'name': 'Uni Pin 0.1', 'short': 'Uni Pin 01', 'width': 0.2, 'feed': 2000,
+           'colors': {'black': '#111111', 'dark grey': '#555555'}}
+    st = client.put('/api/pens/uni-01', json=new).json()
+    assert st['pens']['uni-01'] == new and 'pen' in st['kinds'] and 'z_down' in st['kinds']['pen']
+    # Changed: the other lines keep their comments, the rest of the file stays
+    mic = {**tomllib.loads(before)['mic-01'], 'width': 0.3, 'hop': 1.5}
+    mic['colors'] = {**mic['colors'], 'teal': '#008080'}
+    st = client.put('/api/pens/mic-01', json=mic).json()
+    assert st['pens']['mic-01']['width'] == 0.3 and st['pens']['mic-01']['colors']['teal'] == '#008080'
+    text = pens_file.read_text()
+    assert 'width = 0.3                 # Sakura: 01 draws 0.25 mm' in text
+    assert text.startswith(before.split('[mic-01]')[0]) and '# Sakura: 005 draws 0.20 mm' in text
+    # A key taken off goes: back to the kind's default
+    del mic['hop']
+    assert 'hop' not in client.put('/api/pens/mic-01', json=mic).json()['pens']['mic-01']
+    for key, bad in (('Too-Long-Key', new), ('uni-01', {**new, 'name': ''}), ('uni-01', {**new, 'widht': 1}),
+                     ('uni-01', {**new, 'colors': {'black': 'black'}}), ('uni-01', {**new, 'kind': 'crayon'}),
+                     ('uni-01', {**new, 'short': 'x' * 21})):
+        assert client.put(f'/api/pens/{key}', json=bad).status_code == 400, bad
+    assert 'uni-01' not in client.delete('/api/pens/uni-01').json()['pens']
+    assert client.delete('/api/pens/uni-01').status_code == 404
+    assert tomllib.loads(pens_file.read_text())['stb-88'] == tomllib.loads(before)['stb-88']
+
+
+def test_pencil_kind_in_the_library(client, pens_file):
+    st = client.put('/api/pens/hb', json={'name': 'HB pencil', 'kind': 'pencil', 'width': 0.3, 'wear': 0.05}).json()
+    assert st['pens']['hb'] == {'name': 'HB pencil', 'kind': 'pencil', 'width': 0.3, 'wear': 0.05}
+    assert 'wear' in st['kinds']['pencil'] and 'wear' not in st['kinds']['pen']

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from .tools import Tool, load_plugin, resolve
 
 PROFILES = Path(__file__).parent / 'profiles'
+PENS = PROFILES / 'pens.toml'       # the pen library, the web UI edits it (pens.py)
 
 Rect = tuple[float, float, float, float]    # x0, y0, x1, y1
 
@@ -124,9 +125,9 @@ def load_tools(name='tools') -> dict[str, Tool]:
     return tools
 
 
-def load_pens(name='pens') -> dict[str, dict]:
+def load_pens(name=None) -> dict[str, dict]:
     '''The pen library: key -> {name, colors, and tool keys}.'''
-    path = _path(name)
+    path = _path(name) if name else PENS
     return tomllib.loads(path.read_text()) if path.exists() else {}
 
 
