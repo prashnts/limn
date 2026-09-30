@@ -26,9 +26,44 @@ MIN_PEAK = 0.04             # a weaker match doesn't count
 MAX_MP = 90                 # megapixels a stitch may take: the Pi's memory
 
 
+def _axes(fov, turn):
+    '''The shot's mm along X and Y once upright: swapped for an odd quarter turn
+    (by the nearest one: a camera 0.8 degree askew is still upside down, not sideways).'''
+    return tuple(fov[::-1]) if round(turn / 90) % 2 else tuple(fov)
+
+
 def upright(im, turn):
-    '''The tile turned so its x runs along +X (PIL turns counter-clockwise).'''
-    return im.rotate(turn, expand=True) if turn % 360 else im
+    '''The tile turned so its x runs along +X (PIL turns counter-clockwise): quarter
+    turns exactly, what is left over (the camera mounted a little askew, eg. -179.2)
+    about the middle, the size kept.'''
+    k = round(turn / 90) % 4
+    if k:
+        im = im.transpose([None, Image.Transpose.ROTATE_90, Image.Transpose.ROTATE_180, Image.Transpose.ROTATE_270][k])
+    rest = turn - round(turn / 90) * 90
+    if abs(rest) > 0.05:
+        im = im.rotate(rest, resample=Image.BICUBIC, expand=False)
+    return im
+
+
+def flat_field(images, size=(96, 54)):
+    '''How the light falls off across a shot (vignetting), from many shots of
+    different things: their median, smoothed, 1 at its brightest -> (h, w, 3), or None.'''
+    if len(images) < 4:
+        return None
+    small = np.stack([np.asarray(im.convert('RGB').resize(size, Image.BILINEAR), np.float32) for im in images])
+    med = np.median(small, axis=0)
+    from .image import box_blur
+    med = np.stack([box_blur(med[..., c], 6) for c in range(3)], axis=-1)
+    return med / max(med.max(), 1e-3)
+
+
+def flatten(im, flat):
+    '''The shot divided by the light's fall-off.'''
+    if flat is None:
+        return im
+    f = np.asarray(Image.fromarray((flat * 255).astype(np.uint8)).resize(im.size, Image.BILINEAR), np.float32) / 255
+    a = np.asarray(im.convert('RGB'), np.float32) / np.maximum(f, 0.2)
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
 def _corr(a, b):
@@ -60,7 +95,7 @@ def _neighbours(tiles):
 def register(tiles, load_image, fov, turn, ppm=REGISTER_PPM):
     '''Where each tile really is -> ([(x, y) mm], [pair]). tiles: meta.json's,
     load_image(file) -> PIL image. pair: {a, b, off (mm), peak, used}.'''
-    fx, fy = fov if turn % 180 == 0 else fov[::-1]
+    fx, fy = _axes(fov, turn)
     size = (max(8, round(fx * ppm)), max(8, round(fy * ppm)))
     imgs = {}
 
@@ -129,16 +164,16 @@ def _feather(w, h, ramps):
 
 
 def size_at(tiles, fov, turn, ppm, positions=None):
-    fx, fy = fov if turn % 180 == 0 else fov[::-1]
+    fx, fy = _axes(fov, turn)
     pos = positions or [(t['x'], t['y']) for t in tiles]
     xs, ys = [p[0] for p in pos], [p[1] for p in pos]
     return (int(round((max(xs) - min(xs) + fx) * ppm)), int(round((max(ys) - min(ys) + fy) * ppm)))
 
 
-def compose(tiles, load_image, fov, turn, ppm, positions=None, max_mp=MAX_MP):
+def compose(tiles, load_image, fov, turn, ppm, positions=None, max_mp=MAX_MP, flat=None):
     '''The tiles as one picture at `ppm` px/mm, where `positions` put them (default:
     where they were sent), each seam faded over its overlap -> (image, (x0, y0, x1, y1) mm).'''
-    fx, fy = fov if turn % 180 == 0 else fov[::-1]
+    fx, fy = _axes(fov, turn)
     pos = positions or [(t['x'], t['y']) for t in tiles]
     W, H = size_at(tiles, fov, turn, ppm, pos)
     if W * H > max_mp * 1e6:
@@ -167,7 +202,7 @@ def compose(tiles, load_image, fov, turn, ppm, positions=None, max_mp=MAX_MP):
                 ramps[1] = max(ramps[1], int(oy * ppm))
             if b[1] < box[1] and oy < fy * 0.9:
                 ramps[3] = max(ramps[3], int(oy * ppm))
-        im = upright(load_image(t['file']).convert('RGB'), turn).resize((tw, th), Image.LANCZOS)
+        im = upright(flatten(load_image(t['file']).convert('RGB'), flat), turn).resize((tw, th), Image.LANCZOS)
         left = int(round((box[0] - x0) * ppm))
         top = int(round((y1 - box[3]) * ppm))
         canvas.paste(im, (left, top), _feather(tw, th, ramps))
@@ -185,7 +220,7 @@ def info(store, sid, ppm=None):
         raise KeyError('no tiles yet')
     fov, turn = meta['fov'], meta.get('turn', 0.0)
     got = _registered(d, tiles, fov, turn)
-    fx, fy = fov if turn % 180 == 0 else fov[::-1]
+    fx, fy = _axes(fov, turn)
     xs, ys = [p[0] for p in got['positions']], [p[1] for p in got['positions']]
     out = {k: got[k] for k in ('used', 'of', 'moved_max')}
     out['extent'] = [min(xs) - fx / 2, min(ys) - fy / 2, max(xs) + fx / 2, max(ys) + fy / 2]
@@ -238,7 +273,8 @@ def stitch(store, sid, ppm, refine=True):
                                        default=0.0), 3)}
         info_path.write_text(json.dumps(info))
     if not fresh(out):
-        img, extent = compose(tiles, load_image, fov, turn, ppm, info['positions'])
+        flat = flat_field([load_image(t['file']) for t in tiles[:40]])
+        img, extent = compose(tiles, load_image, fov, turn, ppm, info['positions'], flat=flat)
         img.save(out, quality=92)
     w, h = Image.open(out).size
     return out, {**{k: info[k] for k in ('used', 'of', 'moved_max')}, 'width': w, 'height': h, 'px_per_mm': ppm}

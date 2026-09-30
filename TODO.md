@@ -17,10 +17,10 @@
 ## Scan (the camera tool, limn_cam/scan.py, the Scan tab)
 
 - The camera (holder 41, `cam-u20`, tethered, U20CAM on `/webcam/`, crowsnest `[cam usbcam]`) works in machine Z: `clear_z` 7.5, `z_min` 4 (a guess after the tube was lengthened: measure how low it may go, then lower `z_min` in pens.toml).
-- [ ] Focus: sweep over the paper (Focus, K), put the z found as `focus_z` in pens.toml.
-- [ ] Measure one shot's `fov` (mm) and `turn`: shoot a spot, move a known distance, shoot again (phase correlation of the two), or shoot the plotted crosses. Until then the tile grid and the mosaic are off.
-- [ ] The camera's centre against the tool point (dx/dy): shoot a plotted cross at a known place.
-- [ ] Stitching the mosaic (it is only placed now), and focus stacking for film.
+- Done 2026-09-30: focus Z9.2 (above home; a flat peak 9.0-9.4), one shot 15.25 x 8.58 mm (125.9 px/mm), turn -179.2 (upside down, 0.8 degree askew), all in pens.toml. A 20-tile scan of a sticker stitched well (`~/limn-shot/captures/20260930-233601/stitch-126.jpg`, 5240 x 4241): registered on the overlaps, the light's fall-off divided out.
+- [ ] The camera's centre against the tool point (`center` in pens.toml, 0 now): look at crosses a pen drew at known places (`cross_centre`, `px_to_mm` in limn_cam/scan.py). Until then a scan pinned "under the plot" can sit a few mm off.
+- [ ] Stitch: halftone print repeats, so an overlap can match one dot off (pairs moved up to 1.6mm; check with a plain texture); white areas come out a little too bright (the flat field from the median); a faint seam left in places.
+- [ ] Focus stacking for film; refocus per tile tried only in tests.
 - Film scanning: the backlit bed, stitched tiles, `refocus` for curled film.
 
 ## ext/, klipper/
