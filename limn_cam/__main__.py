@@ -160,9 +160,11 @@ def play(pen: str, spots: str = typer.Option(..., help="where the rows of tests 
     res = playmod.analyze(before, after, test, backends.get(backend))
     Path(f'{base}-result.json').write_text(json.dumps(res.to_dict(), indent=1))
     typer.echo(playmod.report(res))
-    if save and any(s.per_press is not None for s in res.spots):
+    if save and any(s.per_press is not None and s.drew >= lad.SOLID for s in res.spots):
         playmod.save(res, PROFILES / 'play.toml', test)
         typer.echo(f'wrote {PROFILES / "play.toml"}: plot/ lifts by it from now on')
+    elif save:
+        typer.secho('not saving: no spot where the pressed strokes drew', fg='yellow', err=True)
 
 
 def _analyze(before, after, ld, backend, base, mr, machine, touch):

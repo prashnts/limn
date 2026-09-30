@@ -12,8 +12,11 @@ def test_clock_starts_and_stops():
     assert d.stage(41, 1600.0 + 120, False) == 2 and d.stage(41, 1600.0 + 300, False) == 3
     assert d.stage(41, 1700.0, True) == 0                         # printing: 20 minutes
     assert d.stages(1700.0, False) == {41: 1}
-    d.update(set(), 1800.0)                                       # taken out by hand: capped
-    assert d.since == {} and d.stages(5000.0, False) == {}
+    d.update(set(), 1800.0)                                       # a dock: in neither place for a moment
+    assert not d.update({41}, 1800.5) and d.since == {41: 1000.0}  # the same clock (seen on the plotter)
+    d.update(set(), 1900.0)                                       # taken out by hand: capped
+    assert d.since == {41: 1000.0}
+    assert d.update(set(), 1925.0) and d.since == {} and d.stages(5000.0, False) == {}
 
 
 def test_reset_and_saved():

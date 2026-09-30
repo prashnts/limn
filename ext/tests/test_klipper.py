@@ -690,6 +690,9 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     assert leds['holder_44'].state == 'occupied' and 'uncapped' in ext.get_status(0)['drying']['44']
     mcp.low.discard(11)                                 # taken out by hand, capped: the clock stops
     wait(printer, 2)
+    assert '44' in ext.get_status(0)['drying']          # not yet: a dock looks the same for a moment
+    clock[0] += 25
+    wait(printer, 2)
     assert ext.get_status(0)['drying'] == {} and svv['pen_since'] == {}
 
 

@@ -73,6 +73,10 @@ Sheet 2, fresh sheet and mesh, the ladder packed into the bottom-left corner, wi
 
 The shots are in `~/limn-shot/ladder-20260930-*` and `drawing-20260930-*`.
 
+Later, the Stabilo moved to holder 41 (T0). It had been out of its cap for hours, and a ladder there only left broken crosses even at Z0.8. Primed, it touched at Z1.0 (0.2 low again on this sheet, like the Staedtler) and got dz 0.24. The drawing redrawn with it at the new heights (pen-down Z0.9: press 0.3; hops Z2.0) came out complete, next to its patchy copy from before. That makes the patches a dried tip more than a height problem.
+
+`limn_cam play` then measured the play: four spots, 13 trial rises, a 0.3 press. At every spot the pen still dragged ink at rises of 0 and 0.25mm over touch, and let go from 0.5mm: 1.67 per mm of press, into `plot/profiles/play.toml`. The four spots only spread 15mm in Y (sheet 2 was full), so no tilt towards the screw showed yet. A sheet with spots far apart in Y comes next.
+
 ## Why this goes in circles
 
 Each measurement is one number per pen, taken in one place: a corner of the sheet, or the FSR. The errors that matter are ±0.2mm and they vary:

@@ -177,7 +177,10 @@ def save(result, path, test, clear=None):
     '''The spots into play.toml (plot/profile.py Play), over what it had.'''
     import tomllib
     old = tomllib.loads(path.read_text()) if path.exists() else {}
-    spots = [[s.x, s.y, s.per_press] for s in result.spots if s.per_press is not None]
+    # Only where the pressed strokes drew: elsewhere the pen didn't touch, and a clean tail tells nothing
+    spots = [[s.x, s.y, s.per_press] for s in result.spots if s.per_press is not None and s.drew >= SOLID]
+    if not spots:
+        raise ValueError('no spot to save: the pressed strokes drew nowhere')
     lines = [f'# The Z axis\'s play, measured by limn_cam play: extra lift per mm of press at each spot,',
              f'# (x, y, factor). plot/profile.py (Play) reads it over limn.toml\'s [play].']
     if clear is not None or 'clear' in old:
