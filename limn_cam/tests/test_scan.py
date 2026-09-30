@@ -179,3 +179,12 @@ def test_the_app_scans_with_the_camera_tool(tmp_path, monkeypatch):
     assert client.get(f'/api/captures/{sid}/zip').content[:2] == b'PK'
     assert client.delete(f'/api/captures/{sid}').json() == []
     assert client.get('/api/captures/nope').status_code == 404
+
+
+def test_webcam_urls_go_to_the_web_server(monkeypatch):
+    from limn_cam.moonraker import Moonraker
+    monkeypatch.delenv('LIMN_WEBCAM_BASE', raising=False)
+    assert Moonraker('http://127.0.0.1:7125').webcam_base() == 'http://127.0.0.1'   # on the Pi: nginx, not 7125
+    assert Moonraker('https://limn.nb.malow.im').webcam_base() == 'https://limn.nb.malow.im'
+    monkeypatch.setenv('LIMN_WEBCAM_BASE', 'http://pi:8080/')
+    assert Moonraker('http://127.0.0.1:7125').webcam_base() == 'http://pi:8080'
