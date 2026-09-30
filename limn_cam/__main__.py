@@ -6,6 +6,7 @@
 #   uv run python -m limn_cam ladder T0 T1 --z 2.4:1.0:0.1          # plot it, photograph, report
 #   uv run python -m limn_cam ladder T0 T1 --plan -o ladder.gcode   # only the G-code
 #   uv run python -m limn_cam analyze before.jpg after.jpg ladder.json
+#   uv run python -m limn_cam play T3 --spots '10,125;55,125'       # the Z axis's play -> plot/profiles/play.toml
 #   uv run python -m limn_cam tags --camera axiscam                 # ArUco tags in a shot
 import json
 import os
@@ -16,6 +17,7 @@ import typer
 
 from . import backend as backends
 from . import ladder as lad
+from . import play as playmod
 from .image import load
 from .moonraker import Moonraker
 
@@ -44,7 +46,7 @@ def ladder(pens: list[str] = typer.Argument(None, help="tool macros: T0 T1 .."),
            origin: str = '12,67', pitch: float = 2.5, length: float = 4.0, row_gap: float = 6.0,
            margin: float = 5.0, cross: float = 4.0, bed: str = 'BED_5',
            camera: str = 'IR Top', park: str = '0,0,9', url: str = None, backend: str = 'auto',
-           touch: float = typer.Option(1.15, help='G-code z the new dz makes a pen touch at: z_down + its press'),
+           touch: float = typer.Option(None, help="G-code z the new dz makes a pen touch at (the machine's z_touch)"),
            plan: bool = False, out: Path = typer.Option(None, '-o'),
            resume: Path = typer.Option(None, help="a ladder's base (…/ladder-<time>) cut short: draws only "
                                                   "--draw's rows where it had them, no crosses, and reads "
@@ -96,12 +98,79 @@ def ladder(pens: list[str] = typer.Argument(None, help="tool macros: T0 T1 .."),
     _analyze(before, after, ld, backend, base, mr, machine, touch)
 
 
+def _shoot(mr, camera, park, base, text, name):
+    '''Park, shot, plot `text`, park, shot -> (before, after).'''
+    px, py, pz = (float(v) for v in park.split(','))
+    goto = f'LAZY_HOME\nG90\nG1 Z{pz} F600\nG1 X{px} Y{py} F6000\nM400\nG4 P1500'
+    mr.run(goto)
+    before = mr.snapshot(camera)
+    Path(f'{base}-0-before.jpg').write_bytes(before)
+    Path(f'{base}.gcode').write_text(text)
+    typer.echo(f'plotting {Path(base).name}.gcode ..')
+    end = mr.print_file(name, text)
+    if end['state'] != 'complete':
+        typer.secho(f"it ended {end['state']}: {end.get('message')}", fg='red', err=True)
+        raise typer.Exit(1)
+    mr.run(goto)
+    after = mr.snapshot(camera)
+    Path(f'{base}-1-after.jpg').write_bytes(after)
+    return before, after
+
+
+@app.command()
+def play(pen: str, spots: str = typer.Option(..., help="where the rows of tests start: 'x,y;x,y' (mm), "
+                                                       "3 or more spread over the sheet"),
+         press: float = typer.Option(None, help="mm past touch while drawing: the pen's own (pens.toml) by default"),
+         rises: str = typer.Option('0:3:0.25', help='trial rises over z_touch, from:to:step'),
+         bed: str = 'BED_5', camera: str = 'IR Top', park: str = '0,0,9', url: str = None, backend: str = 'auto',
+         save: bool = typer.Option(True, help='write plot/profiles/play.toml'), plan: bool = False,
+         out: Path = typer.Option(None, '-o')):
+    '''How far the Z axis's play keeps a pressed pen on the paper, at a few spots.'''
+    from plot.emit import load
+    from plot.job import Job
+    from plot.profile import PROFILES
+    machine = _machine(bed)
+    if press is None:
+        mr = _moonraker(url)
+        _, tools = load(Job(machine_overrides={'bed_id': bed} if bed else {}), mr.query(limn='tools')['limn'].get('tools'))
+        press = tools[pen].pressed if pen in tools and tools[pen].pressed is not None else 0.2
+    lo, hi, step = (float(v) for v in rises.split(':'))
+    test = playmod.PlayTest(pen=pen, press=press, z_touch=machine.z_touch,
+                            spots=[tuple(float(v) for v in s.split(',')) for s in spots.split(';')],
+                            rises=[round(lo + i * step, 3) for i in range(int(round((hi - lo) / step)) + 1)])
+    x0, y0, x1, y1 = test.extent()
+    typer.echo(f'play: {pen} pressed {press:g}, {len(test.spots)} spots x {len(test.rises)} rises, '
+               f'over ({x0:.1f}, {y0:.1f}) .. ({x1:.1f}, {y1:.1f})')
+    text, problems = playmod.gcode(test, machine)
+    for p in problems:
+        typer.secho(f'! {p}', fg='red', err=True)
+    if plan or problems:
+        if out and not problems:
+            out.write_text(text)
+            typer.echo(f'wrote {out}')
+        raise typer.Exit(1 if problems else 0)
+    mr = _moonraker(url)
+    if mr.busy():
+        typer.secho('the printer is busy', fg='red', err=True)
+        raise typer.Exit(1)
+    SHOTS.mkdir(parents=True, exist_ok=True)
+    base = SHOTS / f'play-{time.strftime("%Y%m%d-%H%M%S")}'
+    Path(f'{base}.json').write_text(json.dumps(test.to_dict()))
+    before, after = _shoot(mr, camera, park, base, text, f'limn-cam-{base.name}.gcode')
+    res = playmod.analyze(before, after, test, backends.get(backend))
+    Path(f'{base}-result.json').write_text(json.dumps(res.to_dict(), indent=1))
+    typer.echo(playmod.report(res))
+    if save and any(s.per_press is not None for s in res.spots):
+        playmod.save(res, PROFILES / 'play.toml', test)
+        typer.echo(f'wrote {PROFILES / "play.toml"}: plot/ lifts by it from now on')
+
+
 def _analyze(before, after, ld, backend, base, mr, machine, touch):
     res = lad.analyze(before, after, ld, backends.get(backend))
     sug = None
     if mr is not None:
         tags = mr.query(limn='tools')['limn'].get('tools')
-        sug = lad.suggest(res, tags, machine.holders, touch)
+        sug = lad.suggest(res, tags, machine.holders, machine.z_touch if touch is None else touch)
     Path(f'{base}-result.json').write_text(json.dumps({'result': res.to_dict(), 'suggest': sug}, indent=1))
     lad.overlay(after, res, ld).save(f'{base}-2-overlay.png')
     typer.echo(lad.report(res, sug))
@@ -110,7 +179,7 @@ def _analyze(before, after, ld, backend, base, mr, machine, touch):
 
 @app.command()
 def analyze(before: Path, after: Path, spec: Path, backend: str = 'auto', url: str = None, bed: str = 'BED_5',
-            touch: float = 1.15, printer: bool = typer.Option(False, help='ask Klipper for the tags, to suggest dz')):
+            touch: float = None, printer: bool = typer.Option(False, help='ask Klipper for the tags, to suggest dz')):
     '''A ladder's shots again: before, after, and the ladder's .json.'''
     ld = lad.Ladder(**json.loads(spec.read_text()))
     base = after.with_suffix('')

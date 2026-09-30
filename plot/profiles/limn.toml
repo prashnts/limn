@@ -24,6 +24,7 @@ z_max = 7           # stepper_z position_max 10, less a tag dz of up to 3
 # The mesh keeps z over the paper, so travels stay low: every mm up is a mm
 # down again at max_z_velocity 5, and z is most of a plot's time.
 z_travel = 2.5      # long travels, over the paper
+z_touch = 1.2       # where a pen whose tag is right first touches: limn_cam ladder writes the tags for it
 safe_z = 5          # off the paper the tool never goes under this: travels leaving it go up first
 hop_distance = 10   # mm, shorter travels hop at the tool's lift (a pen: z_down + hop)
 clearance = 1       # mm over zones and objects when a travel crosses them
@@ -66,3 +67,13 @@ rect = [112, 0, 180, 177]
 # name = "bed clip"
 # rect = [0, 170, 20, 177]
 # z = 2.5
+
+# The Z axis's play (GEOMETRY.md): a pen pressed past touch lifts the axis, and
+# only lets go of the paper once it has come back down. After a stroke the pen
+# rises its press, then `clear`, then per_press x press (more far from the
+# screw). `uv run python -m limn_cam play T3` measures it at spots on the sheet
+# and writes plot/profiles/play.toml, which goes over this.
+[play]
+clear = 0.5
+per_press = 1.0     # until it is measured: as much again as the press
+max = 3.0

@@ -35,9 +35,11 @@ def test_structure_and_heights(write_svg, job_of):
     assert lines[:5] == ['LAZY_HOME', 'PLOT_START EXT=3', '_CLEAR_OFFSETS HOME=1', 'T3', '_APPLY_OFFSETS HOME=1']
     assert lines[-1] == 'PLOT_END'
     m, pen = load_machine(), load_tools()['T3']
-    assert set(zs(g, 'G1')) == {pen.z_down}          # pen down, the old ACT1
+    down = m.z_touch - pen.press
+    assert all(z == pytest.approx(down) for z in zs(g, 'G1'))     # its press past touch
     travel = zs(g, 'G0')
-    assert pen.z_down + pen.hop in travel            # the short hop
+    hop = m.z_touch + m.play.clear + m.play.per_press * pen.press
+    assert pytest.approx(hop) in travel              # the short hop: up the press, the clearance, the play
     assert m.z_travel in travel                      # the long travel
     assert max(travel) <= m.z_max
     assert not r.problems
@@ -325,3 +327,45 @@ def test_reach_keeps_tool_offsets_inside_the_axes(write_svg, job_of):
     assert parse(r.gcode).segs[parse(r.gcode).kind == DRAW][:, [0, 3]].min() == pytest.approx(m.draw_area[0])
     job.objects[0].placement = Placement(x=6, y=100)
     assert not plot(job)[0].problems
+
+
+def test_press_and_the_play(write_svg, job_of):
+    """Pen-down is z_touch less the press; after a stroke the pen rises its press,
+    the clearance, and what the play adds there: more where it was measured to."""
+    from plot.profile import Play
+    p = write_svg('<path d="M10 10 H20 M25 10 H35 M10 60 H20 M25 60 H35" stroke="#ff0000" stroke-width="0.5" fill="none"/>')
+    job = job_of(p, x=10, y=40, groups=RED)
+    # the play measured: little near y 60 (placed at y 40 + (100 - 10)), much near y 110
+    job.machine_overrides = {'play': {'clear': 0.5, 'spots': [(30, 130, 0.0), (30, 80, 2.0)], 'max': 3.0}}
+    job.tool_overrides = {'T3': {'press': 0.3}}
+    r, _ = plot(job)
+    m = load_machine(overrides=job.machine_overrides)
+    assert all(z == pytest.approx(m.z_touch - 0.3) for z in zs(r.gcode, 'G1'))
+    hops = sorted(set(zs(r.gcode, 'G0')))
+    low, high = m.z_touch + 0.5 + 0.0, m.z_touch + 0.5 + 0.6        # extra: 0 x 0.3 and 2 x 0.3
+    assert any(abs(h - low) < 0.1 for h in hops) and any(abs(h - high) < 0.1 for h in hops), hops
+    assert Play(spots=[(0, 0, 1.0)], max=0.2).extra((50, 50), 0.5) == 0.2    # never over max
+
+
+def test_fineliners_are_never_driven_hard(write_svg, job_of):
+    from plot.profile import load_pens
+    for key, pen in load_pens().items():
+        assert pen['press'] <= pen['press_max'], key
+        if key.startswith(('mic', 'std')):
+            assert pen['press_max'] <= 0.25, key
+    p = write_svg('<path d="M10 10 H20" stroke="#ff0000" stroke-width="0.5" fill="none"/>')
+    job = job_of(p, groups=RED)
+    job.tool_overrides = {'T3': {'press': 0.9}}
+    r, _ = plot(job)
+    m, pen = load_machine(), load_tools()['T3']
+    assert all(z == pytest.approx(m.z_touch - pen.press_max) for z in zs(r.gcode, 'G1'))
+    assert any('at most' in q for q in r.problems)
+    job.tool_overrides = {'T3': {'press_max': 2}}
+    with pytest.raises(ValueError, match='press_max'):
+        plot(job)
+
+
+def test_a_laser_never_touches():
+    from plot.tools import REGISTRY
+    laser = REGISTRY['laser'](id='T9', focus=5)
+    assert not laser.touches and laser.lift(None, (10, 10)) == 5

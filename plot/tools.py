@@ -4,6 +4,13 @@
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
 # A tool in tools.toml is an instance of a kind; its keys are the kind's fields.
+#
+# How hard a pen goes down is `press`: mm past where it first touches the paper,
+# machine.z_touch (the tags are written so each pen touches there). Pressing
+# lifts the Z axis within its play (GEOMETRY.md), so the lift after a stroke is
+# its press, then `play.clear`, then what the play adds there (profile.Play).
+# `press_max` is never passed: a fineliner is delicate. Without `press` a pen
+# goes down to its `z_down` and hops `hop` over it, as before.
 # The emitter (emit.py) travels between strokes, a kind only says how high it
 # hops (lift), and what it does at the start of a stroke (engage), along it
 # (draw) and at its end (disengage). Points are (x, y, z) with z the surface
@@ -23,6 +30,7 @@ import importlib
 import importlib.util
 import math
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
@@ -73,6 +81,8 @@ class Tool(BaseModel):
     pen: str | None = None      # the pen library's key (pens.toml), from the tool's tag
     holder: int | None = None   # the holder it is in, when its tag says what it is
     source: str = 'profile'     # profile: tools.toml; tag: its tag; stale: a tag from before a hand was there
+    press: float | None = None      # mm past first touch (machine.z_touch); None: z_down as it is
+    press_max: float | None = None  # never more, whatever a job asks: fineliners are delicate
 
     @property
     def call(self):
@@ -91,8 +101,18 @@ class Tool(BaseModel):
         hi = machine.z_max if self.z_max is None else min(machine.z_max, self.z_max)
         return lo, hi
 
-    def lift(self):
-        '''How high over the surface a short hop between strokes goes.'''
+    touches: ClassVar[bool] = True      # a laser doesn't: the play never comes into it
+
+    @property
+    def pressed(self):
+        '''The press used: press, never over press_max. None: no press, z_down.'''
+        if self.press is None:
+            return None
+        return min(self.press, self.press_max) if self.press_max is not None else self.press
+
+    def lift(self, ctx=None, at=None):
+        '''How high over the surface a short hop between strokes goes, leaving
+        from `at` (x, y): where the pen was pressed, and the play lifted the axis.'''
         raise NotImplementedError
 
     def engage(self, ctx, p):
@@ -113,12 +133,26 @@ class Pen(Tool):
                                 # 2026-09-29, Stabilo on BED_5: 0.8 drags, 1.0 clears
     plunge_feed: float = 300
 
-    def lift(self):
-        return self.z_down + self.hop
+    def pen_z(self, ctx):
+        '''Over the surface, drawing: z_touch less the press, or z_down.'''
+        p = self.pressed
+        return self.z_down if p is None or ctx is None else ctx.m.z_touch - p
+
+    def rise(self, ctx, at=None):
+        '''How far up from drawing until the tip has let go of the paper and is
+        `clear` over it: the press, the clearance, and the play's lift at `at`.'''
+        p = self.pressed
+        if p is None or ctx is None:
+            return self.hop
+        play = ctx.m.play
+        return p + play.clear + (play.extra(at, p) if at is not None else play.worst(p))
+
+    def lift(self, ctx=None, at=None):
+        return self.pen_z(ctx) + self.rise(ctx, at)
 
     def down(self, ctx, z):
         '''z of the tool drawing over a surface at z.'''
-        return z + self.z_down
+        return z + self.pen_z(ctx)
 
     def engage(self, ctx, p):
         ctx.g.line(z=ctx.clamp(self, self.down(ctx, p[2])), f=self.plunge_feed)
@@ -129,7 +163,8 @@ class Pen(Tool):
             ctx.g.line(x=b[0], y=b[1], z=ctx.clamp(self, self.down(ctx, b[2])), f=self.feed)
 
     def disengage(self, ctx):
-        ctx.g.rapid(z=ctx.clamp(self, ctx.g.z + self.hop), f=ctx.m.feed_z)
+        at = None if ctx.g.x is None or ctx.g.y is None else (ctx.g.x, ctx.g.y)
+        ctx.g.rapid(z=ctx.clamp(self, ctx.g.z + self.rise(ctx, at)), f=ctx.m.feed_z)
 
 
 @kind('pencil')
@@ -139,7 +174,7 @@ class Pencil(Pen):
     wear: float = 0.0           # mm lower per metre drawn
 
     def down(self, ctx, z):
-        return z + self.z_down - self.wear * ctx.drawn.get(self.id, 0.0) / 1000
+        return z + self.pen_z(ctx) - self.wear * ctx.drawn.get(self.id, 0.0) / 1000
 
 
 @kind('brush')
@@ -193,7 +228,9 @@ class Laser(Tool):
     on: str = 'M3 S{power}'
     off: str = 'M5'
 
-    def lift(self):
+    touches: ClassVar[bool] = False
+
+    def lift(self, ctx=None, at=None):
         return self.focus
 
     def engage(self, ctx, p):

@@ -36,6 +36,25 @@ Klipper Z  =  G-code Z  +  tag dz (SET_GCODE_OFFSET Z)  +  bed mesh at (x, y)
 - `[gcode_arcs] resolution: 0.2`: G2/G3 arcs are split into 0.2 mm lines. `plot/` never writes arcs.
 - Input shaper (saved): X is mzv at 34.2 Hz, Y is 2hump_ei at 90.2 Hz. The MPU9250 on the rpi MCU has `axes_map: -y, x, z`, and resonance testing probes at (80, 80, 10).
 
+### The Z axis and its play
+
+The Z axis is driven by one lead screw on the right side. It rides on two metal rails: one from the left, one somewhere in the middle. The parts are 3D printed, so the rails needed some clearance. As a result, **the axis has play of a few mm** (measured by hand). It can tilt with the screw side as the pivot, and bow to the front or the back, within limits that depend on the load. It will be tightened, but `plot/` has to cope with rough geometry anyway: plotting directly onto flat-ish 3D printed parts is a goal.
+
+What the play does to a plot:
+
+- **Coming down**, gravity keeps the axis seated, and the pen lands where commanded.
+- **Pressing** past first touch doesn't only push the tip in: it lifts the axis within its play. Near the screw the axis is stiff and the press goes into the tip; further away more of it lifts the axis. The same press gives a different line in different places.
+- **Going up**, the screw rises first and the axis follows. The pen lets go of the paper only once the axis is back down, so a lift shorter than the press plus the play drags the pen along the next travel: smudges and lines that shouldn't be there.
+- **Harder presses make all of this worse.** So every tool has its own press (mm past first touch, `press` in `plot/profiles/pens.toml`), with a `press_max` that nothing exceeds. Fineliners are delicate: 0.15, 0.25 at most, never driven hard. Felt tips take more. A laser never touches, and gravity takes care of the rest.
+
+How `plot/` deals with it (`plot/profile.py`, `Play`; `plot/tools.py`, `Pen`):
+
+- **Pen-down** is `z_touch - press`. `z_touch` (1.2) is where a pen whose tag is right first touches the paper; `limn_cam ladder` writes the tags for it.
+- **After a stroke** the pen rises its press, then `play.clear` (0.5), then what the play adds there: `extra = factor(x, y) x press`, at most `play.max`. A travel leaving that spot goes at least that high.
+- **The factor** is measured at a few spots on the sheet by `uv run python -m limn_cam play <pen> --spots 'x,y;x,y;..'`. Each spot gets pressed strokes, each followed by a lift to a trial height and a short move on at that height; the overhead camera tells which moves still left ink. The results go to `plot/profiles/play.toml`, which `plot/` reads over `[play]` in `limn.toml`. Between spots the nearer ones count more. Before anything is measured, the factor is `play.per_press` (1.0: the play adds as much again as the press).
+
+Seen from the front, the screw's side should be low Y (to be confirmed). The model doesn't depend on it: spots spread along Y and along X capture the tilt and the bow wherever the pivot is.
+
 ## The body, in plotter coordinates (measured)
 
 These were read off the camera image mapped onto the bed. Features that lie in the bed plane are good to about ±1 mm. Raised parts are only rough, because of parallax.
@@ -126,14 +145,14 @@ Heights in `beds.py` are Klipper Z with no mesh applied. `plot/` heights are G-c
 | 7 | after `_APPLY_OFFSETS`; tag reader; **`z_max` for plots** (10 less a dz of up to 3) |
 | 6 | `PAPER_ZHOME`: travel over the paper (routines) |
 | 5.5 | `[bed_mesh] horizontal_move_z` |
-| 5 | old PrusaSlicer ACT3 (travel) |
-| 3 | old PrusaSlicer ACT2 (lift) |
+| **5** | `safe_z`: the least the tool is ever at off the paper |
 | **2.5** | `plot/` long travels (`z_travel`) |
-| **2.2** | `plot/` hops: pen down + 1.2 |
-| **1** | pen down (`z_down`; the old ACT1) |
+| **1.2 + 0.5 + play** | `plot/` hops: `z_touch` + `play.clear` + what the play adds for that press, there |
+| **1.2** | `z_touch`: where a pen whose tag is right first touches the paper |
+| **1.2 − press** | pen-down: 1.05 for a fineliner (press 0.15), 0.9 for a felt tip (0.3). Pens without a press: `z_down`, 1 |
 | −2.5 | `z_min` for plots (−3 less a dz of down to −0.5) |
 
-**Measured hop:** the Stabilo on BED_5 drags at Z1.8 and clears the paper from Z2.0. Pen-down at Z1 therefore presses its tip about 0.9 mm, and the 1.2 mm hop leaves 0.2 mm spare.
+**Measured, 2026-09-30:** with their old tags, pens at pen-down Z1 were pressed 0.7 to 1 mm past touch, and fine lines grew wide and blobby. The camera ladder (`limn_cam ladder`, `notebooks/act-7-camera-ladder.md`) finds each pen's touch; its tags now put touch at `z_touch`.
 
 ## Probe and meshes
 
@@ -210,3 +229,5 @@ H = [[-9.584786310e-03, -3.542146078e-01,  2.510453004e+02],
 | Beds, meshes, marks, RTP/FSR geometry, `PANEL_ZHOME`, `PAPER_ZHOME`, tag limits | `ext/limn/beds.py` |
 | Plot heights, draw areas, zones, reach, park | `plot/profiles/limn.toml` |
 | Pens: width, pen-down, hop | `plot/profiles/tools.toml`, `plot/tools.py` |
+| Pens: press, press_max (by pen) | `plot/profiles/pens.toml` |
+| z_touch, the play model | `plot/profiles/limn.toml` (`z_touch`, `[play]`), measured spots in `plot/profiles/play.toml` (`limn_cam play`) |
