@@ -122,6 +122,8 @@ def play(pen: str, spots: str = typer.Option(..., help="where the rows of tests 
                                                        "3 or more spread over the sheet"),
          press: float = typer.Option(None, help="mm past touch while drawing: the pen's own (pens.toml) by default"),
          rises: str = typer.Option('0:3:0.25', help='trial rises over z_touch, from:to:step'),
+         stroke: float = typer.Option(2.0, help='mm drawn pressed before each lift: longer pulls the axis more'),
+         feed: float = typer.Option(1500, help='mm/min of the pressed stroke (plots draw at up to 3000)'),
          bed: str = 'BED_5', camera: str = 'IR Top', park: str = '0,0,9', url: str = None, backend: str = 'auto',
          save: bool = typer.Option(True, help='write plot/profiles/play.toml'), plan: bool = False,
          out: Path = typer.Option(None, '-o')):
@@ -135,7 +137,7 @@ def play(pen: str, spots: str = typer.Option(..., help="where the rows of tests 
         _, tools = load(Job(machine_overrides={'bed_id': bed} if bed else {}), mr.query(limn='tools')['limn'].get('tools'))
         press = tools[pen].pressed if pen in tools and tools[pen].pressed is not None else 0.2
     lo, hi, step = (float(v) for v in rises.split(':'))
-    test = playmod.PlayTest(pen=pen, press=press, z_touch=machine.z_touch,
+    test = playmod.PlayTest(pen=pen, press=press, z_touch=machine.z_touch, stroke=stroke, feed=feed,
                             spots=[tuple(float(v) for v in s.split(',')) for s in spots.split(';')],
                             rises=[round(lo + i * step, 3) for i in range(int(round((hi - lo) / step)) + 1)])
     x0, y0, x1, y1 = test.extent()

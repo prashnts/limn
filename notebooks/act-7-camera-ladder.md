@@ -77,6 +77,8 @@ Later, the Stabilo moved to holder 41 (T0). It had been out of its cap for hours
 
 `limn_cam play` then measured the play: four spots, 13 trial rises, a 0.3 press. At every spot the pen still dragged ink at rises of 0 and 0.25mm over touch, and let go from 0.5mm: 1.67 per mm of press, into `plot/profiles/play.toml`. The four spots only spread 15mm in Y (sheet 2 was full), so the next sheet spread six: Y 40, 94 and 148, X 11 and 56. Every spot gave the same result: a drag at rises of 0 and 0.25, gone from 0.5. With a 0.3 press and a slow lift, the play of a few mm measured by hand doesn't show, and some of that 0.5 is this sheet's ±0.2 in touch. It may take a harder press, the sideways pull of drawing, or faster moves to bring it out: a test to design. The factor stays 1.67 (hops Z2.2 after a 0.3 press), safe either way.
 
+Then a real load: the Stabilo's full 0.6 press and 10mm strokes at 3000mm/min, the pull of drawing, at four spots. The pen let go *sooner*: from 0.25mm over touch at three spots, at once at the fourth. Once the pen lifts, gravity seats the axis again quickly, so the play doesn't keep the pen down on the way up. Where it may still matter is while drawing: tilting under the pull, which widens a line or skips it. That needs a look at the lines themselves (the tool camera), not at the lifts.
+
 ## Why this goes in circles
 
 Each measurement is one number per pen, taken in one place: a corner of the sheet, or the FSR. The errors that matter are ±0.2mm and they vary:
