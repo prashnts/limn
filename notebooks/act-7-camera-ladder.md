@@ -75,7 +75,7 @@ The shots are in `~/limn-shot/ladder-20260930-*` and `drawing-20260930-*`.
 
 Later, the Stabilo moved to holder 41 (T0). It had been out of its cap for hours, and a ladder there only left broken crosses even at Z0.8. Primed, it touched at Z1.0 (0.2 low again on this sheet, like the Staedtler) and got dz 0.24. The drawing redrawn with it at the new heights (pen-down Z0.9: press 0.3; hops Z2.0) came out complete, next to its patchy copy from before. That makes the patches a dried tip more than a height problem.
 
-`limn_cam play` then measured the play: four spots, 13 trial rises, a 0.3 press. At every spot the pen still dragged ink at rises of 0 and 0.25mm over touch, and let go from 0.5mm: 1.67 per mm of press, into `plot/profiles/play.toml`. The four spots only spread 15mm in Y (sheet 2 was full), so no tilt towards the screw showed yet. A sheet with spots far apart in Y comes next.
+`limn_cam play` then measured the play: four spots, 13 trial rises, a 0.3 press. At every spot the pen still dragged ink at rises of 0 and 0.25mm over touch, and let go from 0.5mm: 1.67 per mm of press, into `plot/profiles/play.toml`. The four spots only spread 15mm in Y (sheet 2 was full), so the next sheet spread six: Y 40, 94 and 148, X 11 and 56. Every spot gave the same result: a drag at rises of 0 and 0.25, gone from 0.5. With a 0.3 press and a slow lift, the play of a few mm measured by hand doesn't show, and some of that 0.5 is this sheet's ±0.2 in touch. It may take a harder press, the sideways pull of drawing, or faster moves to bring it out: a test to design. The factor stays 1.67 (hops Z2.2 after a 0.3 press), safe either way.
 
 ## Why this goes in circles
 

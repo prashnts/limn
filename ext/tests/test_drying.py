@@ -19,6 +19,14 @@ def test_clock_starts_and_stops():
     assert d.update(set(), 1925.0) and d.since == {} and d.stages(5000.0, False) == {}
 
 
+def test_a_pen_of_its_own():
+    d = Drying(idle=600, printing=1200)
+    d.update({41, 42}, 0.0)
+    d.limits = {41: 240 * 60}                   # dry-safe ink
+    assert d.stages(700.0, False) == {42: 1}
+    assert d.limit(True, 41) == 480 * 60 and d.limit(True, 42) == 1200
+
+
 def test_reset_and_saved():
     d = Drying(since={'41': 100.0, '42': 200.0})
     d.reset(900.0, 41)

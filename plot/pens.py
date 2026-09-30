@@ -16,7 +16,7 @@ from .tools import REGISTRY, resolve
 KEY = re.compile(r'[a-z0-9._-]{1,8}')      # it goes on the tag, tool_holder.py encode_pen
 BARE = re.compile(r'[A-Za-z0-9_-]+')
 HEX = re.compile(r'#[0-9a-fA-F]{6}')
-OWN = ('short', 'name', 'kind')            # the library's own keys go first, then the tool's
+OWN = ('short', 'name', 'kind', 'dry')     # the library's own keys go first, then the tool's
 NOT_TUNABLE = {'id', 'kind', 'name', 'color', 'macro', 'begin', 'end', 'pen', 'holder', 'source'}
 
 
@@ -59,7 +59,16 @@ def check(key, spec):
             raise ValueError(f'colour {n!r} = {c!r}: a name and #rrggbb')
         clean[n] = str(c).lower()
     kind = spec.get('kind', 'pen')
-    tool = {k: v for k, v in spec.items() if k not in ('name', 'short', 'kind')}
+    if 'dry' in spec:
+        try:
+            spec['dry'] = float(spec['dry'])
+        except (TypeError, ValueError):
+            spec['dry'] = -1
+        if spec['dry'] <= 0:
+            raise ValueError('dry: minutes it may stay uncapped, more than 0')
+        if spec['dry'] == int(spec['dry']):
+            spec['dry'] = int(spec['dry'])
+    tool = {k: v for k, v in spec.items() if k not in ('name', 'short', 'kind', 'dry')}
     try:
         resolve(kind)(id='check', kind=kind, **tool)
     except Exception as e:

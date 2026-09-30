@@ -1025,6 +1025,7 @@ function renderPens() {
         <label>Key</label><input data-p="key" maxlength="8" value="${esc(penEdit.key)}"${penEdit.isNew ? '' : ' disabled'} placeholder="eg. uni-01" title="Goes on the tags: up to 8 of a-z 0-9 - _ . , never renamed">
         <label>Name</label><input data-p="name" value="${esc(sp.name || '')}" placeholder="Uni Pin 0.1">
         <label>Short</label><input data-p="short" maxlength="20" value="${esc(sp.short || '')}" placeholder="for tag names, ≤ 20" title="How tags name it, with the colour: up to 20 characters">
+        <label>Uncapped</label><input data-p="dry" type="number" min="1" value="${esc(sp.dry ?? '')}" placeholder="10 min (the dock's default)" title="Minutes it may stay out of its cap in the machine before the dock goes red and beeps; twice that while printing">
         <label>Kind</label><select data-p="kind">${Object.keys(S.kinds || { pen: 1 }).map((k) => opt(k, kind)).join('')}</select>
       </div>
       <div class="grid">${fields}</div>
@@ -1042,6 +1043,7 @@ $('#pens').addEventListener('input', (e) => {
   if (!penEdit) return;
   const t = e.target;
   if (t.dataset.p === 'key') penEdit.key = t.value.trim().toLowerCase();
+  else if (t.dataset.p === 'dry') penEdit.spec.dry = t.value === '' ? undefined : +t.value;
   else if (t.dataset.p && t.dataset.p !== 'kind') penEdit.spec[t.dataset.p] = t.value;
   else if (t.dataset.pf) penEdit.spec[t.dataset.pf] = t.value === '' ? undefined : +t.value;
   else if (t.dataset.c) {
@@ -1096,7 +1098,7 @@ $('#pens').addEventListener('click', async (e) => {
 const DRAG_STEP = {
   'f-x': 0.5, 'f-y': 0.5, 'f-r': 1, 'f-s': 1, angle: 5, spacing: 0.01,
   z_min: 0.05, z_max: 0.1, z_travel: 0.1, hop_distance: 1, clearance: 0.1, feed_travel: 100, order_time: 0.05,
-  width: 0.01, press: 0.02, press_max: 0.02, z_touch: 0.05, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
+  dry: 5, width: 0.01, press: 0.02, press_max: 0.02, z_touch: 0.05, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
   focus: 0.1, power: 5, reload_every: 10, well_z: 0.05, dips: 1,
 };
 const NON_NEGATIVE = new Set(['press', 'press_max', 'f-s', 'spacing', 'hop_distance', 'clearance', 'feed_travel', 'order_time', 'width', 'overlap',
