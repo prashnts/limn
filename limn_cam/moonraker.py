@@ -109,6 +109,12 @@ class Moonraker:
         url = camera if '/' in camera else self.webcams()[camera]['snapshot_url']
         if url.startswith('/'):
             url = self.webcam_base() + url
-        r = requests.get(url, timeout=self.timeout)
-        r.raise_for_status()
-        return r.content
+        for attempt in range(3):                # the stream hiccups now and then (seen: one read timed out)
+            try:
+                r = requests.get(url, timeout=20)
+                r.raise_for_status()
+                return r.content
+            except requests.RequestException:
+                if attempt == 2:
+                    raise
+                time.sleep(1.0)
