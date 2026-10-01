@@ -50,6 +50,21 @@ There is some more info posted [here](https://hackaday.io/project/205431-limn-pe
 
 The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
 
+**The UI matrix** is a Pimoroni Unicorn pHAT: 8 × 4 RGB LEDs, Klipper's `[neopixel picam]` (`rpi:gpio15`, GRB), numbered 1 – 32 row by row from the top left. Each part has its own `led_effect` in `klipper/leds.cfg`:
+
+<img src="docs/led-matrix-ui.png" alt="The LED matrix UI: the alert sign, X Y Z K, the tag sign, a tool's number and the tool change light" width="320">
+
+```
+  1  2 |  3 |  4  5  6 |  7 |  8      1 2 9 10      ui_alert        the machine's mood (below)
+  9 10 | 11 | 12 13 14 | 15 | 16      3 11 19       ui_*stepper_*   the X, Y, Z endstops
+ 17 18 | 19 | 20 21 22 | 23 | 24      27            ui_key_*        K: the toolchanger's key, red locked, green open
+ 25 26 | 27 | 28 29 30 | 31 | 32      17 18 25 26   ui_tag          the tag reader
+                                      cols 4 – 6    ui_tool_41..45  a tool's number in pixels (T0 is holder 41)
+                                      16 24 32      ui_traffic_*    the tool change: red, yellow, green
+```
+
+The art (`docs/led-matrix-ui.svg`, 40 px a LED) is what the matrix means: the alert sign over the top left 2 × 2, X Y Z K down column 3, the tag sign over the bottom left 2 × 2. The plot UI's *Display* panel shows the matrix and the dock strip live, from the LEDs' own colours in Klipper (`neopixel picam`, `neopixel indockator`), with the art over them and, from `printer.limn.leds`, what each part says.
+
 | Where | State | Means |
 |---|---|---|
 | Dock strip, per holder | green | tool in its holder |

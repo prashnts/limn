@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Limn's toolhead from above, for the plot UI (plot/static/head.js draws it where Klipper says the head is).
+     Units: mm. The origin is the tool point (Klipper's X, Y with no tool offset), seen from above:
+     x right = +X, y down = -Y (like the overhead camera's plan view). Keep the viewBox in mm around
+     the origin and width/height in mm: it opens at its real size.
+     Traced 2026-10-01 from the IR Top camera (800 x 600), mapped onto the bed through the paper's
+     corners and corrected for the carriage top's parallax (x 1.14 about the camera axis): about
+     1-2 mm, rough where parts sit at other heights. #toolhead: the carriage; #tool: the carried tool
+     (here the camera, U20CAM); #fiducial: the ArUco tag's block. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="80mm" viewBox="-85 -40 100 80">
+  <g fill="none" stroke="#5b6475" stroke-width="0.4" stroke-linejoin="round">
+    <path id="toolhead" d="M -79.00 19.60 L -79.00 -13.00 L -72.70 -17.00 L -72.70 -30.00 L -53.00 -30.00 L -53.00 -15.01 L -47.81 -15.00 L -47.80 -34.90 L -27.00 -34.90 L -27.00 -15.00 L -34.99 -15.00 L -35.00 -12.01 L -16.40 -12.00 L -16.40 23.60 L -35.00 23.60 L -35.01 19.60 Z"/>
+    <path id="fiducial" d="M -27.00 -15.00 L -27.00 -34.90 L -47.80 -34.90 L -47.80 -15.00 Z" stroke-width="0.25"/>
+    <path id="tool" d="M -16.40 14.80 L -16.40 -10.00 L 10.30 -10.00 L 10.30 14.80 Z" stroke-dasharray="1.2 0.8"/>
+  </g>
+</svg>

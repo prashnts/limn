@@ -218,6 +218,16 @@ H = [[-9.584786310e-03, -3.542146078e-01,  2.510453004e+02],
 
 **Accuracy.** Over the paper the drawn edges are straight to about 0.2 mm, so lens distortion is negligible there. It holds while the camera stays where it is. Outside the paper, and for anything raised, expect a few mm of error.
 
+**2026-10-01: now 800 × 600.** The IR Top snapshots are 800 × 600 now (another aspect, so another crop of the sensor: the mapping above doesn't scale to it). Refitted from the sheet's corners on BED_5 (X 5 – 93, Y 30 – 160), 1.75 px/mm over the paper, the image centre at about (47.1, 74.6):
+
+```
+H = [[-2.83241e-03, -6.037751e-01, 2.3317227e+02],
+     [-5.9141068e-01, -1.028576e-02, 3.2038403e+02],
+     [ 3.6971e-04,  -2.2078e-04,   1.0e+00]]
+```
+
+**The toolhead from above** (`plot/profiles/toolhead.svg`, mm, the tool point at its origin; the plot UI draws it live). Traced from three snapshots with the tool point at (50.4, 81.5), (50.4, 121.5) and (50.4, 170): the carriage top looks 1.14× further from the camera axis than it is (the red LED moved 45.8 mm in the picture for 40 mm), corrected for. Measured from the tool point: the carriage plate X −79 to −35, Y −19.6 to 30 (the LED at about X −59.5); the ArUco block X −47.8 to −27, Y 15 to 35; the coupling X −35 to −16.4, Y −23.6 to 12; the camera tool X −16.4 to 10.3, Y −14.8 to 10, its lens about 4 mm towards −Y of the tool point. About 1 – 2 mm.
+
 **Bed art.** `slicer/limn-bed-art-combined.svg`, the preview's bed art, is not BED_5. It shows the A6/A5 calibration-bed layout. Its A6 outline lands within a few mm of the real sheet, but none of BED_5's features (Plot & Cut, FSR window, PROG, ACT) are in it.
 
 ## Where each number lives

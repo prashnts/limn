@@ -442,6 +442,7 @@ def test_leds_at_startup():
     assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
                          'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged',
                          'ui_alert': 'ok'}
+    assert ext.get_status(0)['leds'] == lit(leds)            # the plot UI's virtual display reads them
 
 def test_leds_drawn_when_holders_settled_during_startup():
     ext, printer, mcp, nfc, gcode, svv = make_with_holder()

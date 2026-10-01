@@ -364,3 +364,156 @@ def test_corners_set_precisely_when_zoomed(page, scanning):
     fx = cam['fov'][0] * abs(math.cos(t)) + cam['fov'][1] * abs(math.sin(t))
     assert region(scanning)[0] == pytest.approx(30 + 40 / (b['width'] * k) * fx, abs=0.02)
     assert region(scanning)[3] == pytest.approx(80, abs=0.1)
+
+
+def test_the_head_on_the_canvas(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+
+    class R:
+        def __init__(self, st):
+            self.st = st
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': {'status': self.st}}
+    at = {'head': [60.0, 90.0, 9.4]}
+    real = srv.requests.get
+
+    def get(u, params=None, **kw):
+        if params and 'motion_report' in params:
+            return R({'motion_report': {'live_position': at['head'] + [0]}, 'toolhead': {'homed_axes': 'xyz'},
+                      'gcode_move': {'homing_origin': [-2.5, -1.0, 0.2, 0]}})
+        return real(u, params=params, **kw)
+    monkeypatch.setattr(srv.requests, 'get', get)
+    assert requests.get(url + '/api/toolhead.svg').text.count('id="toolhead"') == 1
+    page.goto(url + '/')
+    page.wait_for_selector('#head-layer .head-label')
+    assert page.text_content('#head-layer .head-label') == 'X 62.5 Y 91 Z 9.4'        # the tip: less the tool's offset
+    assert page.get_attribute('#head-layer .head-outline', 'transform') == 'translate(60 90) scale(1,-1)'
+    at['head'] = [70.0, 90.0, 9.4]                                                     # it moves: it follows
+    page.wait_for_function('() => document.querySelector("#head-layer .head-label").textContent.startsWith("X 72.5")')
+    page.uncheck('#show-head')
+    assert page.locator('#head-layer *').count() == 0
+
+
+# --- the layout: panels over the canvas, windows, the LED display ------------------------
+def drag(page, frm, to, steps=8):
+    page.mouse.move(*frm)
+    page.mouse.down()
+    page.mouse.move(*to, steps=steps)
+    page.mouse.up()
+
+
+def test_panels_fold_float_dock_and_reset(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.evaluate('() => localStorage.removeItem("limn-plot:layout")')
+    page.reload()
+    page.wait_for_selector('section[data-panel="paint"] .phead')
+    assert page.locator('#ruler-x').bounding_box()['width'] > 200          # the rulers sit between the panels
+    # A tap on the header folds it, another unfolds it
+    page.click('section[data-panel="machine"] .phead h2')
+    assert 'collapsed' in page.get_attribute('section[data-panel="machine"]', 'class')
+    page.click('section[data-panel="machine"] .phead h2')
+    assert 'collapsed' not in page.get_attribute('section[data-panel="machine"]', 'class')
+    # Out over the canvas: it floats
+    h = page.locator('section[data-panel="paint"] .phead h2').bounding_box()
+    drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
+    assert page.locator('#floats section[data-panel="paint"]').count() == 1
+    # To the left dock, and it stays there
+    h = page.locator('section[data-panel="paint"] .phead h2').bounding_box()
+    drag(page, (h['x'] + 4, h['y'] + 6), (60, 500))
+    assert page.locator('#left section[data-panel="paint"]').count() == 1
+    page.reload()
+    page.wait_for_selector('#left section[data-panel="paint"]')
+    # The fixed one doesn't move
+    h = page.locator('section[data-panel="drawings"] .phead h2').bounding_box()
+    drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
+    assert page.locator('#left section[data-panel="drawings"]').count() == 1
+    # Panels, shift-clicked: everything back
+    page.once('dialog', lambda d: d.accept())
+    page.click('#layout-button', modifiers=['Shift'])
+    assert page.locator('#right section[data-panel="paint"]').count() == 1
+    # Panels: all hidden, the canvas's tools move out to the edges
+    left_rail = page.locator('#rail').bounding_box()['x']
+    page.click('#layout-button')
+    assert not page.is_visible('#right') and page.locator('#rail').bounding_box()['x'] < left_rail
+    page.click('#layout-button')
+
+
+def test_windows_move_and_resize(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': {'webcams': [{'name': 'top', 'stream_url': '/webcam/?action=stream', 'snapshot_url': '/s', 'enabled': True}]}}
+    real = srv.requests.get
+    monkeypatch.setattr(srv.requests, 'get', lambda u, **kw: R() if 'webcams/list' in u else real(u, **kw))
+    page.goto(url + '/')
+    page.evaluate('() => localStorage.removeItem("limn-plot:layout")')
+    page.reload()
+    page.click('#cams-button')
+    win = page.locator('.win[data-win="cams"]')
+    page.wait_for_selector('.win[data-win="cams"] .vbar')
+    b0 = win.bounding_box()
+    bar = page.locator('.win[data-win="cams"] .vbar .grow').bounding_box()        # the bar, clear of its buttons
+    cx, cy = bar['x'] + bar['width'] / 2, bar['y'] + bar['height'] / 2
+    drag(page, (cx, cy), (cx - 200, cy - 100))
+    b1 = win.bounding_box()
+    assert b1['x'] == pytest.approx(b0['x'] - 200, abs=3) and b1['y'] == pytest.approx(b0['y'] - 100, abs=3)
+    drag(page, (b1['x'] + b1['width'] - 6, b1['y'] + b1['height'] - 6), (b1['x'] + b1['width'] + 94, b1['y'] + b1['height'] + 44))
+    b2 = win.bounding_box()
+    assert b2['width'] == pytest.approx(b1['width'] + 100, abs=3) and b2['height'] == pytest.approx(b1['height'] + 50, abs=3)
+    assert page.evaluate('() => JSON.parse(localStorage.getItem("limn-plot:layout")).windows.cams.w') == pytest.approx(b2['width'], abs=1)
+
+
+def test_the_led_display_shows_klipper(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+    ui = [[0, 0, 0]] * 32
+    ui = [[0.5, 0.3, 0] if i in (0, 1, 8, 9) else [0, 0.4, 0] if i == 26 else [0, 0, 0] for i in range(32)]
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': {'status': {'neopixel picam': {'color_data': [c + [0] for c in ui]},
+                                          'neopixel indockator': {'color_data': [[0, 0.3, 0.1]] * 30},
+                                          'limn': {'leds': {'ui_alert': 'warn', 'ui_tool_43': 'carried', 'ui_tag': 'listening'}}}}}
+    real = srv.requests.get
+    monkeypatch.setattr(srv.requests, 'get', lambda u, params=None, **kw: R() if params and 'neopixel picam' in params else real(u, params=params, **kw))
+    page.goto(url + '/')
+    page.wait_for_selector('#leds .ledmatrix rect.led.lit')
+    assert page.locator('#leds .ledmatrix rect.led.lit').count() == 5
+    assert page.locator('#leds .dockstrip rect.led.lit').count() == 30
+    legend = page.text_content('#leds .ledlegend')
+    assert 'a tool is unaccounted for' in legend and 'T2 carried' in legend and 'listening' in legend
+
+
+def test_two_fingers_pinch_the_canvas(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('g.obj path.shape')
+    v0 = viewbox(page)
+    # Two touch pointers 100 px apart, then 200: zoomed in twice; their middle moved 30 px right: panned
+    page.evaluate('''() => {
+        const svg = document.querySelector('#canvas'), r = svg.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        const ev = (type, id, x, y) => svg.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y,
+            bubbles: true, cancelable: true, isPrimary: id === 1, button: 0, buttons: 1 }));
+        ev('pointerdown', 1, cx - 50, cy); ev('pointerdown', 2, cx + 50, cy);
+        ev('pointermove', 1, cx - 100 + 30, cy); ev('pointermove', 2, cx + 100 + 30, cy);
+        ev('pointerup', 1, cx - 70, cy); ev('pointerup', 2, cx + 130, cy);
+    }''')
+    v1 = viewbox(page)
+    assert v1[2] == pytest.approx(v0[2] / 2, rel=0.02)
+    assert requests.get(base + '/api/state').json()['job']['objects'][0]['placement'] == \
+        page.evaluate('() => S.job.objects[0].placement')                    # nothing was moved by the fingers
