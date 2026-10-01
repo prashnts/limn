@@ -21,7 +21,7 @@
   <label class="check plot-only" title="Show the travel moves (pen up) in the Paths view"><input type="checkbox" id="show-travel" checked> travel</label>
   <label class="check plot-only" title="Show the drawings' outlines, faint, under the paths in the Paths view"><input type="checkbox" id="show-drawing"> drawing</label>
   <label class="check" title="Show the bed's artwork under the drawing, as a guide"><input type="checkbox" id="show-art" checked> bed art</label>
-  <label class="check plot-only" id="under-toggle" hidden title="Show the scan pinned with 'Under the plot' (Scan tab) under the drawings, where it was taken: place drawings on what is on the bed"><input type="checkbox" id="show-under" checked> scan</label>
+  <label class="check plot-only" id="under-toggle" hidden title="Show the scans pinned with 'Under the plot' (Scan tab) under the drawings, where they were taken: place drawings on what is on the bed. Each can be hidden in the list on the left"><input type="checkbox" id="show-under" checked> scans</label>
   <label class="check" title="The paper's colour on the canvas, whatever the theme"><input type="color" id="paper-color" value="#ffffff"> paper</label>
   <div class="grow"></div>
   <button id="cams-button" class="small" title="Klipper's cameras, live, over the bed (the stream stops when it is closed)">Cameras</button>
@@ -44,6 +44,10 @@
         <b>Drop SVGs</b> on the bed, or click here
       </label>
       <ul id="objects" class="list"></ul>
+    </section>
+    <section id="unders-section" class="plot-only" hidden>
+      <h2 title="Scans pinned with 'Under the plot' (Scan tab's viewer): shown under the drawings, where they were taken">Scans under the plot</h2>
+      <ul id="unders" class="list"></ul>
     </section>
     <section id="object-panel" class="plot-only" hidden></section>
   </aside>
@@ -174,6 +178,7 @@
 </main>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
+<script src="/static/zoom.js"></script>
 <script src="/static/scan.js"></script>
 <script src="/static/cams.js"></script>
 </body>

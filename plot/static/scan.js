@@ -302,6 +302,9 @@ $('#nas').addEventListener('click', async (e) => {
 // --- captures: the list and the viewer ---------------------------------------------------
 const when = (id) => id.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2}).*/, '$3.$2. $4:$5');
 const kinds = { scan: '▦', focus: '◎', look: '◉', corners: '⌜' };
+// Which captures lie on the bed (Scan tab): the newest 12 unless shown or hidden by hand
+const scanVis = store.get('scanVis', {});
+const onBed = (c, i) => c.count > 0 && (scanVis[c.id] ?? i < 12);
 function upState(c) {
   const u = N && N.uploads[c.id];
   if (u && !u.done) return `<span class="icon note" title="Uploading: ${u.i} of ${u.n} files">⇪ ${u.n ? Math.round(100 * u.i / u.n) : 0}%</span>`;
@@ -315,8 +318,9 @@ function renderCaptures() {
   const st = C.store, note = $('#store-note');
   note.hidden = !st || !st.volatile;
   if (st) note.textContent = `In the Pi's memory (${num(st.mb, 0)} of ${num(st.max_mb, 0)} MB, the oldest go first): gone after a reboot. ${N && N.settings.ready ? 'Upload what to keep (⇪).' : 'Set up the NAS to keep them.'}`;
-  fill($('#captures'), C.captures.map((c) => `
-    <li data-id="${esc(c.id)}" class="${viewing && viewing.meta.id === c.id ? 'on' : ''}" title="${esc(c.kind)} ${esc(c.id)}: ${c.count} shot${c.count === 1 ? '' : 's'}${c.region ? ` over ${c.region.map((v) => num(v, 1)).join(', ')}` : ''}${c.error ? ` (${c.error})` : ''}">
+  fill($('#captures'), C.captures.map((c, i) => `
+    <li data-id="${esc(c.id)}" class="${viewing && viewing.meta.id === c.id ? 'on' : ''}${onBed(c, i) ? '' : ' hidden'}" title="${esc(c.kind)} ${esc(c.id)}: ${c.count} shot${c.count === 1 ? '' : 's'}${c.region ? ` over ${c.region.map((v) => num(v, 1)).join(', ')}` : ''}${c.error ? ` (${c.error})` : ''}">
+      <button class="icon eye" data-eye="${esc(c.id)}" title="${onBed(c, i) ? 'On the bed: hide it' : 'Not on the bed: show it there'}">${onBed(c, i) ? '◉' : '◌'}</button>
       <span class="kind">${kinds[c.kind] || '·'}</span>
       <span class="name">${esc(when(c.id))} <span class="note">${esc(c.kind)} · ${c.count}${c.done ? '' : ' …'}</span></span>
       ${upState(c)}
@@ -325,6 +329,14 @@ function renderCaptures() {
     </li>`).join('') || '<li class="note">Nothing yet: look, focus or scan with the camera tool.</li>');
 }
 $('#captures').addEventListener('click', async (e) => {
+  const eye = e.target.dataset.eye;
+  if (eye) {
+    const i = C.captures.findIndex((c) => c.id === eye);
+    scanVis[eye] = !onBed(C.captures[i], i);
+    store.set('scanVis', scanVis);
+    renderCaptures(); drawScanLayer();
+    return;
+  }
   const up = e.target.dataset.up;
   if (up) { await api('POST', `/api/captures/${encodeURIComponent(up)}/upload`); return loadCamera(); }
   const del = e.target.dataset.del;
@@ -373,7 +385,7 @@ async function renderViewer() {
   V.hidden = false;
   const id = encodeURIComponent(m.id), view = viewing.view;
   const tiles = m.tiles || [];
-  const pinned = store.get('scanUnder', null) === m.id;
+  const pinned = unders().includes(m.id);
   let body;
   if (view === 'stitch') {
     const ppm = viewing.ppm, native = (viewing.info && viewing.info.native_ppm) || 126;
@@ -389,9 +401,9 @@ async function renderViewer() {
         <span class="note">${esc(size)}</span>
         <a class="button" href="/api/captures/${id}/stitch?px_per_mm=${ppm}&download=1" title="Download the stitch at this resolution (JPEG)">⤓ stitched</a></div>
       <div class="stitching note" id="v-wait">stitching…</div>
-      <img class="big" src="/api/captures/${id}/stitch?px_per_mm=${ppm}&t=${tiles.length}" alt="stitched"
+      <div class="zoombox"><img class="big" src="/api/captures/${id}/stitch?px_per_mm=${ppm}&t=${tiles.length}" alt="stitched"
         onload="document.getElementById('v-wait').remove()" onerror="document.getElementById('v-wait').textContent='could not stitch it'"
-        title="The tiles joined where their overlaps agree (registered), the seams faded">`;
+        title="The tiles joined where their overlaps agree (registered), the seams faded. Wheel or pinch: zoom, drag: pan, double-click: full size"></div>`;
   } else if (view === 'corners') {
     body = cornersBody(m, id);
   } else if (view === 'hugin') {
@@ -401,9 +413,10 @@ async function renderViewer() {
       title="${esc(t.file)}: X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)}. Click for the full photo">`).join('')}</div>`;
   } else {
     const i = tiles.findIndex((t) => t.file === view), t = tiles[i] || {};
-    body = `<a href="/api/captures/${id}/file/${encodeURIComponent(view)}" target="_blank" title="Open the full photo in a new tab">
-      <img class="big" src="/api/captures/${id}/file/${encodeURIComponent(view)}" alt="${esc(view)}"></a>
-      <div class="note mono">${esc(view)} · X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)} · ${i + 1} / ${tiles.length} (← →)</div>`;
+    body = `<div class="zoombox"><img class="big" src="/api/captures/${id}/file/${encodeURIComponent(view)}" alt="${esc(view)}"
+        title="Wheel or pinch: zoom, drag: pan, double-click: full size"></div>
+      <div class="note mono">${esc(view)} · X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)} · ${i + 1} / ${tiles.length} (← →) ·
+        <a href="/api/captures/${id}/file/${encodeURIComponent(view)}" target="_blank" title="The full photo in a new tab">open ↗</a></div>`;
   }
   fill(V, `<div class="vbar">
       <b title="${esc(m.kind)} taken ${esc(m.id)}">${esc(when(m.id))} · ${esc(m.kind)}</b>
@@ -418,6 +431,7 @@ async function renderViewer() {
       <a class="button" href="/api/captures/${id}/zip" title="Download all its shots (zip)">⤓ zip</a>
       <button data-act="close" title="Close (Esc)">✕</button>
     </div><div class="vbody">${body}</div>`);
+  $$('.zoombox', V).forEach(zoomable);
 }
 // The region's corners on what is there: each shot upright, centred where the camera
 // was sent, the region's edges drawn through it and its outside shaded. A click
@@ -432,17 +446,18 @@ function cornersBody(m, id) {
     const ox = n[1] === 'l' ? [-fx / 2, ex] : [ex, fx / 2];           // outside the region, svg units (mm, y down)
     const oy = n[0] === 't' ? [-fy / 2, -ey] : [-ey, fy / 2];
     const shade = (x0, x1, y0, y1) => x1 > x0 && y1 > y0 ? `<rect class="out" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/>` : '';
-    return `<div class="corner" style="aspect-ratio:${fx} / ${fy}">
+    return `<div class="corner zoombox" style="aspect-ratio:${fx} / ${fy}"><div class="zin">
       <img src="/api/captures/${id}/file/${encodeURIComponent(t.file)}" alt="${n}"
         style="width:${fw / fx * 100}%;height:${fh / fy * 100}%;transform:translate(-50%,-50%) rotate(${-turn}deg)">
       <svg viewBox="${-fx / 2} ${-fy / 2} ${fx} ${fy}" data-corner="${n}" preserveAspectRatio="none">
         ${shade(ox[0], ox[1], -fy / 2, fy / 2)}${shade(n[1] === 'l' ? ex : -fx / 2, n[1] === 'l' ? fx / 2 : ex, oy[0], oy[1])}
         <line x1="${ex}" x2="${ex}" y1="${-fy / 2}" y2="${fy / 2}"/><line x1="${-fx / 2}" x2="${fx / 2}" y1="${-ey}" y2="${-ey}"/>
-      </svg>
+      </svg></div>
       <span class="note mono">${n.toUpperCase()} · X ${num(n[1] === 'l' ? r[0] : r[2], 2)} Y ${num(n[0] === 't' ? r[3] : r[1], 2)}</span></div>`;
   };
   return `<p class="note">The region's edges on what the camera saw at each corner (shaded: outside). Click where a corner should be,
-      eg. just outside the film's frame: that corner's two edges go there. Then scan.</p>
+      eg. just outside the film's frame: that corner's two edges go there. Zoom in for precision: wheel or pinch, drag to pan,
+      double-click for full size. Then scan.</p>
     <div class="corners">${CORNERS.map(cell).join('')}</div>`;
 }
 async function setCorner(n, svgEl_, e) {
@@ -483,7 +498,8 @@ async function huginBody(m, id, tiles) {
       ${warn ? `<span class="bad">⚠ ${esc(warn)}</span>` : ''}
       <a class="button" href="/api/captures/${id}/hugin?px_per_mm=${ppm}&download=1" title="Download the stitch (JPEG)">⤓ stitched</a>
       <a class="button" href="/api/captures/${id}/file/hugin.pto?download=1" title="The Hugin project: open it next to the tiles (unzip them) to fine-tune">⤓ .pto</a>`)
-    + `<img class="big" src="/api/captures/${id}/hugin?px_per_mm=${ppm}&t=${i.width}" alt="stitched by Hugin">`;
+    + `<div class="zoombox"><img class="big" src="/api/captures/${id}/hugin?px_per_mm=${ppm}&t=${i.width}" alt="stitched by Hugin"
+        title="Wheel or pinch: zoom, drag: pan, double-click: full size"></div>`;
 }
 
 $('#viewer').addEventListener('click', async (e) => {
@@ -498,8 +514,8 @@ $('#viewer').addEventListener('click', async (e) => {
   if (t.dataset.file) { viewing.view = t.dataset.file; return renderViewer(); }
   if (t.dataset.act === 'close') return closeViewer();
   if (t.dataset.act === 'pin') {
-    const pinned = store.get('scanUnder', null) === viewing.meta.id;
-    store.set('scanUnder', pinned ? null : viewing.meta.id);
+    const pinned = unders().includes(viewing.meta.id);
+    setUnders(pinned ? unders().filter((x) => x !== viewing.meta.id) : [viewing.meta.id, ...unders()]);
     toast(pinned ? 'No scan under the plot' : 'Pinned: on the Plot tab it lies under the drawings');
     renderViewer(); drawUnder();
   }
@@ -536,7 +552,7 @@ function drawScanLayer() {
   L.innerHTML = '';
   if (!scanTab() || !C) return;
   if ($('#shots-on-bed').checked) {
-    const shown = C.captures.filter((c) => c.count).slice(0, 12).reverse();
+    const shown = C.captures.filter(onBed).reverse();
     for (const c of shown) {
       const k = known[c.id];
       if (!k || k.count !== c.count) {
@@ -566,21 +582,62 @@ function drawScanLayer() {
 }
 $('#shots-on-bed').addEventListener('change', drawScanLayer);
 
-// The scan pinned under the plot (Plot tab): drawings are placed on what is on the bed
-async function drawUnder() {
-  const L = $('#scan-under'), id = store.get('scanUnder', null);
-  $('#under-toggle').hidden = !id;
+// Scans pinned under the plot (Plot tab): drawings are placed on what is on the bed.
+// Each can be hidden there; the header's *scan* hides them all.
+function unders() {
+  const old = store.get('scanUnder', null);            // one, before there could be several
+  if (old) { store.set('scanUnders', [old]); store.set('scanUnder', null); }
+  return store.get('scanUnders', []);
+}
+function setUnders(ids) { store.set('scanUnders', ids); drawUnder(); }
+const underHidden = new Set(store.get('underHidden', []));
+function renderUnders(list) {
+  const ids = unders();
+  $('#under-toggle').hidden = !ids.length;
+  $('#unders-section').hidden = !ids.length;
+  fill($('#unders'), ids.map((id) => {
+    const c = list && list.find((x) => x.id === id), off = underHidden.has(id);
+    return `<li data-under="${esc(id)}" class="${off ? 'hidden' : ''}" title="${esc(c ? `${c.kind} ${c.id}, ${c.count} shots` : id)}">
+      <button class="icon eye" data-act="eye" title="${off ? 'Hidden: show it under the drawings' : 'Hide it'}">${off ? '◌' : '◉'}</button>
+      <span class="name">${esc(when(id))} <span class="note">${esc(c ? c.kind : '')}</span></span>
+      <button class="icon" data-act="unpin" title="Not under the plot any more (the scan stays, Scan tab)">✕</button></li>`;
+  }).join(''));
+}
+$('#unders').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-under]'), act = e.target.dataset.act;
+  if (!li || !act) return;
+  const id = li.dataset.under;
+  if (act === 'eye') {
+    underHidden.has(id) ? underHidden.delete(id) : underHidden.add(id);
+    store.set('underHidden', [...underHidden]);
+    drawUnder();
+  }
+  if (act === 'unpin') setUnders(unders().filter((x) => x !== id));
+});
+let underDrawing = Promise.resolve();
+function drawUnder() {
+  underDrawing = underDrawing.then(drawUnders).catch(() => null);
+  return underDrawing;
+}
+async function drawUnders() {
+  const L = $('#scan-under');
+  let list = null;
+  try { list = (C && C.captures) || await api('GET', '/api/captures'); } catch { /* the server comes back later */ }
+  if (list) {                                           // gone from the server: not pinned any more
+    const ids = unders().filter((id) => list.some((c) => c.id === id));
+    if (ids.length !== unders().length) store.set('scanUnders', ids);
+  }
+  renderUnders(list);
   L.innerHTML = '';
-  if (!id || !$('#show-under').checked) return;
-  let k;
-  try {
-    const list = (C && C.captures) || await api('GET', '/api/captures');
+  if (!list || !$('#show-under').checked) return;
+  for (const id of [...unders()].reverse()) {           // the first pinned on top
+    if (underHidden.has(id)) continue;
     const c = list.find((x) => x.id === id);
-    if (!c) { store.set('scanUnder', null); $('#under-toggle').hidden = true; return; }
-    k = await capture(id, c.count);
-  } catch { return; }
-  const img = shotImage(L, id, k, { ppm: 25, attrs: { class: 'under' } });
-  if (img) svgEl('title', {}, img).textContent = `The scan ${id}, where it was taken`;
+    let k;
+    try { k = await capture(id, c.count); } catch { continue; }
+    const img = shotImage(L, id, k, { ppm: 25, attrs: { class: 'under' } });
+    if (img) svgEl('title', {}, img).textContent = `The scan ${id}, where it was taken`;
+  }
 }
 $('#show-under').addEventListener('change', drawUnder);
 

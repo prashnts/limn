@@ -238,3 +238,129 @@ def test_cameras_overlay_and_fluidd(page, served, monkeypatch):
     assert opened().endswith('/webcam2/?action=stream')
     page.click('#cams [data-act="cams-close"]')
     assert page.locator('#cams *').count() == 0                # the stream is closed
+
+
+def test_drawings_hide_but_still_plot(page, base, drawing):
+    oid = drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('g.obj path.shape')
+    page.click(f'#objects li[data-id="{oid}"] [data-act="eye"]')
+    assert not page.is_visible(f'g.obj[data-id="{oid}"]')
+    assert 'still plots' in page.text_content('#objects')
+    assert requests.get(base + '/api/state').json()['job']['objects']      # still on the bed, in the job
+    page.reload()
+    page.wait_for_selector(f'#objects li.hidden[data-id="{oid}"]')       # remembered
+    page.click(f'#objects li[data-id="{oid}"] [data-act="eye"]')
+    assert page.is_visible(f'g.obj[data-id="{oid}"]')
+
+
+def looks(tmp_path, n=2):
+    '''n look captures in the capture store, one shot each.'''
+    from limn_cam.scan import ScanStore, capture_root
+    from limn_cam.tests.test_scan import jpeg, pattern
+    store = ScanStore(capture_root(tmp_path))
+    ids = []
+    for i in range(n):
+        sid = store.new({'kind': 'look', 'fov': [16, 9], 'turn': 0})
+        store.add(sid, 'look.jpg', jpeg(pattern(i)), {'x': 40 + 30 * i, 'y': 80, 'z': 5})
+        ids.append(sid)
+        time.sleep(1.05)                    # ids are by the second
+    return ids
+
+
+def test_scans_show_and_hide(page, scanning, tmp_path):
+    a, b = looks(tmp_path)
+    open_scan(page, scanning)
+    page.wait_for_function('() => document.querySelectorAll("#scan-layer image.shot").length === 2')
+    page.click(f'#captures li[data-id="{a}"] [data-eye]')
+    page.wait_for_function('() => document.querySelectorAll("#scan-layer image.shot").length === 1')
+    assert 'hidden' in page.get_attribute(f'#captures li[data-id="{a}"]', 'class')
+    # Both under the plot, then one hidden, then one unpinned
+    page.evaluate(f'() => localStorage.setItem("limn-plot:scanUnders", JSON.stringify(["{a}", "{b}"]))')
+    page.click('#ribbon [data-tab="plot"]')
+    page.wait_for_function('() => document.querySelectorAll("#scan-under image").length === 2')
+    assert page.locator('#unders li').count() == 2
+    page.click(f'#unders li[data-under="{a}"] [data-act="eye"]')
+    page.wait_for_function('() => document.querySelectorAll("#scan-under image").length === 1')
+    page.click(f'#unders li[data-under="{b}"] [data-act="unpin"]')
+    page.wait_for_function('() => document.querySelectorAll("#unders li").length === 1')
+    assert page.locator('#scan-under image').count() == 0       # the one left is hidden
+
+
+def viewbox(page):
+    return [float(v) for v in page.get_attribute('#canvas', 'viewBox').split()]
+
+
+def test_pan_and_zoom_by_mouse_and_trackpad(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('g.obj path.shape')
+    box = page.locator('#canvas').bounding_box()
+    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    v0 = viewbox(page)
+    page.mouse.wheel(0, 100)                                    # a mouse wheel's notch: zoom out
+    page.wait_for_timeout(100)
+    v1 = viewbox(page)
+    assert v1[2] > v0[2]
+    page.wait_for_timeout(500)
+    page.mouse.wheel(30, 12)                                    # two fingers on a trackpad: pan, same zoom
+    page.wait_for_timeout(100)
+    v2 = viewbox(page)
+    assert v2[2] == pytest.approx(v1[2]) and v2[0] > v1[0] and v2[1] > v1[1]
+    page.keyboard.down('Control')                               # a pinch: the browser sends Ctrl+wheel
+    page.mouse.wheel(0, -20)
+    page.keyboard.up('Control')
+    page.wait_for_timeout(100)
+    assert viewbox(page)[2] < v2[2]
+    # The right button (a two-finger press) drags the canvas; no menu, nothing selected
+    v3 = viewbox(page)
+    x, y = box['x'] + box['width'] * 0.6, box['y'] + box['height'] * 0.3        # clear of the rail and the zoom buttons
+    page.mouse.move(x, y)
+    page.mouse.down(button='right')
+    page.mouse.move(x + 80, y + 40, steps=4)
+    page.mouse.up(button='right')
+    v4 = viewbox(page)
+    assert v4[2] == pytest.approx(v3[2]) and v4[0] < v3[0] and v4[1] < v3[1]
+
+
+def test_a_scan_preview_zooms(page, scanning, tmp_path):
+    a, = looks(tmp_path, 1)
+    open_scan(page, scanning)
+    page.click(f'#captures li[data-id="{a}"] .name')
+    page.click('#viewer .grid-tiles img')
+    page.wait_for_selector('#viewer .zoombox img.big')
+    box = page.locator('#viewer .zoombox').bounding_box()
+    page.mouse.move(box['x'] + box['width'] * 0.3, box['y'] + box['height'] * 0.4)
+    page.mouse.wheel(0, -200)                                   # a mouse wheel notch the other way: zoom in
+    page.wait_for_selector('#viewer .zoombox.zoomed')
+    assert 'scale(' in page.get_attribute('#viewer .zoombox > img.big', 'style')
+    assert '%' in page.text_content('#viewer .zoombadge')
+    page.mouse.dblclick(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    page.wait_for_selector('#viewer .zoombox:not(.zoomed)')
+
+
+def test_corners_set_precisely_when_zoomed(page, scanning):
+    open_scan(page, scanning)
+    page.click('#camera-job [data-act="corners"]')
+    page.wait_for_selector('#viewer svg[data-corner="tl"]', timeout=20000)
+    cell = page.locator('#viewer .corner.zoombox').first
+    b = cell.bounding_box()
+    cx, cy = b['x'] + b['width'] / 2, b['y'] + b['height'] / 2
+    page.mouse.move(cx, cy)
+    page.keyboard.down('Control')                               # a pinch, 4x about the middle
+    for _ in range(14):
+        page.mouse.wheel(0, -10)
+    page.keyboard.up('Control')
+    k = page.evaluate('() => +getComputedStyle(document.querySelector("#viewer .corner .zin")).transform.split("(")[1].split(",")[0]')
+    assert k > 3
+    page.mouse.click(cx + 40, cy)                               # 40 px right of the middle, zoomed: k times less on the bed
+    for _ in range(50):
+        if region(scanning)[0] != 30:
+            break
+        time.sleep(0.1)
+    cam = requests.get(scanning + '/api/camera').json()['cameras']['T0']
+    import math
+    t = math.radians(cam['turn'])
+    fx = cam['fov'][0] * abs(math.cos(t)) + cam['fov'][1] * abs(math.sin(t))
+    assert region(scanning)[0] == pytest.approx(30 + 40 / (b['width'] * k) * fx, abs=0.02)
+    assert region(scanning)[3] == pytest.approx(80, abs=0.1)
