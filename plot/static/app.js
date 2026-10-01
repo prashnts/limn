@@ -232,10 +232,38 @@ function setMode(m) {
   drawHandles();
 }
 
+// The shape under the pointer, or the nearest within PICK px: a stroke is drawn as
+// wide as its SVG has it, often under a pixel, and only what is painted takes a click.
+const PICK = 6;
+const PICK_AT = [[0, 0]];
+for (let r = 1.5; r <= PICK; r += 1.5) for (let k = 0; k < 8; k++) PICK_AT.push([r * Math.cos(k * Math.PI / 4), r * Math.sin(k * Math.PI / 4)]);
+function pickShape(e) {
+  for (const [dx, dy] of PICK_AT) {
+    for (const el of document.elementsFromPoint(e.clientX + dx, e.clientY + dy)) {
+      if (el.matches('#design-layer path.shape')) return el;
+      if (el === svg) break;
+    }
+  }
+  return null;
+}
+let hot = null, hoverAt = null;
+function setHot(el) {
+  if (hot === el) return;
+  if (hot) hot.classList.remove('hot');
+  hot = el;
+  if (hot) hot.classList.add('hot');
+}
+
 svg.addEventListener('pointerdown', (e) => {
   const handle = e.target.closest('[data-handle]');
-  const shape = e.target.closest('path.shape');
-  const g = e.target.closest('g.obj');
+  const picking = mode === 'paint' && paintTo && e.button === 0 && !spaceDown;
+  const shape = picking ? pickShape(e) : e.target.closest('path.shape');
+  const g = shape ? shape.closest('g.obj') : e.target.closest('g.obj');
+  if (picking) {
+    if (shape) paintShape(g.dataset.id, +shape.dataset.i, e.shiftKey ? 'colour' : paintScope);
+    else flash('No shape here: click on a line or inside a filled shape');
+    if (shape || g) return;
+  }
   const capture = () => { try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ } };
   if (e.button === 1 || spaceDown || mode === 'pan' || (e.button === 0 && !g && !handle)) {
     // Empty canvas: pan; a click without moving deselects
@@ -264,10 +292,6 @@ svg.addEventListener('pointerdown', (e) => {
   }
   if (!g) return;
   const id = g.dataset.id;
-  if (mode === 'paint' && paintTo) {
-    if (shape) paintShape(id, +shape.dataset.i, e.shiftKey ? 'colour' : paintScope);
-    return;
-  }
   if (sel !== id) { sel = id; store.set('sel', sel); render(); }
   const o = obj(id);
   drag = { kind: 'move', id, start: worldPt(e), p: { ...o.placement }, moved: false };
@@ -278,6 +302,10 @@ svg.addEventListener('pointermove', (e) => {
   const w = worldPt(e);
   cursor = w;
   drawRulers();
+  if (!drag && mode === 'paint' && paintTo) {
+    if (!hoverAt) requestAnimationFrame(() => { setHot(pickShape(hoverAt)); hoverAt = null; });
+    hoverAt = { clientX: e.clientX, clientY: e.clientY };
+  } else setHot(null);
   if (!drag) return;
   if (drag.kind === 'pan') {
     const r = svg.getBoundingClientRect();
@@ -334,7 +362,14 @@ svg.addEventListener('pointerup', async () => {
   setState(await api('PATCH', `/api/objects/${d.id}`, body));
 });
 
+let flashUntil = 0;
+function flash(text, ms = 2500) {
+  flashUntil = Date.now() + ms;
+  $('#hint').textContent = text;
+  setTimeout(() => { if (Date.now() >= flashUntil) hint(''); }, ms);
+}
 function hint(text) {
+  if (!text && Date.now() < flashUntil) return;     // a flash() stays its while
   $('#hint').textContent = text || (mode === 'paint' && paintTo
     ? `Painting ${paintTo} · ${paintTarget} · ${paintScope} (shift: whole colour) · Esc to stop` : '');
 }
@@ -530,7 +565,10 @@ function styleObject(o, g, data) {
   data.shapes.forEach((sh, n) => {
     const p = paths[n];
     let stroke = 'none', fill = 'none', sw = Math.max(sh.w, 0.1), op = 1, sop = 1, fop = 1;
-    if (view === 'original' || view === 'paths') {
+    if (view === 'paths') {
+      // Only a faint outline, if at all (the drawing toggle): the paths are what to look at
+      stroke = 'var(--muted)'; sw = 0.12;
+    } else if (view === 'original') {
       if (sh.line) { stroke = sh.fill; sw = 0.3; }
       else { stroke = sh.stroke || 'none'; fill = sh.fill || 'none'; }
       if (!sh.so) sop = 0.5;
@@ -1306,8 +1344,15 @@ function setView(v) {
   view = v; store.set('view', v);
   $$('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   $('#paths-layer').style.display = v === 'paths' ? '' : 'none';
+  showDrawing();
   renderObjects();
 }
+function showDrawing() {
+  $('#design-layer').style.display = view === 'paths' && !$('#show-drawing').checked ? 'none' : '';
+  store.set('showDrawing', $('#show-drawing').checked);
+}
+$('#show-drawing').checked = store.get('showDrawing', false);
+$('#show-drawing').addEventListener('change', showDrawing);
 $('#views').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setView(b.dataset.view); });
 $('#show-travel').addEventListener('change', () => { if (preview) scrubTo(+$('#scrubber').value); });
 $('#show-art').addEventListener('change', () => { bedSig = null; renderBed(); });

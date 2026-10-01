@@ -58,6 +58,8 @@ class Workspace:
         self.tags = None            # printer.limn.tools: what the tools' tags say, None: not asked yet
         self.printer_job = None     # a scan or a tag write running on the printer, see run_on_printer()
         self.camera_job = None      # limn_cam.scan.Job: the camera tool focusing, looking or scanning
+        self.nas_uploads = {}       # scan id -> limn_cam.nas.Upload
+        self.hugin_jobs = {}        # scan id -> {ppm, done, error, log}: stitching with Hugin
         self.scan_path = self.data / 'scan.json'
 
     def save(self):
@@ -497,8 +499,8 @@ def create_app(data=None):
         return Settings()
 
     def captures():
-        from limn_cam.scan import ScanStore
-        return ScanStore(ws.data / 'captures')
+        from limn_cam.scan import ScanStore, capture_root
+        return ScanStore(capture_root(ws.data))
 
     def cameras():
         with ws.lock:
@@ -512,6 +514,7 @@ def create_app(data=None):
         return {'settings': scan_settings().to_dict(),
                 'cameras': {k: {**t.model_dump(), 'z_limits': t.z_limits(machine)} for k, t in cams.items()},
                 'job': job.state if job else None, 'captures': captures().list(),
+                'store': {'volatile': captures().volatile, 'mb': round(captures().size() / 1e6, 1), 'max_mb': captures().max_mb},
                 'travel_area': machine.travel_area, 'zones': [z.model_dump() for z in machine.zones]}
 
     @app.patch('/api/camera')
@@ -552,8 +555,66 @@ def create_app(data=None):
         if state in ('printing', 'paused'):
             raise HTTPException(409, f'the printer is {state}')
         job = Job(what, mr, cam, machine, captures(), settings)
+        if fn_name == 'scan':
+            job.on_done = lambda j: nas_settings().auto and not j.state['error'] and j.state['scan'] \
+                and start_upload(j.state['scan'])
         ws.camera_job = job.start(lambda: getattr(job, fn_name)(*args))
         return {'job': job.state}
+
+    # Keeping scans: uploads to the NAS (an S3 bucket, limn_cam/nas.py)
+    def nas_settings():
+        from limn_cam import nas
+        return nas.load_settings(ws.data / 'nas.json')
+
+    def start_upload(sid):
+        from limn_cam import nas
+        cur = ws.nas_uploads.get(sid)
+        if cur and not cur.state['done']:
+            return cur.state
+        try:
+            up = nas.Upload(captures(), sid, nas_settings())
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        ws.nas_uploads[sid] = up.start()
+        return up.state
+
+    @app.get('/api/nas')
+    def nas_get():
+        return {'settings': nas_settings().public(), 'uploads': {k: u.state for k, u in ws.nas_uploads.items()}}
+
+    @app.put('/api/nas')
+    def nas_put(body: dict = Body(...)):
+        '''The NAS settings; a secret_key left out or empty keeps the one there is.'''
+        from limn_cam import nas
+        cur = nas_settings()
+        fields = {k: v for k, v in body.items() if k in nas.Settings.__dataclass_fields__}
+        if not fields.get('secret_key'):
+            fields.pop('secret_key', None)
+        try:
+            s = nas.Settings(**{**cur.__dict__, **fields})
+        except TypeError as e:
+            raise HTTPException(400, str(e))
+        nas.save_settings(ws.data / 'nas.json', s)
+        return nas_get()
+
+    @app.post('/api/nas/check')
+    def nas_check():
+        '''A small file into the bucket: that the settings work.'''
+        from limn_cam import nas
+        try:
+            return {'ok': True, 'key': nas.Bucket(nas_settings(), timeout=15).check()}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(502, f'the NAS: {e}')
+
+    @app.post('/api/captures/{sid}/upload')
+    def capture_upload(sid: str):
+        try:
+            captures().dir(sid)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+        return start_upload(sid)
 
     def check_spot(x, y):
         '''x, y: where the image's middle goes; the tool point is off by the camera's center.'''
@@ -597,6 +658,17 @@ def create_app(data=None):
         for _, _, x, y in tiles(s.region, cam.fov, s.overlap, cam.turn):
             check_spot(x, y)
         return camera_job('scanning', 'scan')
+
+    @app.post('/api/camera/corners')
+    def camera_corners():
+        '''A shot on each corner of the region: to set its edges on what is there.'''
+        s = scan_settings()
+        if not s.region:
+            raise HTTPException(400, 'no region: draw one on the bed')
+        x0, y0, x1, y1 = s.region
+        for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1)):
+            check_spot(x, y)
+        return camera_job('checking the corners', 'corners')
 
     @app.post('/api/camera/stop')
     def camera_stop():
@@ -664,6 +736,57 @@ def create_app(data=None):
         except ValueError as e:
             raise HTTPException(400, str(e))
         return FileResponse(path, filename=f'limn-{sid}-{px_per_mm:g}ppmm.jpg' if download else None)
+
+    @app.post('/api/captures/{sid}/hugin')
+    def capture_hugin(sid: str, px_per_mm: float = 25):
+        '''Stitch with Hugin, in the background (limn_cam/hugin.py): GET .../hugin/status.'''
+        from limn_cam import hugin
+        if hugin.missing():
+            raise HTTPException(400, f'Hugin is missing ({", ".join(hugin.missing())}): '
+                                     'sudo apt install hugin-tools enblend')
+        try:
+            captures().dir(sid)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+        cur = ws.hugin_jobs.get(sid)
+        if cur and not cur['done']:
+            return cur
+        ppm = max(1.0, min(px_per_mm, 200.0))
+        job = {'ppm': ppm, 'done': False, 'error': None, 'log': [], 'started': time.time()}
+
+        def run():
+            try:
+                hugin.stitch(captures(), sid, ppm, log=job['log'].append)
+                captures().prune()
+                if nas_settings().auto:
+                    start_upload(sid)
+            except Exception as e:
+                job['error'] = str(e)
+            finally:
+                job['done'] = True
+        ws.hugin_jobs[sid] = job
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @app.get('/api/captures/{sid}/hugin/status')
+    def capture_hugin_status(sid: str, px_per_mm: float = 25):
+        from limn_cam import hugin
+        try:
+            got = hugin.done(captures(), sid, px_per_mm)
+        except KeyError:
+            raise HTTPException(404, f'no capture {sid}')
+        return {'job': ws.hugin_jobs.get(sid), 'info': got[1] if got else None, 'missing': hugin.missing()}
+
+    @app.get('/api/captures/{sid}/hugin')
+    def capture_hugin_file(sid: str, px_per_mm: float = 25, download: bool = False):
+        from limn_cam import hugin
+        try:
+            got = hugin.done(captures(), sid, px_per_mm)
+        except KeyError:
+            got = None
+        if not got:
+            raise HTTPException(404, f'{sid}: not stitched with Hugin at {px_per_mm:g} px/mm yet')
+        return FileResponse(got[0], filename=f'limn-{sid}-hugin-{px_per_mm:g}ppmm.jpg' if download else None)
 
     @app.get('/api/captures/{sid}/zip')
     def capture_zip(sid: str):

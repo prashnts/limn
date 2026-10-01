@@ -249,3 +249,28 @@ def test_the_camera_offset_is_taken_off_when_it_moves(tmp_path):
     st = run(job, 'look', 40, 90, 7.5)
     assert st['error'] is None and (mr.x, mr.y) == (38.0, 91.0)
     assert store.meta(st['scan'])['tiles'][0]['x'] == 40
+
+
+def test_store_stays_under_its_size(tmp_path):
+    store = sc.ScanStore(tmp_path, max_mb=1)
+    for i in range(4):
+        sid = store.new({'kind': 'scan'})
+        store.add(sid, 't.jpg', b'x' * 400_000, {})
+    assert len(store.list()) == 3           # the oldest went: 4 x 0.4 MB > 1 MB, but the newest always stays
+    assert store.size() < 1.3e6
+
+
+def test_captures_in_ram_where_there_is_some(tmp_path, monkeypatch):
+    monkeypatch.delenv('LIMN_CAPTURES')
+    root = sc.capture_root(tmp_path)
+    assert root == (sc.Path('/dev/shm/limn-captures') if sc.Path('/dev/shm').is_dir() else tmp_path / 'captures')
+
+
+def test_corners_are_shot_on_the_region_corners(tmp_path):
+    mr, store = FakeMoonraker(), sc.ScanStore(tmp_path)
+    st = run(sc.Job('checking the corners', mr, camera(), machine(), store, sc.Settings(region=(20, 60, 56, 84))), 'corners')
+    assert st['error'] is None and st['i'] == st['n'] == 4
+    meta = store.meta(st['scan'])
+    assert meta['kind'] == 'corners'
+    assert [(t['corner'], t['x'], t['y']) for t in meta['tiles']] == [('tl', 20, 84), ('tr', 56, 84), ('br', 56, 60), ('bl', 20, 60)]
+    assert all(t['z'] == pytest.approx(5.0) for t in meta['tiles'])

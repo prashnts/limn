@@ -17,10 +17,14 @@
 # still for `settle` s. Every z comes from above: the Z axis has play.
 #
 # Scans live in a folder each (ScanStore): the tiles, meta.json with where each
-# was taken, a mosaic and thumbnails made when asked for. Only the newest `keep`.
+# was taken, a mosaic and thumbnails made when asked for. Only the newest `keep`,
+# and no more than `max_mb` in all. On the Pi the folders are in RAM (/dev/shm,
+# capture_root()): an SD card doesn't like a few hundred shots a scan. They are
+# gone after a reboot: upload them (limn_cam/nas.py) to keep them.
 import io
 import json
 import math
+import os
 import shutil
 import threading
 import time
@@ -163,10 +167,30 @@ class Settings:
         return asdict(self)
 
 
+def capture_root(data):
+    '''Where scans go: LIMN_CAPTURES, else RAM (/dev/shm) where there is one, else
+    the workspace `data`.'''
+    if os.environ.get('LIMN_CAPTURES'):
+        return Path(os.environ['LIMN_CAPTURES'])
+    if Path('/dev/shm').is_dir():
+        return Path('/dev/shm/limn-captures')
+    return Path(data) / 'captures'
+
+
 class ScanStore:
-    def __init__(self, root, keep=30):
+    def __init__(self, root, keep=30, max_mb=2048):
         self.root = Path(root)
         self.keep = keep
+        self.max_mb = max_mb
+
+    @property
+    def volatile(self):
+        '''In RAM: lost on a reboot.'''
+        return str(self.root.resolve()).startswith('/dev/shm')
+
+    def size(self, sid=None):
+        root = self.dir(sid) if sid else self.root
+        return sum(p.stat().st_size for p in root.rglob('*') if p.is_file()) if root.exists() else 0
 
     def new(self, meta):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -210,17 +234,27 @@ class ScanStore:
                 m = self.meta(d.name)
             except (KeyError, ValueError):
                 continue
+            from .nas import up_to_date, uploaded
+            up = uploaded(self, d.name)
             out.append({k: m.get(k) for k in ('id', 'kind', 'region', 'z', 'camera', 'started', 'done', 'error')}
-                       | {'count': len(m.get('tiles', []))})
+                       | {'count': len(m.get('tiles', [])),
+                          'uploaded': ('all' if up_to_date(self, d.name) else 'some') if up else None})
         return out
 
     def delete(self, sid):
         shutil.rmtree(self.dir(sid))
 
     def prune(self):
+        '''Only the newest `keep`, and the oldest go while all of them take more than
+        max_mb (the newest stays whatever its size: it may be scanning).'''
         scans = sorted((d for d in self.root.iterdir() if (d / 'meta.json').exists()), reverse=True)
         for d in scans[self.keep:]:
             shutil.rmtree(d, ignore_errors=True)
+        scans = scans[:self.keep]
+        sizes = [sum(p.stat().st_size for p in d.rglob('*') if p.is_file()) for d in scans]
+        while len(scans) > 1 and sum(sizes) > self.max_mb * 1e6:
+            shutil.rmtree(scans.pop(), ignore_errors=True)
+            sizes.pop()
 
     def file(self, sid, name):
         p = self.dir(sid) / name
@@ -274,6 +308,7 @@ class Job:
                       'started': time.time(), 'scan': None, 'result': None}
         self._stop = False
         self._thread = None
+        self.on_done = None             # called when it ends, however it ends
         self.z = None                   # where the camera is, once known
         self.xy = None
 
@@ -296,6 +331,11 @@ class Job:
                         self.store.update(self.state['scan'], done=True, error=self.state['error'])
                     except KeyError:
                         pass
+                if self.on_done:
+                    try:
+                        self.on_done(self)
+                    except Exception as e:
+                        self.state['error'] = self.state['error'] or str(e)
         self._thread = threading.Thread(target=run, daemon=True)
         self._thread.start()
         return self
@@ -401,6 +441,22 @@ class Job:
         self.state['scan'] = sid
         z = self.goto(x, y, z)
         self.store.add(sid, 'look.jpg', self.shot(), {'x': x, 'y': y, 'z': z, 'sharpness': None})
+
+    def corners(self):
+        '''A shot centred on each corner of the region: where the region's edges
+        lie on what is there (a film frame's edges), to set them by.'''
+        x0, y0, x1, y1 = self.s.region
+        z = self.s.z if self.s.z is not None else self.camera.focus_z
+        spots = [('tl', x0, y1), ('tr', x1, y1), ('br', x1, y0), ('bl', x0, y0)]     # around, the shortest way
+        self.state['n'] = len(spots)
+        self.carry()
+        sid = self.store.new(self._meta('corners', self.s.region, z=z))
+        self.state['scan'] = sid
+        for i, (name, x, y) in enumerate(spots):
+            self._check()
+            z = self.goto(x, y, z, lift=i == 0 or not self.s.low)
+            self.store.add(sid, f'{name}.jpg', self.shot(), {'corner': name, 'x': x, 'y': y, 'z': round(z, 3)})
+            self.state['i'] = i + 1
 
     def scan(self):
         region = self.s.region
