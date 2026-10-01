@@ -24,6 +24,8 @@
   <label class="check plot-only" id="under-toggle" hidden title="Show the scan pinned with 'Under the plot' (Scan tab) under the drawings, where it was taken: place drawings on what is on the bed"><input type="checkbox" id="show-under" checked> scan</label>
   <label class="check" title="The paper's colour on the canvas, whatever the theme"><input type="color" id="paper-color" value="#ffffff"> paper</label>
   <div class="grow"></div>
+  <button id="cams-button" class="small" title="Klipper's cameras, live, over the bed (the stream stops when it is closed)">Cameras</button>
+  <a id="fluidd-link" class="button small" href="#" target="_blank" title="Open Fluidd in a new tab">Fluidd ↗</a>
   <div id="slice-status" class="status">—</div>
   <div id="printer-pill" class="pill" title="Klipper">printer …</div>
 </header>
@@ -94,6 +96,7 @@
       <button id="zoom-out" title="Zoom out (−)">−</button>
     </div>
     <div id="viewer" class="viewer" hidden></div>
+    <div id="cams" class="cams" hidden></div>
     <div id="scrub" class="scrub plot-only">
       <button id="play" title="Play the plot">▶</button>
       <input type="range" id="scrubber" min="0" max="0" value="0" aria-label="G-code line" title="Drag through the G-code: the plot as far as this line">
@@ -172,5 +175,6 @@
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
 <script src="/static/scan.js"></script>
+<script src="/static/cams.js"></script>
 </body>
 </html>

@@ -210,3 +210,31 @@ def test_hugin_from_the_viewer(page, scanning, tmp_path):
     page.click('#viewer [data-act="hugin"]')
     page.wait_for_selector('#viewer img.big', timeout=60000)
     assert 'matches over' in page.text_content('#viewer .stitchbar')
+
+
+def test_cameras_overlay_and_fluidd(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': {'webcams': [
+                {'name': 'top', 'stream_url': '/webcam/?action=stream', 'snapshot_url': '/webcam/?action=snapshot', 'enabled': True},
+                {'name': 'tool', 'stream_url': '/webcam2/?action=stream', 'snapshot_url': '/webcam2/?action=snapshot', 'enabled': True}]}}
+    real = srv.requests.get
+    monkeypatch.setattr(srv.requests, 'get', lambda u, **kw: R() if 'webcams/list' in u else real(u, **kw))
+    page.goto(url + '/')
+    page.click('#cams-button')
+    page.wait_for_selector('#cams [data-cam="top"].on')
+    # Moonraker on 127.0.0.1 (the UI on the Pi): the cameras and Fluidd are at this page's host
+    # (no stream there in a test: the picture says it doesn't answer; its link shows where it went)
+    opened = lambda: page.get_attribute('#cams a.button:has-text("open")', 'href')
+    assert opened() == 'http://127.0.0.1/webcam/?action=stream'
+    assert page.get_attribute('#fluidd-link', 'href').rstrip('/') == 'http://127.0.0.1'
+    page.click('#cams [data-cam="tool"]')
+    assert opened().endswith('/webcam2/?action=stream')
+    page.click('#cams [data-act="cams-close"]')
+    assert page.locator('#cams *').count() == 0                # the stream is closed
