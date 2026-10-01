@@ -436,3 +436,8 @@ input[type=number] { font-size: 12px; }
 .form.scan .film select { flex: 1 1 auto; min-width: 0; width: auto; }
 .form.scan .film input { flex: 0 0 4.5em; width: 4.5em; min-width: 0; }
 #design-layer.picking path.shape { stroke: rgb(0 0 0 / 0.004) !important; stroke-width: var(--pickw) !important; vector-effect: non-scaling-stroke; }
+/* Forms fit their panel: the value column shrinks, its fields with it */
+.form { grid-template-columns: auto minmax(0, 1fr); }
+.form > *, .form .row > input, .form .row > select { min-width: 0; }
+.form.scan .region { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.pbody { overflow-x: hidden; }
