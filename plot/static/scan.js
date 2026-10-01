@@ -156,6 +156,12 @@ function renderCamera() {
       <input data-s="w1" type="number" step="0.25" max="${hi}" value="${num(sw[1], 2)}" title="Focus sweep: its highest z (it starts there)">
       <input data-s="w2" type="number" step="0.05" min="0.05" value="${num(sw[2], 2)}" title="Focus sweep: step">
     </div>
+    <label for="s-flicker" title="A light that flickers (PWM-dimmed LEDs) leaves dark bands across a shot. auto: when a shot has them, take a few frames and keep the brightest of each pixel">Flicker</label>
+    <div class="row film">
+      <select id="s-flicker" data-s="flicker" title="auto: only when a shot has bands; always: every shot; off: one frame a shot">${['auto', 'always', 'off'].map((v) => opt(v, s.flicker || 'auto')).join('')}</select>
+      <input data-s="flicker_frames" type="number" min="2" max="8" step="1" value="${s.flicker_frames || 3}" title="Frames of a spot when there are bands">
+      <span class="note">frames</span>
+    </div>
     <label></label><label class="check" title="Stay at the shooting z between tiles instead of lifting to the clear height: quicker, only for a flat region with nothing raised in it"><input type="checkbox" data-s="low"${s.low ? ' checked' : ''}> stay low between tiles</label>
     <label></label><div class="note">${n ? `${n} shot${n > 1 ? 's' : ''}, about ${Math.ceil(n * per / 60)} min` : 'Draw a region on the bed (R)'}</div>`);
 }
@@ -171,6 +177,7 @@ $('#camera').addEventListener('change', async (e) => {
   if (!k) return;
   const s = C.settings, v = t.value === '' ? null : +t.value;
   if (k === 'tool') return patchScan({ tool: t.value });
+  if (k === 'flicker') return patchScan({ flicker: t.value });
   if (k[0] === 'r' && k.length === 2) {
     const r = [...(s.region || [0, 0, 0, 0])];
     r[+k[1]] = v ?? 0;
@@ -228,7 +235,13 @@ function renderJob() {
       <button data-act="stop" ${busy ? '' : 'disabled'} title="Stop after the shot it is taking">Stop</button>
       <button data-act="park" ${busy || !has ? 'disabled' : ''} title="Put the camera back in its holder">Put away</button>
     </div>
-    <div class="job">${status}</div>${focus}${last}`);
+    <div class="job">${status}</div>${flick(j)}${focus}${last}`);
+}
+function flick(j) {
+  const f = j && j.flicker;
+  if (!f) return '';
+  return `<p class="note warn" title="The light flickers: the camera reads its rows one after the other, and the rows read while the light was off come out darker. Took ${f.frames} frames of each spot and kept the brightest of each pixel">⚠ The light flickers (bands every ~${num(f.period, 0)} rows) in ${f.shots} shot${f.shots > 1 ? 's' : ''}:
+    taken out with ${f.frames} frames each (bands ${num(f.before, 1)} → ${num(f.after, 1)}). Best fixed at the light: full power or DC.</p>`;
 }
 $('#camera-job').addEventListener('click', async (e) => {
   const t = e.target, act = t.dataset.act;

@@ -90,6 +90,7 @@ class Machine(BaseModel):
     mesh: str = ''
     park: tuple[float, float, float] = (42, 123, 7)
     moonraker: str = 'http://localhost:7125'
+    fluidd: str = ''                # Fluidd (and its cameras) for the browser; '': the printer's host
     holders: tuple[int, ...] = (41, 42, 43, 44, 45)     # T0, T1, .. (limn.cfg: T0 -> DOCK T=41)
     start: str = ''
     tool_begin: str = '{tool.call}'
@@ -115,6 +116,8 @@ def load_machine(name='limn', overrides=None) -> Machine:
     m = Machine(**{**data, **(overrides or {})})
     if os.environ.get('LIMN_MOONRAKER'):
         m = m.model_copy(update={'moonraker': os.environ['LIMN_MOONRAKER']})
+    if os.environ.get('LIMN_FLUIDD'):
+        m = m.model_copy(update={'fluidd': os.environ['LIMN_FLUIDD']})
     papers = bed_papers(m)
     if m.bed_id in papers:
         m = m.model_copy(update={'draw_area': papers[m.bed_id], 'mesh': m.paper_mesh})

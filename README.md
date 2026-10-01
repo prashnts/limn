@@ -27,6 +27,8 @@ sudo supervisorctl status limn_web      # then http://<pi>:4219
 
 After a `git pull` that changes `plot/`: `sudo supervisorctl restart limn_web`. It has no login: keep it on the LAN.
 
+Scans (the Scan tab) are kept in the Pi's memory (`/dev/shm/limn-captures`, at most 2 GB, the oldest go first): a reboot loses them. To keep them, set up the NAS in the Scan tab's *NAS* panel: an S3 endpoint (eg. OpenMediaVault's S3 plugin), bucket, folder and keys, saved in `~/limn/plot-data/nas.json` (its owner only); *Check* writes a small file there. Then ⇪ uploads a capture, or tick *upload each scan when done*. Stitching for film is Hugin's: `sudo apt install hugin-tools enblend`.
+
 
 ## Bed meshes and test marks
 

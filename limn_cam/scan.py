@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from . import flicker
 from .image import load
 
 
@@ -162,6 +163,8 @@ class Settings:
     settle: float | None = None                     # None: the camera's
     sweep: tuple[float, float, float] | None = None # the focus sweep: from, to, step; None: clear_z down 2.5
     low: bool = False                               # stay at the shooting z between tiles (flat regions only)
+    flicker: str = 'auto'                           # a flickering light's bands: auto (when a shot has them), always, off
+    flicker_frames: int = 3                         # frames of a spot, the brightest of them kept (limn_cam/flicker.py)
 
     def to_dict(self):
         return asdict(self)
@@ -309,6 +312,7 @@ class Job:
         self._stop = False
         self._thread = None
         self.on_done = None             # called when it ends, however it ends
+        self.flicker = None             # the last shot's bands, taken out (shot())
         self.z = None                   # where the camera is, once known
         self.xy = None
 
@@ -403,7 +407,27 @@ class Job:
         return z
 
     def shot(self):
-        return self.mr.snapshot(self.camera.webcam)
+        '''A photo where the camera is. With a light that flickers (its bands found in
+        the shot, or flicker 'always'), a few frames of it and the brightest of each
+        pixel: the bands left out. self.flicker: what was done, for the tile's info.'''
+        jpeg = self.mr.snapshot(self.camera.webcam)
+        self.flicker = None
+        if self.s.flicker == 'off':
+            return jpeg
+        b = flicker.bands(jpeg)
+        if self.s.flicker != 'always' and not flicker.found(b):
+            return jpeg
+        frames = [jpeg]
+        for _ in range(max(1, self.s.flicker_frames) - 1):
+            time.sleep(0.12)                        # another frame, its bands elsewhere
+            frames.append(self.mr.snapshot(self.camera.webcam))
+        jpeg = flicker.merged(frames)
+        after = flicker.bands(jpeg)
+        self.flicker = {'period': b['period'], 'before': b['ripple'], 'after': after['ripple'], 'frames': len(frames)}
+        seen = self.state.get('flicker') or {'shots': 0, 'before': 0.0, 'after': 0.0}
+        self.state['flicker'] = {'shots': seen['shots'] + 1, 'period': b['period'], 'frames': len(frames),
+                                 'before': max(seen['before'], b['ripple']), 'after': max(seen['after'], after['ripple'])}
+        return jpeg
 
     def best_of(self, x, y, zs, lift=True, count=False):
         '''The sharpest of shots at these z, from the top down -> (z, jpeg, [(z, score)]).
@@ -418,7 +442,8 @@ class Job:
             score = sharpness(jpeg)
             curve.append((round(z, 3), round(score, 2)))
             if best is None or score > best[2]:
-                best = (z, jpeg, score)
+                best = (z, jpeg, score, self.flicker)
+        self.flicker = best[3]
         return best[0], best[1], curve
 
     # What it does
@@ -440,7 +465,8 @@ class Job:
         sid = self.store.new(self._meta('look', (x, y, x, y), z=z))
         self.state['scan'] = sid
         z = self.goto(x, y, z)
-        self.store.add(sid, 'look.jpg', self.shot(), {'x': x, 'y': y, 'z': z, 'sharpness': None})
+        jpeg = self.shot()
+        self.store.add(sid, 'look.jpg', jpeg, {'x': x, 'y': y, 'z': z, 'sharpness': None, 'flicker': self.flicker})
 
     def corners(self):
         '''A shot centred on each corner of the region: where the region's edges
@@ -455,7 +481,8 @@ class Job:
         for i, (name, x, y) in enumerate(spots):
             self._check()
             z = self.goto(x, y, z, lift=i == 0 or not self.s.low)
-            self.store.add(sid, f'{name}.jpg', self.shot(), {'corner': name, 'x': x, 'y': y, 'z': round(z, 3)})
+            jpeg = self.shot()
+            self.store.add(sid, f'{name}.jpg', jpeg, {'corner': name, 'x': x, 'y': y, 'z': round(z, 3), 'flicker': self.flicker})
             self.state['i'] = i + 1
 
     def scan(self):
@@ -477,7 +504,7 @@ class Job:
                 z = self.goto(x, y, z0, lift=lift)
                 jpeg, curve = self.shot(), None
             self.store.add(sid, f'r{r:02d}c{c:02d}.jpg', jpeg,
-                           {'row': r, 'col': c, 'x': x, 'y': y, 'z': round(z, 3), 'curve': curve})
+                           {'row': r, 'col': c, 'x': x, 'y': y, 'z': round(z, 3), 'curve': curve, 'flicker': self.flicker})
             self.state['i'] = i + 1
 
     def _meta(self, kind, region, z=None):

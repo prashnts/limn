@@ -39,6 +39,8 @@ toolchange_time = 30    # s, for the estimate
 mesh = ""               # MESH= for _APPLY_OFFSETS with no bed; "" loads the last profile
 park = [42, 123, 7]     # where _APPLY_OFFSETS HOME=1 leaves the head
 moonraker = "http://localhost:7125"     # the web UI uploads and prints here (LIMN_MOONRAKER wins)
+fluidd = ""             # Fluidd and its cameras for the browser (LIMN_FLUIDD wins); "": the printer's host,
+                        # or the page's own when Moonraker is on localhost (the UI on the Pi)
 holders = [41, 42, 43, 44, 45]          # T0, T1, ..: limn.cfg's T0 is DOCK T=41
 
 # {index}: the first tool's number, {tool.call}: its macro (T0 -> DOCK T=41),

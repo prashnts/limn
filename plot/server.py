@@ -189,7 +189,7 @@ def create_app(data=None):
     def index():
         # Each script and stylesheet by its version: a browser never runs an old one with a new page
         html = (STATIC / 'index.html').read_text()
-        for name in ('app.js', 'scan.js', 'app.css'):
+        for name in ('app.js', 'scan.js', 'cams.js', 'app.css'):
             html = html.replace(f'/static/{name}"', f'/static/{name}?v={int((STATIC / name).stat().st_mtime)}"')
         return HTMLResponse(html, headers={'Cache-Control': 'no-cache'})
 
@@ -438,6 +438,29 @@ def create_app(data=None):
         threading.Thread(target=go, daemon=True).start()
         return {'job': job}
 
+    @app.get('/api/webcams')
+    def webcams():
+        '''Klipper's cameras (Moonraker's list) and where Fluidd is, for the browser.
+        Their URLs may be relative to Fluidd: fluidd '' means the page's own host.'''
+        from urllib.parse import urlsplit
+        with ws.lock:
+            machine, _ = load(ws.job)
+        fluidd = machine.fluidd
+        if not fluidd:
+            u = urlsplit(machine.moonraker)
+            if u.hostname not in ('localhost', '127.0.0.1', '::1'):
+                fluidd = f'{u.scheme}://{u.hostname}' + (f':{u.port}' if u.port and u.port != 7125 else '')
+        try:
+            r = requests.get(f'{machine.moonraker.rstrip("/")}/server/webcams/list', timeout=3)
+            r.raise_for_status()
+            cams = [{k: c.get(k) for k in ('name', 'stream_url', 'snapshot_url', 'flip_horizontal', 'flip_vertical',
+                                           'rotation', 'service', 'enabled')}
+                    for c in r.json()['result']['webcams'] if c.get('enabled', True)]
+            error = None
+        except Exception as e:
+            cams, error = [], f'Moonraker at {machine.moonraker}: {e}'
+        return {'fluidd': fluidd, 'webcams': cams, 'error': error}
+
     @app.post('/api/scan')
     def scan(body: dict = Body(default={})):
         '''TOOL_SCAN: every occupied holder, or {"holders": [41, 43]}.'''
@@ -528,6 +551,9 @@ def create_app(data=None):
                 settings.region = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
             if not 0 <= settings.overlap < 0.9 or settings.refocus < 0 or settings.refocus_step <= 0:
                 raise ValueError('overlap 0 to 0.9, refocus 0 or more, its step over 0')
+            if settings.flicker not in ('auto', 'always', 'off') or not 1 <= int(settings.flicker_frames) <= 8:
+                raise ValueError('flicker: auto, always or off, 1 to 8 frames')
+            settings.flicker_frames = int(settings.flicker_frames)
         except (TypeError, ValueError) as e:
             raise HTTPException(400, f'scan settings: {e}')
         ws.scan_path.write_text(json.dumps(settings.to_dict()))

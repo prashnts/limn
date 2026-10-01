@@ -289,3 +289,14 @@ h2 .check.small { float: right; text-transform: none; letter-spacing: 0; font-si
 .viewer .corner svg line { stroke: var(--accent); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
 .viewer .corner .note { position: absolute; left: 6px; bottom: 4px; margin: 0; color: #fff; text-shadow: 0 0 3px #000; pointer-events: none; }
 .captures .icon.ok { color: var(--ok, #2a9d4b); }
+.note.warn { color: var(--warn, #b7791f); }
+
+/* Klipper's cameras, live, over the bed */
+.cams { position: absolute; right: 12px; bottom: 56px; width: min(480px, 60%); z-index: 4; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 4px 16px rgb(0 0 0 / 0.25); }
+.cams.big { width: auto; left: calc(var(--ruler) + 56px); top: calc(var(--ruler) + 8px); bottom: 8px; right: 8px; }
+.cams .vbar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.cams .vbody { padding: 6px; display: flex; justify-content: center; align-items: center; min-height: 120px; flex: 1; overflow: hidden; }
+.cams img.live { max-width: 100%; max-height: 100%; object-fit: contain; }
+.cams.big img.live { width: 100%; height: 100%; }
+.cams iframe { width: 100%; height: 360px; border: 0; }
