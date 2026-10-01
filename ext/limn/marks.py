@@ -9,11 +9,16 @@
 # in its horizontal line Y.
 #
 # The pen travels raw at PANEL_ZHOME, over the beds, and only comes down over
-# the mark, with the tool's offsets and the lrt_paper mesh applied. The caller
-# checks the mesh is of this bed; problems() the rest.
+# the mark, with the tool's offsets and the lrt_paper mesh applied: Z1 to draw,
+# Z2.5 between the strokes (all on the paper), and Z7 before it leaves the paper.
+# Off the paper it is never under Z5 (safe_z of plot/profiles/limn.toml). The
+# caller checks the mesh is of this bed; problems() the rest.
 from .beds import PANEL_ZHOME, MARKS_MAX_X, TOOL_MAX_DXY, TOOL_DZ
 
 DRAW_FEED = 2000
+PEN_Z = 1.0             # drawing, as plot's pens (z_down)
+HOP_Z = 2.5             # between the strokes, over the paper (plot's z_travel)
+LEAVE_Z = 7.0           # before leaving the paper: over Z5
 
 
 def problems(strokes, offsets, bounds):
@@ -46,8 +51,9 @@ def draw(machine, strokes):
     for stroke in strokes:
         (sx, sy), rest = stroke[0], stroke[1:]
         run(f"G1 X{sx} Y{sy}")
-        run("G1 Z1 ACT1")
+        run(f"G1 Z{PEN_Z}")
         for px, py in rest:
             run(f"G1 X{px} Y{py}")
-        run("G1 Z1 ACT3")
+        run(f"G1 Z{HOP_Z}")
+    run(f"G1 Z{LEAVE_Z}")
     run("_CLEAR_OFFSETS")

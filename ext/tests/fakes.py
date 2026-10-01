@@ -124,6 +124,7 @@ class FakePN532:
         self.mute = False           # never replies, only ACKs
         self.writes = []
         self.aborted = 0
+        self.retries = 0xFF         # MxRtyPassiveActivation: 0xFF, it listens until aborted
 
     @staticmethod
     def frame(data):
@@ -140,17 +141,19 @@ class FakePN532:
         assert body[0] == 0xD4 and (sum(body) + data[5 + n]) & 0xFF == 0, data
         self.queue = [self.ACK]
         reply = self.reply(body[1], body[2:])
-        if not self.mute:
+        if not self.mute and reply is not None:
             self.queue.append(self.frame(bytes([0xD5, body[1] + 1]) + bytes(reply)))
 
     def reply(self, cmd, params):
         if cmd == 0x02:
             return [0x32, 1, 6, 7]
+        if cmd == 0x32 and params[0] == 0x05:
+            self.retries = params[3]
         if cmd in (0x14, 0x32):
             return []
         if cmd == 0x4A:
             if self.pages is None:
-                return [0]
+                return None if self.retries == 0xFF else [0]
             return [1, 1, 0x00, 0x44, 0x00, len(self.uid), *self.uid]
         if cmd == 0x40 and self.pages is not None:
             op, page = params[1], params[2]

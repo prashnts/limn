@@ -1,0 +1,91 @@
+# The pen library: kinds of pen and how they draw. A tool's tag says which one
+# it is and its colour (TOOL_TAG_SET T=43 PEN=<key> COLOR=rrggbb, or the web UI),
+# and the plot takes the tool from here. The key goes on the tag: up to 8 of
+# a-z 0-9 - _ . (the tags are small), and it shouldn't change once tags carry it.
+# mic: Sakura Pigma Micron, std: Staedtler pigment liner 308, stb: Stabilo point 88.
+#
+# Any key of tools.toml works here (kind, width, overlap, feed, z_down, hop, ..),
+# `name` is the kind of pen, `short` how tags name it (with the colour, up to 20
+# characters), `colors` the ones it comes in (the UI offers them).
+# width: the line it leaves, mm. Makers quote the tip or a nominal line; what
+# matters is the line on your paper.
+# press: mm past where it first touches the paper (limn.toml z_touch), press_max:
+# never more, whatever a job asks. Fineliners are delicate: a tenth or two, never
+# driven hard; they widen, blob and break. Felt tips take more. Pressing also
+# lifts the Z axis within its play, and the lift after each stroke grows with it
+# (limn.toml [play], GEOMETRY.md).
+# dry: minutes it may stay out of its cap in the machine before the dock's LEDs
+# go red and it beeps (twice that while printing; ext/limn/drying.py).
+
+[mic-01]
+short = "Micron 01"
+name = "Pigma Micron 01"
+width = 0.25                # Sakura: 01 draws 0.25 mm
+feed = 2500
+press = 0.15
+press_max = 0.25
+dry = 10
+colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226", orange = "#e8651a", sepia = "#704214" }
+
+[mic-005]
+short = "Micron 005"
+name = "Pigma Micron 005"
+width = 0.20                # Sakura: 005 draws 0.20 mm
+feed = 2000
+press = 0.15
+press_max = 0.25
+dry = 10
+colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226" }
+
+[mic-03]
+short = "Micron 03"
+name = "Pigma Micron 03"
+width = 0.35                # Sakura: 03 draws 0.35 mm
+feed = 2500
+press = 0.15
+press_max = 0.25
+dry = 10
+colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226" }
+
+[std-005]
+short = "Staedtler 0.05"
+name = "Staedtler pigment liner 0.05"
+width = 0.10                # nominal 0.05, draws wider on most paper: measure the line
+feed = 2000
+press = 0.15
+press_max = 0.25
+dry = 10
+colors = { black = "#1b1b1b" }
+
+[std-05]
+short = "Staedtler 0.5"
+name = "Staedtler pigment liner 0.5"
+width = 0.5
+feed = 3000
+press = 0.15
+press_max = 0.25
+dry = 10
+colors = { black = "#1b1b1b" }
+
+[stb-88]
+short = "Stabilo 88"
+name = "Stabilo point 88"
+width = 0.4
+feed = 3000
+press = 0.3               # a felt tip: it wants more to lay its ink down
+press_max = 0.6
+dry = 240                   # dry-safe ink: Stabilo says it keeps for days uncapped
+colors = { black = "#1e1e1e", blue = "#3a4fb8", red = "#e03030", green = "#2e9a3e", purple = "#7a3aa0", orange = "#f07820", pink = "#e8508c", turquoise = "#10a8b8", "light green" = "#8ccc3c", yellow = "#f0d020", brown = "#7a4a2a", grey = "#8a8a8a" }
+
+# Not pens: tools of the library that don't draw. The tag names them the same way.
+
+[cam-u20]
+short = "Camera U20"
+name = "Innomaker U20CAM 1080p"
+kind = "camera"
+webcam = "tethered_camera_tool"   # its name in Moonraker's webcams (crowsnest [cam usbcam])
+fov = [15.25, 8.58]               # mm across and down one shot at focus_z: 125.9 px/mm (2026-09-30, 2mm moves)
+turn = -179.2                     # the image upside down (+X left in it, +Y down), and 0.8 degree askew
+clear_z = 7.5                     # machine Z (no mesh, no dz): sideways moves clear the bed's raised parts
+focus_z = 9.2                     # sharpest on a sticker on the paper, 2026-09-30 (a flat peak 9.0-9.4)
+z_min = 4.0                       # never lower (the tube was lengthened 2026-09-30): lower it once measured

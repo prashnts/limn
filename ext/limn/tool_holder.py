@@ -7,6 +7,8 @@
 # PN532 reads the tag of the tool on the carriage. Both are on the Pi's I2C.
 # A timer watches the holders and tells the listeners of `change` what moved;
 # changes nobody `expect`ed are `manual`: someone's hand was on the holders.
+# Between the tool changes the reader listens for a tag held to it by hand
+# (`scan`), so a tool put into a holder by hand can be told apart.
 from dataclasses import dataclass
 
 from .i2c import MCP23017, PN532
@@ -16,11 +18,22 @@ SETTLE = 2              # equal reads before a new state counts
 SAMPLE_GAP = 0.02       # s between the reads of `sample`
 EXPECT_WINDOW = 120     # s an expected change stays expected
 ANY = 'any'             # expect(): any change, until forget()
+SCAN_LISTEN = 0.2       # s each listen for a tag held to the reader lasts
+SCAN_RETRY = 10         # s before trying a PN532 that failed again
 
 PAGE_DX, PAGE_NAME = 6, 11      # dx, dy, dz on pages 6, 7, 8; the name on 11..15
 PAGE_FLAGS = 9                  # REFERENCE: the reference tool, anything else: not
 REFERENCE, NOT_REFERENCE = b'LREF', bytes(4)
 NAME_LEN = 20
+# Format 2 fits the smallest tags too (NTAG210 / Ultralight: user pages 4..15, 5x10mm
+# ones among them): the pen, a key into the pen library (plot/profiles/pens.toml),
+# on 4..5, 8 characters; the colour on 10: R G B and FORMAT_2 (FORMAT_2_NO_COLOR: none).
+# Page 10 goes last: a tag written halfway stays format 1. Without it: format 1, no pen,
+# no colour. One read covers 4 pages: 4, 8, 12 read the whole tag.
+PAGE_PEN, PAGE_COLOR = 4, 10
+FORMAT_2, FORMAT_2_NO_COLOR = 0xC2, 0xC0
+PEN_LEN = 8
+PEN_CHARS = set('abcdefghijklmnopqrstuvwxyz0123456789-_.')
 
 
 def parse_pins(text):
@@ -56,6 +69,35 @@ def decode_name(b):
     return b.decode(errors='ignore').strip('\x00 ') or '<unknown>'
 
 
+def encode_color(color):
+    '''"#rrggbb" -> page 10, None / "" -> none (still format 2).'''
+    if not color:
+        return bytes([0, 0, 0, FORMAT_2_NO_COLOR])
+    c = color.lstrip('#')
+    try:
+        rgb = bytes.fromhex(c)
+    except ValueError:
+        rgb = b''
+    if len(rgb) != 3:
+        raise ValueError(f"colour {color!r}: give it as #rrggbb")
+    return rgb + bytes([FORMAT_2])
+
+
+def decode_color(b):
+    return '#' + bytes(b[:3]).hex() if b[3] == FORMAT_2 else None
+
+
+def encode_pen(pen):
+    pen = (pen or '').strip().lower()
+    if len(pen) > PEN_LEN or not set(pen) <= PEN_CHARS:
+        raise ValueError(f"pen {pen!r}: up to {PEN_LEN} of a-z 0-9 - _ .")
+    return pen.encode().ljust(PEN_LEN, b'\x00')
+
+
+def decode_pen(b):
+    return bytes(b).rstrip(b'\x00').decode(errors='ignore') or None
+
+
 @dataclass
 class Tag:
     uid: str
@@ -64,6 +106,8 @@ class Tag:
     dz: float
     name: str
     reference: bool = False
+    pen: str | None = None      # format 2: the pen library's key
+    color: str | None = None    # format 2: #rrggbb
 
 
 class ToolHolder:
@@ -86,6 +130,9 @@ class ToolHolder:
         self.expected = {}          # tool -> (occupied, until)
         self._pending = None
         self._count = 0
+        self._nfc_busy = False      # a read or write of a tag is on its way: one at a time
+        self.scan_timer = None
+        self.scan_gate = lambda: None   # -> s until the next listen, None: not now
 
     @property
     def tools(self):
@@ -196,6 +243,26 @@ class ToolHolder:
         self._emit('change', state, added, removed, manual)
 
     # Tags
+    def start_scanning(self, gate):
+        '''Listens for tags held to the reader by hand, telling the listeners of `scan`;
+        gate() -> s until the next listen, None: not now (it asks again in a second).'''
+        self.scan_gate = gate
+        if self.scan_timer is None:
+            self.scan_timer = self.reactor.register_timer(self._scan_tick, self.reactor.NOW)
+
+    def _scan_tick(self, eventtime):
+        interval = self.scan_gate()
+        if interval is None or self._nfc_busy:
+            return eventtime + 1.0
+        try:
+            tag = self._tag_io(lambda: self._read_tag(SCAN_LISTEN))
+        except (OSError, TimeoutError, RuntimeError):
+            # a tag taken away halfway, or no PN532
+            return self.reactor.monotonic() + (interval if self.nfc_ready else SCAN_RETRY)
+        if tag is not None:
+            self._emit('scan', tag)
+        return self.reactor.monotonic() + interval
+
     def _begin_nfc(self):
         if not self.nfc_ready:
             ic, ver, rev, _ = self.nfc.begin()
@@ -203,12 +270,17 @@ class ToolHolder:
             self.say(f"[Tag] PN532 firmware {ver}.{rev}")
 
     def _tag_io(self, fn):
+        while self._nfc_busy:           # a listen: SCAN_LISTEN and a read at most
+            self._pause(0.05)
+        self._nfc_busy = True
         try:
             self._begin_nfc()
             return fn()
         except (OSError, TimeoutError, RuntimeError):
             self.nfc_ready = False
             raise
+        finally:
+            self._nfc_busy = False
 
     def begin_tag_reader(self):
         self._tag_io(lambda: None)
@@ -221,18 +293,40 @@ class ToolHolder:
         uid = self.nfc.read_uid(timeout)
         if uid is None:
             return None
-        nums = self.nfc.ntag_read(PAGE_DX)
-        name = self.nfc.ntag_read(PAGE_NAME) + self.nfc.ntag_read(PAGE_NAME + 4)[:4]
+        data = bytes(self.nfc.ntag_read(4)) + bytes(self.nfc.ntag_read(8)) + bytes(self.nfc.ntag_read(12))
+        page = lambda p, n=1: data[(p - 4) * 4:(p - 4 + n) * 4]
+        nums = page(PAGE_DX, 4)
+        pen = color = None
+        if page(PAGE_COLOR)[3] in (FORMAT_2, FORMAT_2_NO_COLOR):
+            pen = decode_pen(page(PAGE_PEN, 2))
+            color = decode_color(page(PAGE_COLOR))
         return Tag(uid.hex(), decode_num(nums[0:4]), decode_num(nums[4:8]),
-                   decode_num(nums[8:12]), decode_name(name), bytes(nums[12:16]) == REFERENCE)
+                   decode_num(nums[8:12]), decode_name(page(PAGE_NAME, 5)), bytes(nums[12:16]) == REFERENCE,
+                   pen, color)
 
-    def write_tag(self, dx=None, dy=None, dz=None, name=None, reference=None, timeout=0.5):
-        '''Writes the given fields only, reads the tag back -> Tag.'''
-        return self._tag_io(lambda: self._write_tag(dx, dy, dz, name, reference, timeout))
+    def write_tag(self, dx=None, dy=None, dz=None, name=None, reference=None, pen=None, color=None,
+                  timeout=0.5):
+        '''Writes the given fields only, reads the tag back -> Tag. pen / color: "" clears.'''
+        if pen is not None:
+            encode_pen(pen)
+        if color is not None:
+            encode_color(color)
+        return self._tag_io(lambda: self._write_tag(dx, dy, dz, name, reference, pen, color, timeout))
 
-    def _write_tag(self, dx, dy, dz, name, reference, timeout):
+    def _write_tag(self, dx, dy, dz, name, reference, pen, color, timeout):
         if self.nfc.read_uid(timeout) is None:
             raise RuntimeError("no tag on the reader")
+        if pen is not None or color is not None:
+            # Format 2 from here: a format 1 tag gets the mark, and no pen or colour but these
+            old = self._read_tag(timeout)
+            if old is None:
+                raise RuntimeError("no tag on the reader")
+            pen = (old.pen or '') if pen is None else pen
+            color = (old.color or '') if color is None else color
+            data = encode_pen(pen)
+            for i in range(0, PEN_LEN, 4):
+                self.nfc.ntag_write(PAGE_PEN + i // 4, data[i:i + 4])
+            self.nfc.ntag_write(PAGE_COLOR, encode_color(color))       # last: now it is format 2
         for i, value in enumerate((dx, dy, dz)):
             if value is not None:
                 self.nfc.ntag_write(PAGE_DX + i, encode_num(value))
@@ -246,6 +340,8 @@ class ToolHolder:
         wrote = {'dx': dx, 'dy': dy, 'dz': dz}
         if tag is None or any(v is not None and abs(getattr(tag, k) - v) > 0.006 for k, v in wrote.items()) \
                 or (name is not None and tag.name != decode_name(encode_name(name))) \
-                or (reference is not None and tag.reference != bool(reference)):
+                or (reference is not None and tag.reference != bool(reference)) \
+                or (pen is not None and (tag.pen or '') != pen.strip().lower()) \
+                or (color is not None and (tag.color or '') != (color.lower() if color else '')):
             raise RuntimeError(f"the tag reads back differently: {tag}")
         return tag

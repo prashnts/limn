@@ -1,0 +1,759 @@
+// Limn plot - the Scan tab: the camera tool photographs a region of the bed,
+// focused by height, and the photos are kept on the server to browse. The
+// server does the moving and the shooting (/api/camera, limn_cam/scan.py);
+// this draws the region and the tiles on the bed, and shows what came back.
+// It uses app.js's globals: S, api, fill, quietly, svgEl, worldPt, $, $$ ..
+'use strict';
+
+let C = null;                   // /api/camera: settings, cameras, job, captures, store
+let N = null;                   // /api/nas: settings (the secret only as whether there is one), uploads
+let smode = 'region';           // region | pan | look | focus
+let sdrag = null;               // a region being drawn
+let viewing = null;             // {meta, info, view: 'stitch'|'tiles'|file, ppm}
+let camTimer = null;
+let openWhenDone = false;       // the corners being checked: open them when they are in
+
+const scanTab = () => document.body.classList.contains('tab-scan');
+
+// --- the ribbon ------------------------------------------------------------------
+function setTab(t) {
+  store.set('tab', t);
+  document.body.classList.toggle('tab-scan', t === 'scan');
+  document.body.classList.toggle('tab-plot', t !== 'scan');
+  $$('#ribbon [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+  if (t === 'scan') loadCamera();
+  else closeViewer();
+  drawScanLayer();
+  drawUnder();
+}
+$('#ribbon').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tab]');
+  if (b) setTab(b.dataset.tab);
+});
+
+// --- state from the server ------------------------------------------------------------
+async function loadCamera(background = false) {
+  try {
+    [C, N] = await Promise.all([api('GET', '/api/camera'), api('GET', '/api/nas')]);
+  } catch {
+    return;
+  }
+  const draw = () => { renderCamera(); renderJob(); renderCaptures(); renderNas(); };
+  if (openWhenDone && C.job && C.job.done) {
+    openWhenDone = false;
+    if (!C.job.error && C.job.scan) openCapture(C.job.scan, 'corners');
+  }
+  background ? quietly(draw) : draw();
+  drawScanLayer();
+  clearTimeout(camTimer);
+  const busy = (C.job && !C.job.done) || Object.values(N.uploads).some((u) => !u.done);
+  if (scanTab()) camTimer = setTimeout(() => loadCamera(true), busy ? 1000 : 5000);
+}
+async function patchScan(body) {
+  C = await api('PATCH', '/api/camera', body);
+  renderCamera(); renderJob(); drawScanLayer();
+}
+const cam = () => C && (C.cameras[C.settings.tool] || Object.values(C.cameras)[0]);
+const focusZ = () => (C.settings.z ?? (cam() || {}).focus_z ?? 7.5);
+function sweepOf(c) {        // as limn_cam/scan.py Job.sweep(): unset, clear_z down 2.5
+  const [lo] = c.z_limits;
+  return C.settings.sweep || [Math.max(lo, c.clear_z - 2.5), c.clear_z, 0.25];
+}
+
+// Same as limn_cam/scan.py tiles()
+function footprint(fov, turn) {
+  const [w, h] = fov, c = Math.abs(Math.cos(turn * Math.PI / 180)), s = Math.abs(Math.sin(turn * Math.PI / 180));
+  return [w * c + h * s, w * s + h * c];
+}
+function scanTiles() {
+  const c = cam(), r = C && C.settings.region;
+  if (!c || !r) return [];
+  const [fx, fy] = footprint(c.fov, c.turn || 0), ov = C.settings.overlap;
+  const centres = (a, b, f) => {
+    const span = b - a;
+    if (span <= f) return [(a + b) / 2];
+    const n = Math.ceil((span - f) / (f * (1 - ov))) + 1;
+    return Array.from({ length: n }, (_, i) => a + f / 2 + i * (span - f) / (n - 1));
+  };
+  const xs = centres(r[0], r[2], fx), ys = centres(r[1], r[3], fy), out = [];
+  ys.forEach((y, ri) => (ri % 2 ? [...xs].reverse() : xs).forEach((x) => out.push([x, y])));
+  return out;
+}
+
+// --- the camera panel ------------------------------------------------------------------
+// Film formats, mm (the frame, or the sheet): offered both ways round
+const FILM = [['35 mm frame', 36, 24], ['35 mm frame with sprockets', 38, 35], ['35 mm strip of 4', 152, 35],
+  ['120 6×4.5', 56, 41.5], ['120 6×6', 56, 56], ['120 6×7', 56, 69.5], ['120 6×9', 56, 84],
+  ['4×5 in sheet', 102, 127], ['Slide mount', 50, 50]];
+function setRegion(r, zoomTo = false) {
+  const q = (v) => +v.toFixed(2);
+  return patchScan({ region: r.map(q) }).then(() => { if (zoomTo) fitRegion(); });
+}
+function fitRegion() {
+  const r = C && C.settings.region;
+  if (!r) return;
+  const pad = Math.max(3, (r[2] - r[0] + r[3] - r[1]) * 0.08);
+  fitTo(r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad);
+}
+const fld = (k, label, value, attrs, help) => `<label for="s-${k}" title="${esc(help)}">${label}</label>
+  <input id="s-${k}" data-s="${k}" type="number" value="${value ?? ''}" ${attrs} title="${esc(help)}">`;
+function renderCamera() {
+  const P = $('#camera');
+  if (!C || !S) return;
+  const cams = Object.values(C.cameras);
+  if (!cams.length) {
+    const types = Object.entries(S.pens).filter(([, p]) => p.kind === 'camera');
+    fill(P, `<p class="full note">No camera tool yet: its tag has to name a camera type. Pick the holder it is in
+      and write it (the camera is docked, written and put back).</p>
+      <label for="c-holder" title="The holder the camera tool is in">Holder</label>
+      <select id="c-holder" title="The holder the camera tool is in">${S.holders.map((h) => opt(String(h.holder), '', `${h.t} (${h.holder})`)).join('')}</select>
+      <label for="c-type" title="Camera types of the library (pens.toml, kind = camera)">Type</label>
+      <select id="c-type" title="Camera types of the library (pens.toml, kind = camera)">${types.map(([k, p]) => opt(k, '', `${p.name} (${k})`)).join('') || '<option value="">none in the library</option>'}</select>
+      <label for="c-name" title="The tag's name, up to 20 characters">Name</label>
+      <input id="c-name" maxlength="20" value="${esc((types[0] && types[0][1].short) || 'Camera')}" title="The tag's name, up to 20 characters">
+      <label></label><button data-act="write-cam" class="primary" title="Dock the tool, write the camera type onto its tag, put it back"${types.length ? '' : ' disabled'}>Write tag</button>`);
+    return;
+  }
+  const c = cam(), s = C.settings, r = s.region || ['', '', '', ''];
+  const [lo, hi] = c.z_limits, sw = sweepOf(c);
+  const n = scanTiles().length;
+  const per = (s.settle ?? c.settle) + 1.5 + (s.refocus > 0 ? (2 * s.refocus / s.refocus_step + 1) * 1.6 : 0);
+  const [fx, fy] = footprint(c.fov, c.turn || 0);
+  fill(P, `
+    <label for="s-tool" title="Which camera tool takes the shots">Camera</label>
+    <select id="s-tool" data-s="tool" title="Which camera tool takes the shots">${cams.map((t) => opt(t.id, c.id, `${t.id} ${t.name}`)).join('')}</select>
+    <label title="What one shot covers at its focus height (fov in pens.toml)">One shot</label>
+    <div class="mono note" title="What one shot covers at its focus height (fov in pens.toml)">${num(fx, 1)} × ${num(fy, 1)} mm</div>
+    <label title="The region to scan, mm: drag on the bed with the Region tool (R), move or resize it there, or type it">Region</label>
+    <div class="row region" title="From x, y to x, y (mm)">
+      <input data-s="r0" type="number" step="0.05" value="${num(r[0], 2)}" title="Region: from X (mm)">
+      <input data-s="r1" type="number" step="0.05" value="${num(r[1], 2)}" title="Region: from Y (mm)">
+      <input data-s="r2" type="number" step="0.05" value="${num(r[2], 2)}" title="Region: to X (mm)">
+      <input data-s="r3" type="number" step="0.05" value="${num(r[3], 2)}" title="Region: to Y (mm)">
+    </div>
+    <label for="s-film" title="A region the size of a film format, around the middle of the one there is (or of the paper), with the margin all round">Film</label>
+    <div class="row film">
+      <select id="s-film" title="A region the size of a film format, around the middle of the one there is">
+        <option value="">size of…</option>${FILM.map(([name, w, h]) => [[w, h], ...(w !== h ? [[h, w]] : [])].map(([a, b]) =>
+          `<option value="${a}x${b}">${esc(name)} · ${num(a, 1)} × ${num(b, 1)}</option>`).join('')).join('')}
+      </select>
+      <input id="s-margin" type="number" step="0.5" min="0" value="${num(store.get('filmMargin', 1.5), 1)}" title="Margin all round the format, mm: the frame's edges stay inside">
+      <span class="note">mm</span>
+    </div>
+    <label></label><div class="note">${r[0] !== '' ? `${num(r[2] - r[0], 2)} × ${num(r[3] - r[1], 2)} mm · ` : ''}drag it on the bed, arrows nudge it (Shift ×10, Alt ×0.1), Z zooms to it; Check corners to set its edges on the film</div>
+    <label title="Heights are the machine's own Z (no mesh, no tag offset): home is Z8">Clear at</label>
+    <div class="note" title="It moves sideways only this high or higher, clear of everything raised on the bed (clear_z in pens.toml); it goes down only over the spot it shoots">Z ${num(c.clear_z, 2)} · lowest Z ${num(lo, 2)}</div>
+    ${fld('z', 'Focus z', num(s.z, 2), `step="0.05" min="${lo}" max="${hi}" placeholder="${num(c.focus_z, 2)}"`,
+      `Machine Z of the camera when shooting: where it is sharpest. Empty: the camera's own (${num(c.focus_z, 2)}). Find it with Focus (K) on the bed. From ${lo} (its z_min) to ${hi}`)}
+    ${more('camera', 'More: overlap, refocus, settle, sweep, flicker', `
+    ${fld('overlap', 'Overlap %', num(s.overlap * 100, 0), 'step="5" min="0" max="80"', 'How much of a shot the next one shares: more for stitching, less for fewer shots')}
+    ${fld('refocus', 'Refocus ±', num(s.refocus, 2), 'step="0.05" min="0"', 'mm up and down around the focus z at every tile, keeping the sharpest shot: for film or paper that curls. 0: off (quicker)')}
+    ${fld('refocus_step', 'its step', num(s.refocus_step, 2), 'step="0.05" min="0.05"', 'Steps of that refocus sweep, mm')}
+    ${fld('settle', 'Settle s', num(s.settle, 2), `step="0.1" min="0" placeholder="${num(c.settle, 1)}"`, `Seconds still before each shot (the tether swinging, frames the camera has queued). Empty: the camera's own (${c.settle})`)}
+    <label title="The focus sweep, machine Z: from, to, step. It goes down from the top, never under the camera's lowest Z">Sweep</label>
+    <div class="row region" title="The focus sweep: from, to, step (machine Z)">
+      <input data-s="w0" type="number" step="0.25" min="${lo}" value="${num(sw[0], 2)}" title="Focus sweep: its lowest z (not under ${lo})">
+      <input data-s="w1" type="number" step="0.25" max="${hi}" value="${num(sw[1], 2)}" title="Focus sweep: its highest z (it starts there)">
+      <input data-s="w2" type="number" step="0.05" min="0.05" value="${num(sw[2], 2)}" title="Focus sweep: step">
+    </div>
+    <label for="s-flicker" title="A light that flickers (PWM-dimmed LEDs) leaves dark bands across a shot. auto: when a shot has them, take a few frames and keep the brightest of each pixel">Flicker</label>
+    <div class="row film">
+      <select id="s-flicker" data-s="flicker" title="auto: only when a shot has bands; always: every shot; off: one frame a shot">${['auto', 'always', 'off'].map((v) => opt(v, s.flicker || 'auto')).join('')}</select>
+      <input data-s="flicker_frames" type="number" min="2" max="8" step="1" value="${s.flicker_frames || 3}" title="Frames of a spot when there are bands">
+      <span class="note">frames</span>
+    </div>
+    <label></label><label class="check" title="Stay at the shooting z between tiles instead of lifting to the clear height: quicker, only for a flat region with nothing raised in it"><input type="checkbox" data-s="low"${s.low ? ' checked' : ''}> stay low between tiles</label>
+`)}
+    <label></label><div class="note">${n ? `${n} shot${n > 1 ? 's' : ''}, about ${Math.ceil(n * per / 60)} min` : 'Draw a region on the bed (R)'}</div>`);
+}
+$('#camera').addEventListener('change', async (e) => {
+  const t = e.target, k = t.dataset.s;
+  if (t.id === 's-margin') { store.set('filmMargin', +t.value || 0); return; }
+  if (t.id === 's-film' && t.value) {
+    const [w, h] = t.value.split('x').map(Number), m = +$('#s-margin').value || 0;
+    const r = C.settings.region, da = S.machine.draw_area;
+    const [cx, cy] = r ? [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2] : [(da[0] + da[2]) / 2, (da[1] + da[3]) / 2];
+    return setRegion([cx - w / 2 - m, cy - h / 2 - m, cx + w / 2 + m, cy + h / 2 + m], true);
+  }
+  if (!k) return;
+  const s = C.settings, v = t.value === '' ? null : +t.value;
+  if (k === 'tool') return patchScan({ tool: t.value });
+  if (k === 'flicker') return patchScan({ flicker: t.value });
+  if (k[0] === 'r' && k.length === 2) {
+    const r = [...(s.region || [0, 0, 0, 0])];
+    r[+k[1]] = v ?? 0;
+    return patchScan({ region: r });
+  }
+  if (k === 'low') return patchScan({ low: t.checked });
+  if (k[0] === 'w' && k.length === 2) {
+    const w = [...sweepOf(cam())];
+    w[+k[1]] = v ?? w[+k[1]];
+    return patchScan({ sweep: w });
+  }
+  if (k === 'overlap') return patchScan({ overlap: (v ?? 20) / 100 });
+  patchScan({ [k]: v ?? (k === 'refocus' ? 0 : k === 'refocus_step' ? 0.1 : null) });
+});
+$('#camera').addEventListener('click', async (e) => {
+  if (e.target.dataset.act !== 'write-cam') return;
+  const holder = $('#c-holder').value, pen = $('#c-type').value, name = $('#c-name').value.trim();
+  if (!confirm(`Dock holder ${holder}'s tool, write ${pen} "${name}" onto its tag, and put it back?`)) return;
+  const r = await api('POST', `/api/holders/${holder}/tag`, { pen, name });
+  printer = { ...(printer || {}), job: r.job };
+  toast('Writing the tag…');
+  watchJob();
+});
+
+// --- jobs --------------------------------------------------------------------------
+function renderJob() {
+  const P = $('#camera-job');
+  if (!C) return;
+  const j = C.job, busy = j && !j.done, has = Object.keys(C.cameras).length;
+  const pct = j && j.n ? Math.round(100 * j.i / j.n) : 0;
+  let status = '<span class="note">Nothing running.</span>';
+  if (j) {
+    status = busy ? `<b>${esc(j.what)}…</b> ${j.n ? `${j.i} / ${j.n}` : ''}<div class="bar" title="${pct}%"><i style="width:${pct}%"></i></div>`
+      : j.error ? `<span class="bad" title="${esc(j.error)}">⚠ ${esc(j.what)}: ${esc(j.error)}</span>` : `${esc(j.what)}: done`;
+  }
+  let focus = '';
+  if (j && j.result && j.result.curve) {
+    const cv = j.result.curve, zs = cv.map((p) => p[0]), sc = cv.map((p) => p[1]);
+    const z0 = Math.min(...zs), z1 = Math.max(...zs), s1 = Math.max(...sc) || 1;
+    const pts = cv.map(([z, v]) => `${(z - z0) / ((z1 - z0) || 1) * 200},${60 - v / s1 * 56}`).join(' ');
+    const bx = (j.result.z - z0) / ((z1 - z0) || 1) * 200;
+    focus = `<div class="curve" title="Sharpness against z: the peak is the focus">
+      <svg viewBox="-4 0 208 62"><polyline points="${pts}"/><line x1="${bx}" x2="${bx}" y1="0" y2="62"/></svg>
+      <div class="row"><span class="note">sharpest at z ${num(j.result.z, 2)}</span>
+      <button data-act="use-z" data-z="${j.result.z}" title="Shoot at this z from now on">Use it</button></div></div>`;
+  }
+  const last = j && j.scan ? `<img class="last" data-open="${esc(j.scan)}" src="/api/captures/${encodeURIComponent(j.scan)}/thumb/${
+    j.what === 'finding the focus' ? 'best.jpg' : j.what === 'looking' ? 'look.jpg' : 'latest'}?t=${j.i}" alt="" title="The last shot: click to open" onerror="this.remove()">` : '';
+  fill(P, `
+    <div class="buttons wrap">
+      <button data-act="look" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="One shot at the middle of the region, at the focus z (or click the bed with Look, L)">Look</button>
+      <button data-act="focus" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Sweep z at the middle of the region and find where it is sharpest (or click the bed with Focus, K)">Find focus</button>
+      <button data-act="corners" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="A shot on each corner of the region: see where its edges fall on what is there, and click to set them (4 shots)">Check corners</button>
+      <button data-act="scan" class="primary" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Take every tile of the region: it picks up the camera first if it isn't on the carriage">Scan region</button>
+      <button data-act="stop" ${busy ? '' : 'disabled'} title="Stop after the shot it is taking">Stop</button>
+      <button data-act="park" ${busy || !has ? 'disabled' : ''} title="Put the camera back in its holder">Put away</button>
+    </div>
+    <div class="job">${status}</div>${flick(j)}${focus}${last}`);
+}
+function flick(j) {
+  const f = j && j.flicker;
+  if (!f) return '';
+  return `<p class="note warn" title="The light flickers: the camera reads its rows one after the other, and the rows read while the light was off come out darker. Took ${f.frames} frames of each spot and kept the brightest of each pixel">⚠ The light flickers (bands every ~${num(f.period, 0)} rows) in ${f.shots} shot${f.shots > 1 ? 's' : ''}:
+    taken out with ${f.frames} frames each (bands ${num(f.before, 1)} → ${num(f.after, 1)}). Best fixed at the light: full power or DC.</p>`;
+}
+$('#camera-job').addEventListener('click', async (e) => {
+  const t = e.target, act = t.dataset.act;
+  if (t.dataset.open) return openCapture(t.dataset.open);
+  if (!act) return;
+  const r = C.settings.region, mid = r ? { x: (r[0] + r[2]) / 2, y: (r[1] + r[3]) / 2 } : null;
+  if (act === 'use-z') return patchScan({ z: +t.dataset.z });
+  if (act === 'stop') { await api('POST', '/api/camera/stop'); return loadCamera(); }
+  if (act === 'park') {
+    if (!confirm('Put the camera back in its holder?')) return;
+    const res = await api('POST', '/api/camera/park');
+    printer = { ...(printer || {}), job: res.job };
+    toast('Putting the camera away…');
+    return watchJob();
+  }
+  if (act === 'look') await api('POST', '/api/camera/look', { ...mid, z: focusZ() });
+  if (act === 'focus') await api('POST', '/api/camera/focus', mid);
+  if (act === 'corners') { await api('POST', '/api/camera/corners'); openWhenDone = true; }
+  if (act === 'scan') {
+    const n = scanTiles().length;
+    if (!confirm(`Scan the region: ${n} shot${n > 1 ? 's' : ''} at z ${num(focusZ(), 2)}?`)) return;
+    await api('POST', '/api/camera/scan');
+  }
+  loadCamera();
+});
+
+// --- the NAS: an S3 bucket the scans go up to (limn_cam/nas.py) ------------------------
+function renderNas() {
+  if (!N) return;
+  const s = N.settings;
+  const f = (k, label, title, attrs = '') => `<label for="n-${k}" title="${title}">${label}</label>
+    <input id="n-${k}" data-n="${k}" value="${esc(s[k] ?? '')}" title="${title}" ${attrs}>`;
+  fill($('#nas'), `
+    ${f('endpoint', 'Endpoint', 'The S3 server, eg. https://nas.local:9000 (OpenMediaVault S3, MinIO)', 'placeholder="https://nas.local:9000"')}
+    ${f('bucket', 'Bucket', 'The bucket the scans go into')}
+    ${f('prefix', 'Folder', 'Inside the bucket: each scan goes to <folder>/<scan id>/')}
+    ${f('access_key', 'Access key', 'The S3 access key', 'autocomplete="off"')}
+    <label for="n-secret_key" title="The S3 secret key: kept on the server (nas.json, its owner only), never shown again">Secret key</label>
+    <input id="n-secret_key" data-n="secret_key" type="password" autocomplete="new-password" placeholder="${s.secret_key ? 'kept: type to change' : ''}"
+      title="The S3 secret key: kept on the server (nas.json, its owner only), never shown again">
+    ${f('region', 'Region', 'MinIO takes any; AWS wants the bucket\'s region')}
+    <label></label><label class="check" title="Upload every scan when it is done, and its Hugin stitch when that is made"><input type="checkbox" data-n="auto"${s.auto ? ' checked' : ''}> upload each scan when done</label>
+    <label></label><div class="buttons"><button data-act="nas-check" ${s.ready ? '' : 'disabled'} title="Write a small file into the bucket: that these settings work">Check</button>
+      <span class="note">${s.ready ? '' : 'needs an endpoint, a bucket and both keys'}</span></div>`);
+}
+$('#nas').addEventListener('change', async (e) => {
+  const k = e.target.dataset.n;
+  if (!k) return;
+  N = await api('PUT', '/api/nas', { [k]: k === 'auto' ? e.target.checked : e.target.value.trim() });
+  renderNas(); renderCaptures();
+});
+$('#nas').addEventListener('click', async (e) => {
+  if (e.target.dataset.act !== 'nas-check') return;
+  const r = await api('POST', '/api/nas/check');
+  toast(`The NAS took ${r.key}`);
+});
+
+// --- captures: the list and the viewer ---------------------------------------------------
+const when = (id) => id.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2}).*/, '$3.$2. $4:$5');
+const kinds = { scan: '▦', focus: '◎', look: '◉', corners: '⌜' };
+// Which captures lie on the bed (Scan tab): the newest 12 unless shown or hidden by hand
+const scanVis = store.get('scanVis', {});
+const onBed = (c, i) => c.count > 0 && (scanVis[c.id] ?? i < 12);
+function upState(c) {
+  const u = N && N.uploads[c.id];
+  if (u && !u.done) return `<span class="icon note" title="Uploading: ${u.i} of ${u.n} files">⇪ ${u.n ? Math.round(100 * u.i / u.n) : 0}%</span>`;
+  if (u && u.error) return `<button class="icon bad" data-up="${esc(c.id)}" title="The upload failed: ${esc(u.error)}. Click to try again">⚠</button>`;
+  if (c.uploaded === 'all') return '<span class="icon ok" title="On the NAS, every file">☁</span>';
+  if (!N || !N.settings.ready) return '';
+  return `<button class="icon" data-up="${esc(c.id)}" title="${c.uploaded ? 'Some of it is on the NAS: upload the rest' : 'Upload it to the NAS'}">⇪</button>`;
+}
+function renderCaptures() {
+  if (!C) return;
+  const st = C.store, note = $('#store-note');
+  note.hidden = !st || !st.volatile;
+  if (st) note.textContent = `In the Pi's memory (${num(st.mb, 0)} of ${num(st.max_mb, 0)} MB, the oldest go first): gone after a reboot. ${N && N.settings.ready ? 'Upload what to keep (⇪).' : 'Set up the NAS to keep them.'}`;
+  fill($('#captures'), C.captures.map((c, i) => `
+    <li data-id="${esc(c.id)}" class="${viewing && viewing.meta.id === c.id ? 'on' : ''}${onBed(c, i) ? '' : ' hidden'}" title="${esc(c.kind)} ${esc(c.id)}: ${c.count} shot${c.count === 1 ? '' : 's'}${c.region ? ` over ${c.region.map((v) => num(v, 1)).join(', ')}` : ''}${c.error ? ` (${c.error})` : ''}">
+      <button class="icon eye" data-eye="${esc(c.id)}" title="${onBed(c, i) ? 'On the bed: hide it' : 'Not on the bed: show it there'}">${onBed(c, i) ? '◉' : '◌'}</button>
+      <span class="kind">${kinds[c.kind] || '·'}</span>
+      <span class="name">${esc(when(c.id))} <span class="note">${esc(c.kind)} · ${c.count}${c.done ? '' : ' …'}</span></span>
+      ${upState(c)}
+      <a class="icon" href="/api/captures/${encodeURIComponent(c.id)}/zip" title="Download all its shots (zip)">⤓</a>
+      <button class="icon" data-del="${esc(c.id)}" title="Delete it from the server">✕</button>
+    </li>`).join('') || '<li class="note">Nothing yet: look, focus or scan with the camera tool.</li>');
+}
+$('#captures').addEventListener('click', async (e) => {
+  const eye = e.target.dataset.eye;
+  if (eye) {
+    const i = C.captures.findIndex((c) => c.id === eye);
+    scanVis[eye] = !onBed(C.captures[i], i);
+    store.set('scanVis', scanVis);
+    renderCaptures(); drawScanLayer();
+    return;
+  }
+  const up = e.target.dataset.up;
+  if (up) { await api('POST', `/api/captures/${encodeURIComponent(up)}/upload`); return loadCamera(); }
+  const del = e.target.dataset.del;
+  if (del) {
+    if (!confirm(`Delete ${del} from the server?`)) return;
+    await api('DELETE', `/api/captures/${encodeURIComponent(del)}`);
+    if (viewing && viewing.meta.id === del) closeViewer();
+    return loadCamera();
+  }
+  if (e.target.closest('a')) return;
+  const li = e.target.closest('li[data-id]');
+  if (li) openCapture(li.dataset.id);
+});
+
+// Each capture's meta.json and, for a scan, where its tiles really are (registered)
+const known = {};               // id -> {count, meta, info}
+async function capture(id, count) {
+  const k = known[id];
+  if (k && k.count === count) return k;
+  const meta = await api('GET', `/api/captures/${encodeURIComponent(id)}`);
+  let info = null;
+  if (meta.kind === 'scan' && meta.tiles.length) {
+    try { info = await api('GET', `/api/captures/${encodeURIComponent(id)}/stitch/info`); } catch { /* nothing yet */ }
+  }
+  return (known[id] = { count, meta, info });
+}
+const PPMS = [12, 25, 50, 80];
+
+async function openCapture(id, view) {
+  const c = (C.captures || []).find((x) => x.id === id);
+  const k = await capture(id, c ? c.count : -1);
+  viewing = { meta: k.meta, info: k.info,
+              view: view || (k.meta.kind === 'corners' ? 'corners' : k.meta.kind === 'scan' && k.meta.tiles.length > 1 ? 'stitch' : 'tiles'),
+              ppm: store.get('stitchPpm', 25) };
+  renderViewer(); renderCaptures(); drawScanLayer();
+}
+function closeViewer() {
+  viewing = null;
+  $('#viewer').hidden = true;
+  if (C) renderCaptures();
+  drawScanLayer();
+}
+async function renderViewer() {
+  const V = $('#viewer'), m = viewing && viewing.meta;
+  if (!m) { V.hidden = true; return; }
+  V.hidden = false;
+  const id = encodeURIComponent(m.id), view = viewing.view;
+  const tiles = m.tiles || [];
+  const pinned = unders().includes(m.id);
+  let body;
+  if (view === 'stitch') {
+    const ppm = viewing.ppm, native = (viewing.info && viewing.info.native_ppm) || 126;
+    const opts = [...PPMS, Math.round(native)].map((v) => `<option value="${v}"${v === ppm ? ' selected' : ''}>${v === Math.round(native) ? `${v} px/mm (full)` : `${v} px/mm`}</option>`).join('');
+    let size = '';
+    try {
+      const inf = await api('GET', `/api/captures/${id}/stitch/info?px_per_mm=${ppm}`);
+      size = `${inf.width} × ${inf.height} px, ${inf.mp} MP · ${inf.used} of ${inf.of} overlaps matched, tiles moved up to ${num(inf.moved_max, 2)} mm`
+        + (inf.too_big ? ' · too big: pick a lower px/mm' : '');
+    } catch { size = 'no tiles yet'; }
+    body = `<div class="row stitchbar">
+        <select id="v-ppm" title="Resolution of the stitch: the camera takes ~${Math.round(native)} px/mm; higher is bigger and slower">${opts}</select>
+        <span class="note">${esc(size)}</span>
+        <a class="button" href="/api/captures/${id}/stitch?px_per_mm=${ppm}&download=1" title="Download the stitch at this resolution (JPEG)">⤓ stitched</a></div>
+      <div class="stitching note" id="v-wait">stitching…</div>
+      <div class="zoombox"><img class="big" src="/api/captures/${id}/stitch?px_per_mm=${ppm}&t=${tiles.length}" alt="stitched"
+        onload="document.getElementById('v-wait').remove()" onerror="document.getElementById('v-wait').textContent='could not stitch it'"
+        title="The tiles joined where their overlaps agree (registered), the seams faded. Wheel or pinch: zoom, drag: pan, double-click: full size"></div>`;
+  } else if (view === 'corners') {
+    body = cornersBody(m, id);
+  } else if (view === 'hugin') {
+    body = await huginBody(m, id, tiles);
+  } else if (view === 'tiles') {
+    body = `<div class="grid-tiles">${tiles.map((t) => `<img data-file="${esc(t.file)}" loading="lazy" src="/api/captures/${id}/thumb/${encodeURIComponent(t.file)}"
+      title="${esc(t.file)}: X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)}. Click for the full photo">`).join('')}</div>`;
+  } else {
+    const i = tiles.findIndex((t) => t.file === view), t = tiles[i] || {};
+    body = `<div class="zoombox"><img class="big" src="/api/captures/${id}/file/${encodeURIComponent(view)}" alt="${esc(view)}"
+        title="Wheel or pinch: zoom, drag: pan, double-click: full size"></div>
+      <div class="note mono">${esc(view)} · X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)} · ${i + 1} / ${tiles.length} (← →) ·
+        <a href="/api/captures/${id}/file/${encodeURIComponent(view)}" target="_blank" title="The full photo in a new tab">open ↗</a></div>`;
+  }
+  fill(V, `<div class="vbar">
+      <b title="${esc(m.kind)} taken ${esc(m.id)}">${esc(when(m.id))} · ${esc(m.kind)}</b>
+      <div class="seg small">
+        ${m.kind === 'scan' ? `<button data-view="stitch" class="${view === 'stitch' ? 'on' : ''}" title="All tiles as one picture, quickly: registered on their overlaps, seams faded">Quick</button>
+          <button data-view="hugin" class="${view === 'hugin' ? 'on' : ''}" title="Stitched by Hugin: features matched across the overlaps, the camera's scale measured, the lens corrected, seams laid where they show least. For film: the precise one">Hugin</button>` : ''}
+        ${m.kind === 'corners' ? `<button data-view="corners" class="${view === 'corners' ? 'on' : ''}" title="The region's corners on what is there: click a shot to put that corner there">Corners</button>` : ''}
+        <button data-view="tiles" class="${view === 'tiles' || view.endsWith('.jpg') ? 'on' : ''}" title="Every shot on its own">Tiles</button>
+      </div>
+      ${m.kind === 'scan' ? `<button data-act="pin" class="${pinned ? 'primary' : ''}" title="Show this scan under the drawings on the Plot tab, where it was taken: place a plot on what is on the bed">${pinned ? '✓ under the plot' : 'Under the plot'}</button>` : ''}
+      <span class="grow"></span>
+      <a class="button" href="/api/captures/${id}/zip" title="Download all its shots (zip)">⤓ zip</a>
+      <button data-act="close" title="Close (Esc)">✕</button>
+    </div><div class="vbody">${body}</div>`);
+  $$('.zoombox', V).forEach(zoomable);
+}
+// The region's corners on what is there: each shot upright, centred where the camera
+// was sent, the region's edges drawn through it and its outside shaded. A click
+// puts that corner (its two edges) there: on a film frame's edge, to the 0.05 mm.
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
+function cornersBody(m, id) {
+  const r = (C && C.settings.region) || m.region, turn = m.turn || 0, [fw, fh] = m.fov, [fx, fy] = footprint(m.fov, turn);
+  const cell = (n) => {
+    const t = m.tiles.find((x) => x.corner === n);
+    if (!t) return '<div class="corner"></div>';
+    const ex = (n[1] === 'l' ? r[0] : r[2]) - t.x, ey = (n[0] === 't' ? r[3] : r[1]) - t.y;   // the edges from its middle, mm
+    const ox = n[1] === 'l' ? [-fx / 2, ex] : [ex, fx / 2];           // outside the region, svg units (mm, y down)
+    const oy = n[0] === 't' ? [-fy / 2, -ey] : [-ey, fy / 2];
+    const shade = (x0, x1, y0, y1) => x1 > x0 && y1 > y0 ? `<rect class="out" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/>` : '';
+    return `<div class="corner zoombox" style="aspect-ratio:${fx} / ${fy}"><div class="zin">
+      <img src="/api/captures/${id}/file/${encodeURIComponent(t.file)}" alt="${n}"
+        style="width:${fw / fx * 100}%;height:${fh / fy * 100}%;transform:translate(-50%,-50%) rotate(${-turn}deg)">
+      <svg viewBox="${-fx / 2} ${-fy / 2} ${fx} ${fy}" data-corner="${n}" preserveAspectRatio="none">
+        ${shade(ox[0], ox[1], -fy / 2, fy / 2)}${shade(n[1] === 'l' ? ex : -fx / 2, n[1] === 'l' ? fx / 2 : ex, oy[0], oy[1])}
+        <line x1="${ex}" x2="${ex}" y1="${-fy / 2}" y2="${fy / 2}"/><line x1="${-fx / 2}" x2="${fx / 2}" y1="${-ey}" y2="${-ey}"/>
+      </svg></div>
+      <span class="note mono">${n.toUpperCase()} · X ${num(n[1] === 'l' ? r[0] : r[2], 2)} Y ${num(n[0] === 't' ? r[3] : r[1], 2)}</span></div>`;
+  };
+  return `<p class="note">The region's edges on what the camera saw at each corner (shaded: outside). Click where a corner should be,
+      eg. just outside the film's frame: that corner's two edges go there. Zoom in for precision: wheel or pinch, drag to pan,
+      double-click for full size. Then scan.</p>
+    <div class="corners">${CORNERS.map(cell).join('')}</div>`;
+}
+async function setCorner(n, svgEl_, e) {
+  const t = viewing.meta.tiles.find((x) => x.corner === n);
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svgEl_.getScreenCTM().inverse());
+  const X = +(t.x + p.x).toFixed(2), Y = +(t.y - p.y).toFixed(2);
+  const r = [...C.settings.region];
+  r[n[1] === 'l' ? 0 : 2] = X;
+  r[n[0] === 't' ? 3 : 1] = Y;
+  if (r[2] - r[0] < 1 || r[3] - r[1] < 1) return toast('That would leave no region', true);
+  await patchScan({ region: r });
+  renderViewer();
+}
+
+let hugTimer = null;
+async function huginBody(m, id, tiles) {
+  clearTimeout(hugTimer);
+  const ppm = viewing.ppm, native = (viewing.info && viewing.info.native_ppm) || 126;
+  const opts = [...PPMS, Math.round(native)].map((v) => `<option value="${v}"${v === ppm ? ' selected' : ''}>${v === Math.round(native) ? `${v} px/mm (full)` : `${v} px/mm`}</option>`).join('');
+  const st = await api('GET', `/api/captures/${id}/hugin/status?px_per_mm=${ppm}`);
+  const bar = (extra) => `<div class="row stitchbar"><select id="v-ppm" title="Resolution of the stitch">${opts}</select>${extra}</div>`;
+  if (st.missing.length) return bar(`<span class="note">Hugin isn't installed on the server: <code>sudo apt install hugin-tools enblend</code></span>`);
+  const j = st.job;
+  if (j && !j.done) {
+    hugTimer = setTimeout(() => { if (viewing && viewing.view === 'hugin') renderViewer(); }, 1500);
+    return bar(`<span class="note">stitching with Hugin… ${esc(j.log[j.log.length - 1] || '')}</span>`);
+  }
+  if (!st.info) {
+    return bar(`<button data-act="hugin" class="primary" title="Stitch with Hugin at this resolution: a few seconds for a small region, a minute or two for the whole bed">Stitch with Hugin</button>
+      ${j && j.error ? `<span class="bad">⚠ ${esc(j.error)}</span>` : `<span class="note">${tiles.length} tiles</span>`}`);
+  }
+  const i = st.info, c = i.camera;
+  const scale = Math.abs(c.fov[0] - m.fov[0]) / m.fov[0] > 0.01
+    ? ` · the camera measured ${num(c.px_per_mm, 1)} px/mm, fov ${num(c.fov[0], 2)} × ${num(c.fov[1], 2)} mm, turn ${num(c.turn, 2)}° (pens.toml: ${num(m.fov[0], 2)} × ${num(m.fov[1], 2)}, ${num(m.turn, 1)}°)` : '';
+  const warn = [i.unmatched.length ? `${i.unmatched.length} tile${i.unmatched.length > 1 ? 's' : ''} matched nothing (placed where sent)` : '',
+    i.far.length ? `${i.far.length} landed over ${1.5} mm from where sent` : ''].filter(Boolean).join(' · ');
+  return bar(`<span class="note">${i.width} × ${i.height} px · ${i.kept} matches over ${i.pairs} overlaps, ${num(i.rms_px, 2)} px apart (rms) · tiles moved up to ${num(i.moved_max, 2)} mm${esc(scale)}</span>
+      ${warn ? `<span class="bad">⚠ ${esc(warn)}</span>` : ''}
+      <a class="button" href="/api/captures/${id}/hugin?px_per_mm=${ppm}&download=1" title="Download the stitch (JPEG)">⤓ stitched</a>
+      <a class="button" href="/api/captures/${id}/file/hugin.pto?download=1" title="The Hugin project: open it next to the tiles (unzip them) to fine-tune">⤓ .pto</a>`)
+    + `<div class="zoombox"><img class="big" src="/api/captures/${id}/hugin?px_per_mm=${ppm}&t=${i.width}" alt="stitched by Hugin"
+        title="Wheel or pinch: zoom, drag: pan, double-click: full size"></div>`;
+}
+
+$('#viewer').addEventListener('click', async (e) => {
+  const t = e.target;
+  const cs = t.closest && t.closest('svg[data-corner]');
+  if (cs) return setCorner(cs.dataset.corner, cs, e);
+  if (t.dataset.act === 'hugin') {
+    await api('POST', `/api/captures/${encodeURIComponent(viewing.meta.id)}/hugin?px_per_mm=${viewing.ppm}`);
+    return renderViewer();
+  }
+  if (t.dataset.view) { viewing.view = t.dataset.view; return renderViewer(); }
+  if (t.dataset.file) { viewing.view = t.dataset.file; return renderViewer(); }
+  if (t.dataset.act === 'close') return closeViewer();
+  if (t.dataset.act === 'pin') {
+    const pinned = unders().includes(viewing.meta.id);
+    setUnders(pinned ? unders().filter((x) => x !== viewing.meta.id) : [viewing.meta.id, ...unders()]);
+    toast(pinned ? 'No scan under the plot' : 'Pinned: on the Plot tab it lies under the drawings');
+    renderViewer(); drawUnder();
+  }
+});
+$('#viewer').addEventListener('change', (e) => {
+  if (e.target.id === 'v-ppm') { viewing.ppm = +e.target.value; store.set('stitchPpm', viewing.ppm); renderViewer(); }
+});
+function stepTile(d) {
+  const tiles = viewing.meta.tiles, i = tiles.findIndex((t) => t.file === viewing.view);
+  if (i < 0) return false;
+  viewing.view = tiles[(i + d + tiles.length) % tiles.length].file;
+  renderViewer();
+  return true;
+}
+
+// --- the bed: shots where they were taken, the region, its tiles ----------------------------
+function shotImage(L, id, k, extra = {}) {
+  // A scan: its stitch where its tiles really are. A look or a focus: the shot, turned upright
+  const m = k.meta;
+  if (m.kind === 'scan' && k.info) {
+    const [x0, y0, x1, y1] = k.info.extent;
+    return svgEl('image', { href: `/api/captures/${encodeURIComponent(id)}/stitch?px_per_mm=${extra.ppm || 12}&t=${m.tiles.length}`,
+      x: x0, y: -y1, width: x1 - x0, height: y1 - y0, transform: 'scale(1,-1)', preserveAspectRatio: 'none', ...extra.attrs }, L);
+  }
+  const t = m.tiles[m.tiles.length - 1];
+  if (!t) return null;
+  const [w, h] = m.fov, turn = m.turn || 0;
+  return svgEl('image', { href: `/api/captures/${encodeURIComponent(id)}/thumb/${encodeURIComponent(t.file)}`, x: -w / 2, y: -h / 2,
+    width: w, height: h, preserveAspectRatio: 'none', transform: `translate(${t.x} ${t.y}) scale(1,-1) rotate(${-turn})`, ...extra.attrs }, L);
+}
+let layerPending = false;
+function drawScanLayer() {
+  const L = $('#scan-layer');
+  L.innerHTML = '';
+  if (!scanTab() || !C) return;
+  if ($('#shots-on-bed').checked) {
+    const shown = C.captures.filter(onBed).reverse();
+    for (const c of shown) {
+      const k = known[c.id];
+      if (!k || k.count !== c.count) {
+        if (!layerPending) {
+          layerPending = true;
+          Promise.all(shown.map((x) => capture(x.id, x.count).catch(() => null))).finally(() => { layerPending = false; drawScanLayer(); });
+        }
+        continue;
+      }
+      const img = shotImage(L, c.id, k, { attrs: { class: 'shot' + (viewing && viewing.meta.id === c.id ? ' on' : '') } });
+      if (img) svgEl('title', {}, img).textContent = `${c.kind} ${c.id}`;
+    }
+  }
+  const r = sdrag ? dragRegion(sdrag) : C.settings.region;
+  if (r) {
+    const c = cam();
+    if (c && !sdrag) {
+      const [fx, fy] = footprint(c.fov, c.turn || 0);
+      scanTiles().forEach(([x, y], i) => {
+        const t = svgEl('rect', { class: 'scan-tile', x: x - fx / 2, y: y - fy / 2, width: fx, height: fy }, L);
+        svgEl('title', {}, t).textContent = `shot ${i + 1} at X ${num(x, 1)} Y ${num(y, 1)}`;
+      });
+    }
+    const box = svgEl('rect', { class: 'scan-region', x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1] }, L);
+    svgEl('title', {}, box).textContent = `Region ${r.map((v) => num(v, 1)).join(', ')}`;
+  }
+}
+$('#shots-on-bed').addEventListener('change', drawScanLayer);
+
+// Scans pinned under the plot (Plot tab): drawings are placed on what is on the bed.
+// Each can be hidden there; the header's *scan* hides them all.
+function unders() {
+  const old = store.get('scanUnder', null);            // one, before there could be several
+  if (old) { store.set('scanUnders', [old]); store.set('scanUnder', null); }
+  return store.get('scanUnders', []);
+}
+function setUnders(ids) { store.set('scanUnders', ids); drawUnder(); }
+const underHidden = new Set(store.get('underHidden', []));
+function renderUnders(list) {
+  const ids = unders();
+  $('#under-toggle').hidden = !ids.length;
+  $('#unders-section').hidden = !ids.length;
+  fill($('#unders'), ids.map((id) => {
+    const c = list && list.find((x) => x.id === id), off = underHidden.has(id);
+    return `<li data-under="${esc(id)}" class="${off ? 'hidden' : ''}" title="${esc(c ? `${c.kind} ${c.id}, ${c.count} shots` : id)}">
+      <button class="icon eye" data-act="eye" title="${off ? 'Hidden: show it under the drawings' : 'Hide it'}">${off ? '◌' : '◉'}</button>
+      <span class="name">${esc(when(id))} <span class="note">${esc(c ? c.kind : '')}</span></span>
+      <button class="icon" data-act="unpin" title="Not under the plot any more (the scan stays, Scan tab)">✕</button></li>`;
+  }).join(''));
+}
+$('#unders').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-under]'), act = e.target.dataset.act;
+  if (!li || !act) return;
+  const id = li.dataset.under;
+  if (act === 'eye') {
+    underHidden.has(id) ? underHidden.delete(id) : underHidden.add(id);
+    store.set('underHidden', [...underHidden]);
+    drawUnder();
+  }
+  if (act === 'unpin') setUnders(unders().filter((x) => x !== id));
+});
+let underDrawing = Promise.resolve();
+function drawUnder() {
+  underDrawing = underDrawing.then(drawUnders).catch(() => null);
+  return underDrawing;
+}
+async function drawUnders() {
+  const L = $('#scan-under');
+  let list = null;
+  try { list = (C && C.captures) || await api('GET', '/api/captures'); } catch { /* the server comes back later */ }
+  if (list) {                                           // gone from the server: not pinned any more
+    const ids = unders().filter((id) => list.some((c) => c.id === id));
+    if (ids.length !== unders().length) store.set('scanUnders', ids);
+  }
+  renderUnders(list);
+  L.innerHTML = '';
+  if (!list || !$('#show-under').checked) return;
+  for (const id of [...unders()].reverse()) {           // the first pinned on top
+    if (underHidden.has(id)) continue;
+    const c = list.find((x) => x.id === id);
+    let k;
+    try { k = await capture(id, c.count); } catch { continue; }
+    const img = shotImage(L, id, k, { ppm: 25, attrs: { class: 'under' } });
+    if (img) svgEl('title', {}, img).textContent = `The scan ${id}, where it was taken`;
+  }
+}
+$('#show-under').addEventListener('change', drawUnder);
+
+// Region, look and focus on the canvas; pan goes on to app.js
+svg.addEventListener('pointerdown', async (e) => {
+  if (!scanTab() || e.button !== 0 || spaceDown || smode === 'pan') return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  const p = worldPt(e);
+  if (smode === 'region') {
+    const grab = regionGrab(p);
+    sdrag = grab ? { ...grab, a: p, b: p, r: [...C.settings.region] } : { a: p, b: p };
+    try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+    return drawScanLayer();
+  }
+  if (!Object.keys(C.cameras).length) return toast('No camera tool: write its tag first (Camera panel)', true);
+  const x = +p.x.toFixed(2), y = +p.y.toFixed(2);
+  if (smode === 'look') {
+    await api('POST', '/api/camera/look', { x, y, z: focusZ() });
+    toast(`Looking at X ${num(x, 1)} Y ${num(y, 1)}…`);
+  } else {
+    await api('POST', '/api/camera/focus', { x, y });
+    toast(`Finding the focus at X ${num(x, 1)} Y ${num(y, 1)}…`);
+  }
+  loadCamera();
+}, true);
+// The region on the bed: drag an edge or a corner to resize it, inside to move it,
+// outside to draw a new one
+function regionGrab(p) {
+  const r = C && C.settings.region;
+  if (!r) return null;
+  const tol = 6 * mmPerPx();
+  const inY = p.y > r[1] - tol && p.y < r[3] + tol, inX = p.x > r[0] - tol && p.x < r[2] + tol;
+  const edges = {
+    l: inY && Math.abs(p.x - r[0]) < tol, r: inY && Math.abs(p.x - r[2]) < tol,
+    b: inX && Math.abs(p.y - r[1]) < tol, t: inX && Math.abs(p.y - r[3]) < tol };
+  if (edges.l || edges.r || edges.t || edges.b) return { kind: 'edges', edges };
+  if (p.x > r[0] && p.x < r[2] && p.y > r[1] && p.y < r[3]) return { kind: 'move' };
+  return null;
+}
+function dragRegion(d) {
+  if (!d.kind) return [Math.min(d.a.x, d.b.x), Math.min(d.a.y, d.b.y), Math.max(d.a.x, d.b.x), Math.max(d.a.y, d.b.y)];
+  const dx = d.b.x - d.a.x, dy = d.b.y - d.a.y, r = [...d.r];
+  if (d.kind === 'move') return [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+  if (d.edges.l) r[0] += dx;
+  if (d.edges.r) r[2] += dx;
+  if (d.edges.b) r[1] += dy;
+  if (d.edges.t) r[3] += dy;
+  return [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])];
+}
+const GRAB_CURSOR = { l: 'ew-resize', r: 'ew-resize', t: 'ns-resize', b: 'ns-resize', lt: 'nwse-resize', rb: 'nwse-resize', rt: 'nesw-resize', lb: 'nesw-resize' };
+svg.addEventListener('pointermove', (e) => {
+  if (!sdrag) {
+    if (scanTab() && smode === 'region' && C) {
+      const g = regionGrab(worldPt(e));
+      svg.style.cursor = !g ? '' : g.kind === 'move' ? 'move' : GRAB_CURSOR[Object.keys(g.edges).filter((k) => g.edges[k]).join('')] || 'move';
+    }
+    return;
+  }
+  sdrag.b = worldPt(e);
+  drawScanLayer();
+  const r = dragRegion(sdrag);
+  hint(`${num(r[2] - r[0], 2)} × ${num(r[3] - r[1], 2)} mm · from ${num(r[0], 2)}, ${num(r[1], 2)}`);
+});
+svg.addEventListener('pointerup', async () => {
+  const d = sdrag;
+  if (!d) return;
+  sdrag = null;
+  hint('');
+  const snap = (v) => Math.round(v * 20) / 20;           // 0.05 mm
+  const r = dragRegion(d).map(snap);
+  if (r[2] - r[0] < 1 || r[3] - r[1] < 1) return drawScanLayer();
+  await setRegion(r);
+});
+
+function setSmode(m) {
+  smode = m;
+  $$('#scan-rail [data-smode]').forEach((b) => b.classList.toggle('on', b.dataset.smode === m));
+  svg.classList.toggle('pan-mode', m === 'pan');
+  svg.classList.toggle('scan-pick', m !== 'pan');
+}
+$('#scan-rail').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.smode) setSmode(b.dataset.smode);
+  if (b.dataset.sact === 'fit') fit();
+  if (b.dataset.sact === 'region') fitRegion();
+});
+
+// Keys on the Scan tab (app.js asks first): true when taken
+window.scanKey = (e) => {
+  if (e.ctrlKey || e.metaKey) return false;
+  const key = e.key.toLowerCase();
+  if (e.key === 'Escape') { if (viewing) closeViewer(); else setSmode('region'); return true; }
+  if (viewing && typeof viewing.view === 'string' && viewing.view.endsWith('.jpg') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    return stepTile(e.key === 'ArrowLeft' ? -1 : 1);
+  }
+  const r = C && C.settings.region;
+  const arrows = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, 1], arrowdown: [0, -1] };
+  if (r && !viewing && arrows[key]) {
+    const k = e.shiftKey ? 10 : e.altKey ? 0.1 : 1, [dx, dy] = arrows[key];
+    setRegion([r[0] + dx * k, r[1] + dy * k, r[2] + dx * k, r[3] + dy * k]);
+    return true;
+  }
+  if (key === 'z') { fitRegion(); return true; }
+  const modes = { r: 'region', h: 'pan', l: 'look', k: 'focus' };
+  if (modes[key]) { setSmode(modes[key]); return true; }
+  if (key === 'f') { fit(); return true; }
+  return ['v', 'p', 'd', 'delete', 'backspace', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key);
+};
+
+setSmode('region');
+document.body.classList.toggle('tab-scan', store.get('tab', 'plot') === 'scan');
+document.body.classList.toggle('tab-plot', store.get('tab', 'plot') !== 'scan');
+(function whenLoaded() {                // app.js loads the state first
+  if (S) setTab(store.get('tab', 'plot'));
+  else setTimeout(whenLoaded, 100);
+})();

@@ -46,11 +46,11 @@ BEDS = {
         },
     },
 
-    # Two FSR arrays at right angles, on the chain Dock -> hop 1 -> hop 2.
+    # One FSR array, on the chain Dock -> hop 1.
     'BED_5': {
         'sensor': 'fsr',
         'meshes': [
-            {'origin': (108, 36), 'size': (10, 20), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
+            {'origin': (111, 40), 'size': (7.5, 19), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
         'marks': {'nx': 5, 'ny': 3, 'xrange': (15, 80), 'yrange': (120, 150), 'arm': 4},
@@ -58,26 +58,62 @@ BEDS = {
             'z_park': PANEL_ZHOME,
             # origin: outer corner of cell (row 0, col 0); col_dir / row_dir:
             # plotter direction of increasing col / row. Check with LRT_FSR_Z
-            # that the cell you aim at is the one that lights up.
+            # that the cell you aim at is the one that lights up. Mapped with
+            # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
+            # dead_rows: row 3's ADC line has no series resistor: any press in
+            # a column lifts it to ~500, pressed or not. It tells nothing.
+            # crosstalk_rows: a press in a column lifts row 0 too, less; with a
+            # fine tip split on an edge, as much as the pressed cells (fsr.py, touched).
+            # aim: (row, col), in cells from the origin, where the tip first
+            # comes down (fsr.py, locate). Mid cell, so a tool that is about
+            # right lands clear of the dead zones. A tool whose tip is further
+            # off than the array reaches from there is not found: here -3.75..
+            # +3.75mm in X (rows 0-2), -6.25..+13.75mm in Y (8 cols): mid col 5, clear of col 3.
             'arrays': [
-                {'hop': 1, 'origin': (108, 36), 'col_dir': (0, 1), 'row_dir': (1, 0)},   # 8 cells along Y
-                {'hop': 2, 'origin': None, 'col_dir': (1, 0), 'row_dir': (0, 1)},        # 8 cells along X, to measure
+                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
+                 'dead_rows': (3,), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
-            'z_cell': (1, 1, 3),                # hop, row, col used for z
-            'x_edges': [(2, 1, 3, 4)],          # hop, row, between col a and col b
-            'y_edges': [(1, 1, 3, 4)],
+            # Column 3 is faulty (a glue void from the transfer: preload, a dead
+            # band at col 3/4, 2026-09-29 survey), a 0.05 liner barely lifted it
+            # on 2026-09-30: z and the edges are on column 1 instead, the aim on column 5.
+            'z_cell': (1, 1, 1),                # hop, row, col used for z
+            # hop, (row, col) of a cell, (row, col) of its neighbour. The rows
+            # run along X here: an edge between rows gives X, between cols Y.
+            'x_edges': [(1, (1, 1), (2, 1))],
+            'y_edges': [(1, (1, 1), (1, 2))],
             # Where a tool can touch, over the BLTouch z (like DZ on the tool
             # tags; the reference tool is ~1.0). The jog starts above the top
             # and never goes below the bottom.
             'tool_z': (-0.5, 3.0),
-            'step': 0.2,            # mm, coarse z steps
+            'step': 0.1,            # mm, coarse z steps: a step can go this far past contact before it is seen
+            'back_off': 0.4,        # mm up after finding contact: clear of it, a tip on an edge registers ~0.2 deep
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
             'respond': 150,         # strength (0..1000) that counts as touched
+            # A press lifts the other rows of its column too, row 3 (no series
+            # resistor on its ADC line) to ~530 while the pressed cell is ~880:
+            # A press also lifts the rest of its row: with a fine tip pressing weakly
+            # (a Micron on (1,5) at 355) (1,3) read 259, 0.73 of it, 2026-09-29.
+            'dominance': 0.9,       # a cell responds only this close to the strongest
+            'sure': 450,            # another cell this strong: the tip is there, not crosstalk
             'press_limit': 950,     # strength that means pressing too hard: lift now
-            'press': 0.3,           # mm below contact for the XY taps
+            # The XY taps press past contact until the cell reads press_strength,
+            # `press` mm at most (fsr.py, press_depth): a felt tip ~0.05mm, a fine
+            # one up to 0.3. Deeper only adds force, and 0.3mm taps with a Stabilo
+            # (~670) left marks on the sheet, 2026-09-29.
+            'press_strength': 450,
+            'press': 0.3,           # mm below contact for the XY taps, at most
+            'prior_margin': 0.4,    # mm below an expected contact z the search may go
+            # The taps follow the sheet with this mesh (the moves are raw, no mesh):
+            # it drops ~0.05mm per mm towards -Y, a fine tip lost 0.25 of its 0.3mm
+            # press over a 5mm search on 2026-09-28.
+            'surface_mesh': 'lrt_fsr',
+            # Between two pens the sheet is wiped (fsr.py, wait_clean): the carried
+            # pen parks at `park`, over the paper and clear of the holders, until
+            # presses on `wipe_cells` cells are seen and then `quiet` s without any.
+            'clean': {'park': (60, 100), 'wipe_cells': 3, 'quiet': 2.0, 'timeout': 600},
             'resolution': 0.02,     # mm, edge search stops here
             'repeats': 3,           # z measurements, median
         },

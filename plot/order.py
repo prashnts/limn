@@ -1,0 +1,110 @@
+# Limn plot - the order paths are drawn in
+#
+# Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
+# This file may be distributed under the terms of the GNU GPLv3 license.
+#
+# Nearest next: from where the tool is, the closest end of any path left,
+# drawn from that end. Then 2-opt (improve): reversing a run of paths, each
+# drawn the other way round, while that shortens the travels, for as long as
+# the time budget allows. Closed paths start at their vertex nearest the tool.
+import time
+
+import numpy as np
+
+
+def _closed(p):
+    return len(p) > 3 and np.allclose(p[0, :2], p[-1, :2])
+
+
+def _rotate(p, pos):
+    k = int(np.argmin(np.hypot(*(p[:-1, :2] - pos).T)))
+    return p if k == 0 else np.vstack([p[k:-1], p[:k], p[k:k + 1]])
+
+
+def order(paths, start=(0, 0)):
+    paths = [np.asarray(p, float) for p in paths if len(p)]
+    n = len(paths)
+    if not n:
+        return []
+    starts = np.array([p[0, :2] for p in paths])
+    ends = np.array([p[-1, :2] for p in paths])
+    closed = [_closed(p) for p in paths]
+    alive = np.ones(n, bool)
+    pos = np.asarray(start[:2], float)
+    out = []
+    for _ in range(n):
+        ds = np.hypot(*(starts - pos).T)
+        de = np.hypot(*(ends - pos).T)
+        ds[~alive] = np.inf
+        de[~alive] = np.inf
+        i = int(np.argmin(np.minimum(ds, de)))
+        p = paths[i][::-1] if de[i] < ds[i] else paths[i]
+        if closed[i]:
+            p = _rotate(p, pos)
+        alive[i] = False
+        out.append(p)
+        pos = p[-1, :2]
+    return out
+
+
+def improve(paths, start=(0, 0), budget=1.0):
+    '''2-opt on an order of paths: shorter travels, within `budget` seconds.'''
+    n = len(paths)
+    if n < 3 or budget <= 0:
+        return paths
+    paths = list(paths)
+    S = np.array([p[0, :2] for p in paths])
+    E = np.array([p[-1, :2] for p in paths])
+    flip = np.zeros(n, bool)
+    home = np.asarray(start[:2], float)
+    dist = lambda a, b: np.hypot(*(a - b).T)
+    deadline = time.monotonic() + budget
+    better = True
+    while better and time.monotonic() < deadline:
+        better = False
+        for i in range(-1, n - 2):
+            # Reverse positions i+1..j: edges (i, i+1) and (j, j+1) become (i, j) and (i+1, j+1)
+            a = home if i < 0 else E[i]
+            js = np.arange(i + 2, n)
+            old = dist(a, S[i + 1]) + np.append(dist(E[js[:-1]], S[js[:-1] + 1]), 0.0)
+            new = dist(a, E[js]) + np.append(dist(S[i + 1], S[js[:-1] + 1]), 0.0)
+            gain = old - new
+            k = int(np.argmax(gain))
+            if gain[k] > 1e-6:
+                j = js[k]
+                seg = slice(i + 1, j + 1)
+                S[seg], E[seg] = E[seg][::-1].copy(), S[seg][::-1].copy()
+                flip[seg] = ~flip[seg][::-1]
+                paths[seg] = paths[seg][::-1]
+                better = True
+            if time.monotonic() > deadline:
+                break
+    out, pos = [], home
+    for p, f in zip(paths, flip):
+        p = p[::-1] if f else p
+        if _closed(p):
+            p = _rotate(p, pos)
+        out.append(p)
+        pos = p[-1, :2]
+    return out
+
+
+def join(paths, tol=0.01, link=0.0):
+    '''Merge paths that start where the one before ends; within `link`, the tool stays
+    down across the gap (too small to see: the ink closes it anyway).'''
+    out = []
+    for p in paths:
+        if out:
+            gap = np.abs(out[-1][-1] - p[0])
+            if np.all(gap <= tol):
+                out[-1] = np.vstack([out[-1], p[1:]])
+                continue
+            if link and np.hypot(*gap[:2]) <= link and gap[2:].max(initial=0) <= tol:
+                out[-1] = np.vstack([out[-1], p])
+                continue
+        out.append(p)
+    return out
+
+
+def length(paths):
+    return float(sum(np.hypot(*np.diff(p[:, :2], axis=0).T).sum() for p in paths))

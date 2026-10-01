@@ -1,0 +1,81 @@
+# Limn: where things are on the bed, how high to travel, and the G-code
+# around a plot. Heights are G-code z with the tool's tag offsets and the mesh
+# applied (_APPLY_OFFSETS): the same z as Z1 for a pen down today.
+name = "limn"
+
+bed = [135, 180]                    # PrusaSlicer's bed_shape
+bed_art = "../../slicer/limn-bed-art-combined.svg"   # under the preview, stretched to the bed
+
+travel_area = [0, 0, 180, 177]      # [stepper_x/y] position_max
+draw_area = [0, 35, 110, 174]       # with no bed: [bed_mesh] mesh_min/max, short of the holders (MARKS_MAX_X)
+# With a bed placed (bed_id, or what Klipper says in the web UI) the draw area
+# is its paper: its `paper_mesh` in `beds`, inside draw_limit, and the plot
+# loads that mesh.
+beds = "../../ext/limn/beds.py"
+bed_id = ""                         # BED_3, BED_5, ..; "" or NONE: no bed
+paper_mesh = "lrt_paper"
+draw_limit = [0, 0, 110, 177]       # short of the holders (MARKS_MAX_X)
+tool_max_dxy = 5                    # the tags' dx/dy (TOOL_MAX_DXY), kept inside travel_area
+
+# Z limits. Every z the plot has is checked against them (and against the
+# tool's own z_min/z_max), a job can override any of them.
+z_min = -2.5        # stepper_z position_min -3, less a tag dz of down to -0.5 (TOOL_DZ)
+z_max = 7           # stepper_z position_max 10, less a tag dz of up to 3
+# The mesh keeps z over the paper, so travels stay low: every mm up is a mm
+# down again at max_z_velocity 5, and z is most of a plot's time.
+z_travel = 2.5      # long travels, over the paper
+z_touch = 1.2       # where a pen whose tag is right first touches: limn_cam ladder writes the tags for it
+safe_z = 5          # off the paper the tool never goes under this: travels leaving it go up first
+hop_distance = 10   # mm, shorter travels hop at the tool's lift (a pen: z_down + hop)
+clearance = 1       # mm over zones and objects when a travel crosses them
+
+feed_travel = 7800
+feed_z = 300        # [printer] max_z_velocity: 5
+accel = 3000
+accel_z = 100       # [printer] max_z_accel, for the estimate
+order_time = 0.25   # s spent shortening the travels, per tool (most of it is in the first 0.25)
+toolchange_time = 30    # s, for the estimate
+
+mesh = ""               # MESH= for _APPLY_OFFSETS with no bed; "" loads the last profile
+park = [42, 123, 7]     # where _APPLY_OFFSETS HOME=1 leaves the head
+moonraker = "http://localhost:7125"     # the web UI uploads and prints here (LIMN_MOONRAKER wins)
+fluidd = ""             # Fluidd and its cameras for the browser (LIMN_FLUIDD wins); "": the printer's host,
+                        # or the page's own when Moonraker is on localhost (the UI on the Pi)
+holders = [41, 42, 43, 44, 45]          # T0, T1, ..: limn.cfg's T0 is DOCK T=41
+
+# {index}: the first tool's number, {tool.call}: its macro (T0 -> DOCK T=41),
+# {mesh}: " MESH=<mesh>" or "".
+start = """
+LAZY_HOME
+PLOT_START EXT={index}
+"""
+tool_begin = """
+_CLEAR_OFFSETS HOME=1
+{tool.call}
+_APPLY_OFFSETS HOME=1{mesh}
+"""
+tool_end = ""
+end = """
+PLOT_END
+"""
+
+# What is on the bed. z: its top, travels that cross it go `clearance` over;
+# no z: keep out, a travel over it is a problem.
+[[zones]]
+name = "tool holders"
+rect = [112, 0, 180, 177]
+
+# [[zones]]
+# name = "bed clip"
+# rect = [0, 170, 20, 177]
+# z = 2.5
+
+# The Z axis's play (GEOMETRY.md): a pen pressed past touch lifts the axis, and
+# only lets go of the paper once it has come back down. After a stroke the pen
+# rises its press, then `clear`, then per_press x press (more far from the
+# screw). `uv run python -m limn_cam play T3` measures it at spots on the sheet
+# and writes plot/profiles/play.toml, which goes over this.
+[play]
+clear = 0.5
+per_press = 1.0     # until it is measured: as much again as the press
+max = 3.0

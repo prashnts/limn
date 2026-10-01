@@ -32,8 +32,10 @@ class Machine:
         return self.toolhead.get_position()[:3]
 
     def move(self, x=None, y=None, z=None, speed=TRAVEL_SPEED):
-        '''Raw machine coordinates, no gcode offsets or mesh.'''
-        self.toolhead.manual_move([x, y, z], speed)
+        '''Raw machine coordinates, no gcode offsets or mesh. Plain floats: the
+        routines compute with numpy, and a numpy float in Klipper's position
+        breaks its status JSON.'''
+        self.toolhead.manual_move([None if v is None else float(v) for v in (x, y, z)], float(speed))
 
     def wait_moves(self):
         self.toolhead.wait_moves()
@@ -46,6 +48,13 @@ class Machine:
             return session.pull_probed_results()[0]
         finally:
             session.end_probe_session()
+
+    def mesh_profile(self, name):
+        '''A bed mesh profile as bed_mesh's status has it, None when there is none.'''
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        if bed_mesh is None:
+            return None
+        return bed_mesh.get_status(self.reactor.monotonic()).get('profiles', {}).get(name)
 
     def probe_offsets(self):
         return self.probe_obj.get_offsets()

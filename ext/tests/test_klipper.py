@@ -1,5 +1,6 @@
 # uv run python ext/tests/test_klipper.py
 # The Klipper side, with stand-ins for Klipper's objects.
+import json
 import os
 import re
 
@@ -58,7 +59,7 @@ class FakeGcmd:
         value = self.get(key, default)
         return None if value is None else int(value)
 
-    def get_float(self, key, default=KeyError):
+    def get_float(self, key, default=KeyError, **limits):
         value = self.get(key, default)
         return None if value is None else float(value)
 
@@ -88,6 +89,9 @@ class FakeGcode:
         self.scripts.append(script)
         if self.on_script:
             self.on_script(script)
+
+    def run_script(self, script):
+        self.scripts.append(script)
 
     def create_gcode_command(self, command, commandline, params):
         return FakeGcmd(self, params)
@@ -146,9 +150,30 @@ class FakeMacro:
 class FakeToolhead:
     def __init__(self):
         self.waits = 0
+        self.moves = []
 
     def wait_moves(self):
         self.waits += 1
+
+    def manual_move(self, coord, speed):
+        self.moves.append((coord, speed))
+
+    def get_last_move_time(self):
+        return 0.0
+
+
+class FakeQueryEndstops:
+    '''Only the tool lock's endstop: triggered with the key fully open.'''
+
+    class Endstop:
+        def __init__(self, triggered):
+            self.triggered = triggered
+
+        def query_endstop(self, print_time):
+            return self.triggered
+
+    def __init__(self, key_open):
+        self.endstops = [(self.Endstop(key_open), 'manual_stepper axis_k')]
 
 
 class FakeConfigfile:
@@ -191,7 +216,8 @@ def test_commands_registered():
     ext, printer = make()
     names = set(printer.objects['gcode'].commands)
     for name in ('LRT_CONNECT', 'LRT_DISCONNECT', 'LRT_READ_BED_ID', 'LRT_MESH_CALIBRATE',
-                 'LRT_CALIBRATE', 'LRT_PROBE_TOOL', 'LRT_CHAIN', 'LRT_DEBUG', 'LRT_FSR_Z', 'LRT_FSR_EDGE'):
+                 'LRT_CALIBRATE', 'LRT_PROBE_TOOL', 'LRT_CHAIN', 'LRT_DEBUG', 'LRT_FSR_Z', 'LRT_FSR_EDGE',
+                 'LRT_FSR_MATRIX', 'LRT_FSR_MEASURE'):
         assert name in names, name
 
 def test_saved_profile_loads():
@@ -218,8 +244,65 @@ def test_dock_lines_reach_the_samples():
     assert ext.get_status(0)['bed'] == 'BED_5'
 
 
-def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0):
+def test_moves_reach_klipper_as_plain_floats():
+    # A numpy float in the toolhead's position breaks Klipper's status JSON (webhooks).
+    import numpy as np
+    from limn.machine import Machine
+    _, printer = make()
+    printer.objects['probe'] = object()
+    toolhead = printer.objects['toolhead']
+    machine = Machine(printer, None)
+    machine.move(*(np.array([111.75, 44.75]) - np.array([-34.34, 25.0])))
+    machine.move(z=np.float64(4.2), speed=np.float64(2))
+    for coord, speed in toolhead.moves:
+        assert all(v is None or type(v) is float for v in coord) and type(speed) is float, (coord, speed)
+    assert toolhead.moves[0][0][2] is None and toolhead.moves[1][0][:2] == [None, None]
+
+
+def test_a_garbled_dock_line_does_not_stop_klipper():
+    # Seen on the printer: a data line whose body was not JSON shut Klipper down
+    # from the Dock's read timer.
     ext, printer = make()
+    ext.dock.handle_line('!LRT>>data>>{"hop": 1, "kind": 4, "state": 43, "val>>')
+    ext.dock.handle_line('!LRT>>data>>[1, 2]>>')
+    ext.dock.on('hello', lambda data: data['nope'])         # a listener that breaks
+    ext.dock.handle_line('!LRT>>hello>>{"hop": 1}>>')
+    ext.dock.handle_line('!LRT>>data>>{"hop": 1, "kind": 4, "state": 43, "values": [[0, 0, 12]]}>>')
+    assert len(ext.samples.recent) == 1 and ext.samples.latest(1, FSR).values == [[0, 0, 12]]
+
+
+def test_fsr_matrix_reports_what_arrives():
+    ext, printer = make()
+    printer.objects['probe'] = object()
+    gcode, reactor = printer.objects['gcode'], printer.reactor
+    ext.dock.request = lambda cmd, kind, timeout=3: ['BED_5', ['BED_5', 22000, 43000, 47500],
+                                                     {'boot': 'b', 'placed': 1, 'powered': True}]
+    sent = []
+    ext.dock.send_to = lambda hop, cmd: sent.append((hop, cmd))
+    cells = [[r, c, 900 if (r, c) == (1, 3) else 5] for r in range(4) for c in range(8)]
+
+    def frame(eventtime):
+        if (1, 'matrix(on)') in sent and (1, 'matrix(off)') not in sent:
+            ext.dock.handle_line('!LRT>>data>>' + json.dumps({'hop': 1, 'kind': 4, 'state': 43, 'values': cells}) + '>>')
+        return eventtime + 0.03
+    reactor.register_timer(frame, 0)
+    gcode.run('LRT_FSR_MATRIX', SECONDS=1)
+    assert sent == [(1, 'matrix(on)'), (1, 'matrix(off)')]
+    line = next(s for s in gcode.said if 'state 43' in s)
+    assert 'hop 1 kind 4 state 43' in line and '32 cells' in line and 'strongest 900' in line, line
+    assert any(s.startswith('[LRT] hop 1 cells: (1, 3)=900, ') for s in gcode.said), gcode.said
+
+    gcode.said.clear()                                      # an array that only sends touches
+    ext.samples = limn.Samples()
+    reactor.unregister_timer(frame)
+    gcode.run('LRT_FSR_MATRIX', SECONDS=0.5)
+    assert any('hop 1: no matrix frames' in s for s in gcode.said) and any('nothing at all' in s for s in gcode.said)
+
+
+def make_with_holder(low=(15, 14, 13, 12, 11), pages=None, carried=0, key_open=None):
+    ext, printer = make()
+    if key_open is not None:
+        printer.objects['query_endstops'] = FakeQueryEndstops(key_open)
     mcp, nfc = FakeMCP23017(low), FakePN532(pages)
     ext._attach_holder(ToolHolder(printer.reactor, FakeBus(mcp, nfc), parse_pins('15:41, 14:42, 13:45, 12:43, 11:44'),
                                   say=printer.objects['gcode'].respond_info))
@@ -326,11 +409,40 @@ def test_tag_write():
     assert 'write failed' in raises(lambda: gcode.run('TOOL_TAG_WRITE', DZ=1))
 
 
+def test_tags_are_kept_by_holder():
+    '''What each holder's tool last read, saved (the web UI takes the pens from it);
+    a hand on a holder makes it stale: another tool may be in it now.'''
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(low=(15, 13, 12, 11), pages=tag_pages(), carried=42)
+    printer.events['klippy:connect']()
+    wait(printer, 1)
+    gcode.run('TOOL_TAG_WRITE', PEN='mic-01', COLOR='1F4AA8', NAME='Micron 01 Blue')
+    t = ext.get_status(0)['tools']['42']
+    assert (t['pen'], t['color'], t['name'], t['dx'], t['stale']) == \
+        ('mic-01', '#1f4aa8', 'Micron 01 Blue', 1.25, False)
+    assert svv['tool_tags']['42']['pen'] == 'mic-01'
+    assert 'mic-01 #1f4aa8' in gcode.said[-1]
+    gcode.run('TOOL_TAGS')
+    assert '42: Micron 01 Blue, mic-01 #1f4aa8' in gcode.said[-1] and '41: not read' in gcode.said[-1]
+    assert 'COLOR' not in raises(lambda: gcode.run('TOOL_TAG_WRITE', PEN='No Spaces'))
+    assert 'rrggbb' in raises(lambda: gcode.run('TOOL_TAG_WRITE', COLOR='blue'))
+    # Back in its holder by hand, and out again: stale
+    mcp.low.add(14)
+    wait(printer, 1)
+    assert ext.get_status(0)['tools']['42']['stale'] and svv['tool_tags']['42']['stale']
+    gcode.run('TOOL_TAGS')
+    assert 'STALE' in gcode.said[-1]
+    # Saved over a restart
+    ext2, printer2, *_ = make_with_holder()
+    printer2.objects['save_variables'].allVariables['tool_tags'] = svv['tool_tags']
+    assert ext2.get_status(0)['tools']['42']['name'] == 'Micron 01 Blue'
+
+
 def test_leds_at_startup():
     ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
     assert lit(leds) == {'holder_41': 'occupied', 'holder_42': 'occupied', 'holder_43': 'occupied',
                          'holder_45': 'occupied', 'holder_44': 'carried', 'ui_tool_44': 'untagged',
                          'ui_alert': 'ok'}
+    assert ext.get_status(0)['leds'] == lit(leds)            # the plot UI's virtual display reads them
 
 def test_leds_drawn_when_holders_settled_during_startup():
     ext, printer, mcp, nfc, gcode, svv = make_with_holder()
@@ -467,6 +579,125 @@ def test_nudge_without_reentering():
     flaky_reader(nfc, gcode, 1)
     gcode.run('TOOL_TAG_READ')
     assert gcode.scripts[-1] == '_RFID_NUDGE ATTEMPT=1 T=0'
+
+
+def _nfc(ext):
+    return ext.holder.nfc.bus.devices[0x24]
+
+def test_hand_scan_names_the_holder_it_goes_into():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    assert any('Scanned Micron Red' in m for m in gcode.said)
+    assert gcode.scripts.count('_BUZZ_RFID_OK') == 1           # once, however long it is held there
+    assert leds['ui_tag'].state == 'scanned'
+    assert ext.get_status(printer.reactor.t)['scan']['name'] == 'Micron Red'
+    nfc.pages = None
+    wait(printer, 2)
+    mcp.low.add(11)                                     # into holder 44 by hand
+    wait(printer, 1)
+    t = ext.get_status(0)['tools']['44']
+    assert (t['name'], t['by'], t['stale'], t['dx']) == ('Micron Red', 'hand', False, 1.25)
+    assert svv['tool_tags']['44']['by'] == 'hand' and '_BUZZ_711' in gcode.scripts
+    assert ext.scan is None and leds['ui_tag'].state == 'taken'
+    # Out again by hand: stale; a dock / undock would not
+    mcp.low.discard(11)
+    wait(printer, 1)
+    assert ext.get_status(0)['tools']['44']['stale']
+
+def test_hand_scan_too_late():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    nfc.pages = None
+    wait(printer, 9)
+    mcp.low.add(11)
+    wait(printer, 1)
+    assert '44' not in ext.get_status(0)['tools']
+    assert any('over 8 s' in m for m in gcode.said) and '_BUZZ_RFID_ERR' in gcode.scripts
+    assert leds['ui_tag'].state == 'late'
+
+def test_hand_scan_two_holders_at_once():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13))
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 2.5)
+    nfc.pages = None
+    mcp.low.update((11, 12))
+    wait(printer, 1)
+    assert '43' not in ext.get_status(0)['tools'] and '44' not in ext.get_status(0)['tools']
+    assert any('which one' in m for m in gcode.said)
+
+def test_carried_tool_at_the_reader_is_no_scan():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12), carried=44)
+    svv['tool_tag_uid'] = '04112233445566'
+    _nfc(ext).pages = tag_pages()
+    wait(printer, 3)
+    assert ext.scan is None and not any('Scanned' in m for m in gcode.said)
+
+def test_listening_only_after_a_hand_when_idle_is_off():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12, 11))
+    ext.scan_idle = 0
+    nfc = _nfc(ext)
+    wait(printer, 3)                                    # an idle listen may be on its way
+    nfc.pages = tag_pages(name='Micron Red')
+    wait(printer, 5)
+    assert ext.scan is None
+    mcp.low.discard(15)                                 # a hand takes 41 out
+    wait(printer, 2)
+    assert leds['ui_tag'].state in ('listening', 'scanned')
+    assert ext.scan and ext.scan['tag'].name == 'Micron Red'
+
+def test_listening_pace():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12, 11))
+    assert ext._scan_gate() == 2.0
+    printer.objects['print_stats'] = type('PS', (), {'get_status': lambda self, t: {'state': 'printing'}})()
+    assert ext._scan_gate() == 5.0
+    ext._wake(printer.reactor.t)
+    assert ext._scan_gate() == 0.5
+    ext.leds.set_phase('engage')                        # a tool change: the carriage may be at the reader
+    assert ext._scan_gate() is None
+
+
+def test_a_pen_left_uncapped_goes_red_and_beeps():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=(15, 14, 13, 12))
+    clock = [1000.0]
+    ext.clock = lambda: clock[0]
+    ext.drying = None
+    import limn as limn_mod
+    assert limn_mod.PENS_FILE.endswith('pens.toml') and ext._pen_dry().get('stb-88') == 240
+    assert 'cam-u20' in ext._pens[2] and 'stb-88' not in ext._pens[2]          # a camera never dries
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Stabilo')
+    wait(printer, 2.5)
+    nfc.pages = None
+    mcp.low.add(11)                                     # scanned, into holder 44: a known pen, uncapped
+    wait(printer, 2)
+    assert ext.get_status(0)['drying']['44']['stage'] == 0 and svv['pen_since'] == {'44': 1000.0}
+    clock[0] += 601                                     # 10 minutes on, nothing printing
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'drying_1' and leds['ui_tool_44'].state == 'drying_1'
+    assert leds['ui_alert'].state == 'drying_1'
+    beeps = [s for s in gcode.scripts if s.startswith('SET_PIN PIN=beeper')]
+    assert beeps and not any(s.startswith('M300') for s in gcode.scripts)      # no dwell, a plot runs on
+    clock[0] += 400
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'drying_3'
+    gcode.run('TOOL_DRY', SILENCE=1)
+    n = len([s for s in gcode.scripts if s.startswith('SET_PIN')])
+    wait(printer, 8)
+    assert len([s for s in gcode.scripts if s.startswith('SET_PIN')]) == n
+    gcode.run('TOOL_DRY', RESET=1, T=44)
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'occupied' and 'uncapped' in ext.get_status(0)['drying']['44']
+    mcp.low.discard(11)                                 # taken out by hand, capped: the clock stops
+    wait(printer, 2)
+    assert '44' in ext.get_status(0)['drying']          # not yet: a dock looks the same for a moment
+    clock[0] += 25
+    wait(printer, 2)
+    assert ext.get_status(0)['drying'] == {} and svv['pen_since'] == {}
 
 
 if __name__ == '__main__':

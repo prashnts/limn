@@ -110,9 +110,14 @@ def test_read_tag():
     assert said == ["[Tag] PN532 firmware 1.6"]
 
 def test_no_tag():
-    reactor, holder, *_ = make(pages=None)
-    assert holder.read_tag() is None
-    assert reactor.t < 0.1
+    # It listens for the whole timeout: a tag that comes into the field late still counts.
+    # 16 activations (0x10) answered "no tag" early and missed tags that were there.
+    reactor, holder, _, nfc, _, _ = make(pages=None)
+    holder.begin_tag_reader()
+    t0 = reactor.t
+    assert holder.read_tag(timeout=0.5) is None
+    assert nfc.retries == 0xFF and nfc.aborted == 1 and 0.4 < reactor.t - t0 < 0.6
+    assert holder.read_tag(timeout=0.5) is None and nfc.aborted == 2      # still talking after the abort
 
 def test_partial_write():
     reactor, holder, _, nfc, _, _ = make(pages=tag_pages())
@@ -131,6 +136,30 @@ def test_reference_flag():
     assert tag.reference and nfc.writes == [9] and (tag.dx, tag.name) == (1.25, 'Fineliner')
     assert holder.write_tag(dz=0.9).reference                # other fields leave it
     assert holder.write_tag(reference=False).reference is False
+
+def test_format_2_pen_and_colour():
+    '''A format 1 tag (offsets, name) reads with no pen and no colour; writing either
+    makes it format 2 and keeps what was there: offsets, name, the reference flag.'''
+    _, holder, _, nfc, _, _ = make(pages=tag_pages(name='Micron 01 Blue'))
+    nfc.pages[10] = b'\x00\x11\x22\x33'                   # an old tag's leftovers: not format 2
+    tag = holder.read_tag()
+    assert (tag.pen, tag.color) == (None, None)
+    tag = holder.write_tag(pen='mic-01', color='#1F4AA8')
+    assert (tag.pen, tag.color, tag.name, tag.dx, tag.reference) == \
+        ('mic-01', '#1f4aa8', 'Micron 01 Blue', 1.25, False)
+    assert nfc.writes[-1] == 10, 'the colour page marks format 2: last, a half written tag stays format 1'
+    assert set(nfc.writes) == {4, 5, 10} and max(nfc.pages) <= 15, 'the smallest tags end at page 15'
+    tag = holder.write_tag(color='#c8102e')                  # the pen stays
+    assert (tag.pen, tag.color) == ('mic-01', '#c8102e')
+    tag = holder.write_tag(pen='stb-88')                 # the colour stays
+    assert (tag.pen, tag.color) == ('stb-88', '#c8102e')
+    assert holder.write_tag(color='').color is None and holder.read_tag().pen == 'stb-88'
+    for bad in (dict(pen='Has Spaces'), dict(pen='x' * 9), dict(color='blue')):
+        try:
+            holder.write_tag(**bad)
+            assert False, bad
+        except ValueError:
+            pass
 
 def test_write_without_tag():
     reactor, holder, *_ = make(pages=None)

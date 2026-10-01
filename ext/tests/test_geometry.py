@@ -8,7 +8,7 @@ import numpy as np
 
 from fakes import run_tests
 from limn import geometry
-from limn.geometry import ProbeValue, FsrArray
+from limn.geometry import ProbeValue, FsrArray, mesh_z
 
 PRINTER_CFG = os.path.join(os.path.dirname(__file__), '..', '..', 'klipper', 'printer.cfg')
 
@@ -87,6 +87,15 @@ def test_fsr_array_along_y():
     assert np.allclose(a.center(1, 3), (111.75, 44.75))
     assert a.cell_at((111.75, 44.75)) == (1, 3)
     assert a.cell_at((111.75, 57)) is None      # 8 cells of 2.5 along y end at 56
+
+
+def test_mesh_z():
+    # bed_mesh keeps its probed points row by row along y
+    profile = {'mesh_params': {'min_x': 0, 'max_x': 10, 'min_y': 0, 'max_y': 20, 'x_count': 3, 'y_count': 2},
+               'points': [[0.0, 1.0, 2.0], [2.0, 3.0, 4.0]]}      # z = 0.2x + 0.1y
+    for x, y in ((0, 0), (10, 20), (2.5, 5), (7.5, 15), (5, 10)):
+        assert abs(mesh_z(profile, x, y) - (0.2 * x + 0.1 * y)) < 1e-9, (x, y)
+    assert mesh_z(profile, -5, 30) == mesh_z(profile, 0, 20)        # clamped to the mesh
 
 
 if __name__ == '__main__':

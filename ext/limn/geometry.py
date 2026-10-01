@@ -87,6 +87,19 @@ def rtp_tool_offsets(samples, ref_samples, ref_z_panel):
     return float(xy[TX]), float(xy[TY]), float(z[TZ])
 
 
+def mesh_z(profile, x, y):
+    '''z of a Klipper bed mesh profile (its `points` and `mesh_params`, as in
+    bed_mesh's status) at (x, y): bilinear between the probed points, clamped
+    to the mesh.'''
+    p = profile['mesh_params']
+    z = np.asarray(profile['points'], dtype=float)         # rows along y
+    fx = np.clip((x - p['min_x']) / (p['max_x'] - p['min_x']), 0, 1) * (p['x_count'] - 1)
+    fy = np.clip((y - p['min_y']) / (p['max_y'] - p['min_y']), 0, 1) * (p['y_count'] - 1)
+    i, j = min(int(fx), p['x_count'] - 2), min(int(fy), p['y_count'] - 2)
+    u, v = fx - i, fy - j
+    return float((1 - v) * ((1 - u) * z[j, i] + u * z[j, i + 1]) + v * ((1 - u) * z[j + 1, i] + u * z[j + 1, i + 1]))
+
+
 # FSR
 class FsrArray:
     '''One 4 x 8 FSR array on the bed. `origin` is the outer corner of cell
@@ -102,8 +115,12 @@ class FsrArray:
         self.rows = rows
         self.cols = cols
 
+    def point(self, row, col):
+        '''Plotter point at fractional (row, col) from the origin, in cells.'''
+        return self.origin + self.pitch * (col * self.col_dir + row * self.row_dir)
+
     def center(self, row, col):
-        return self.origin + self.pitch * ((col + 0.5) * self.col_dir + (row + 0.5) * self.row_dir)
+        return self.point(row + 0.5, col + 0.5)
 
     def cell_at(self, xy):
         '''(row, col) under a plotter point, or None outside the array.'''

@@ -1,7 +1,7 @@
 # uv run python ext/tests/test_marks.py
 # The bed's placement, its meshes and the test marks, over Klipper restarts.
 from fakes import run_tests
-from test_klipper import make, make_with_holder, raises
+from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
 from limn.geometry import gen_mark_grid, mark_strokes
 from limn.beds import BEDS
@@ -102,6 +102,9 @@ class FakeToolhead:
     def get_position(self):
         return list(self.pos)
 
+    def get_last_move_time(self):
+        return 0.0
+
     def wait_moves(self):
         self.waits += 1
 
@@ -183,7 +186,7 @@ class Plotter:
         return any(text in s for s in self.gcode.said)
 
     def pen_downs(self):
-        return [s for s in self.gcode.scripts if s.endswith('ACT1')]
+        return [s for s in self.gcode.scripts if s == f'G1 Z{marks.PEN_Z}']
 
     def restart(self, **kwargs):
         '''Klipper again, with what survives: the saved variables and the meshes.'''
@@ -265,11 +268,20 @@ def test_probe_tool_puts_a_docked_tool_away_to_mesh():
     assert len(p.pen_downs()) == 2
 
 def test_probe_tool_takes_the_only_empty_holder_as_the_carried_tool():
-    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0)   # 42 on, not saved (DOCK_RESET)
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0, key_open=False)   # 42 on, not saved (DOCK_RESET)
     p = Plotter(ext, printer)
     p.run('LRT_PROBE_TOOL')
     assert p.said('taking 42 as the one on the carriage')
     assert p.meshed == ['lrt_paper', 'lrt_panel'] and p.undocked[0] == 42 and p.docked[-1] == 42
+
+def test_an_open_key_carries_nothing_whatever_the_holders_say():
+    # Seen on the printer: holder 45 read empty with its pen put away, the key open.
+    # The guess undocked 45 onto an empty carriage and its holder check stopped it.
+    ext, printer, *_ = make_with_holder(low=(15, 14, 12, 11), carried=0, key_open=True)
+    p = Plotter(ext, printer, bed=reply('BED_5'))
+    p.run('LRT_MESH_CALIBRATE')
+    assert p.meshed and p.undocked == [] and not p.said('taking')
+    assert 'no tool on the carriage' in raises(lambda: p.run('LRT_FSR_Z'))
 
 
 # The bed moved: its z again, and with the reference tool its points too
@@ -348,7 +360,20 @@ def test_mark_travels_high_and_away_from_the_holders():
     (x0, y0, z0), (x1, y1, z1), (x2, y2, z2) = p.toolhead.moves[-3:]
     assert z0 == z1 == z2 == 9                              # up, over the beds
     assert (x1, y1) == (24.0, 3.0) and (x2, y2) == (24.0, 120.0)    # X first, away from the reader
-    assert p.gcode.scripts.index('_APPLY_OFFSETS MESH=lrt_paper') < p.gcode.scripts.index('G1 Z1 ACT1')
+    assert p.gcode.scripts.index('_APPLY_OFFSETS MESH=lrt_paper') < p.gcode.scripts.index('G1 Z1.0')
+
+def test_mark_pen_is_high_off_the_paper():
+    '''Z moves only over the mark, and up to Z7 before anything leaves the paper.'''
+    p = plotter(carried=42)
+    p.run('LRT_PROBE_TOOL')
+    s = p.gcode.scripts
+    a, b = s.index('_APPLY_OFFSETS MESH=lrt_paper'), len(s) - 1 - s[::-1].index('_CLEAR_OFFSETS')
+    mark = s[a + 1:b]
+    assert not any('ACT' in x for x in s)
+    assert mark[0] == f'G1 F{marks.DRAW_FEED}' and mark[1].startswith('G1 X')    # across at Z7 (_APPLY_OFFSETS)
+    assert mark[-1] == 'G1 Z7.0' and mark[-2] == 'G1 Z2.5'
+    zs = [float(x.split('Z')[1]) for x in mark if x.startswith('G1 Z')]
+    assert set(zs) == {1.0, 2.5, 7.0}
 
 def test_no_mark_when_unsafe():
     p = plotter(carried=42, offsets=(0.2, 0.1, 5.0))
@@ -380,8 +405,62 @@ def test_fsr_bltouch_z_puts_the_tool_away():
             assert not p.svv['currently_docked_tool'], 'BLTouch probing with a tool on'
             return 4.2
 
-    assert p.ext._fsr_bed_z(Fsr(), (1, 1, 3)) == 4.2
+    assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
     assert p.gcode.scripts[:2] == ['UNDOCK', 'DOCK T=42'] and p.undocked == [42] and p.docked == [42]
+
+def test_the_sheet_is_wiped_between_pens():
+    p = plotter(carried=42, bed=reply('BED_5'))
+    gcmd = FakeGcmd(p.gcode, {})
+
+    class Fsr:
+        wiped = 0
+        before_measure = after_measure = None
+
+        def wait_clean(self):
+            self.wiped += 1
+
+        def measure(self):
+            self.before_measure()
+            self.after_measure()
+
+    fsr = Fsr()
+    p.ext._fsr_hooks(gcmd, fsr)
+    fsr.measure()                                   # nothing known of the sheet: no wait
+    fsr.measure()                                   # the same pen again: no wait
+    assert fsr.wiped == 0
+    p.svv['currently_docked_tool'] = 43
+    fsr.measure()                                   # another pen: wipe first
+    assert fsr.wiped == 1 and p.said('last had tool 42, now 43')
+    p.svv['currently_docked_tool'] = 44
+    p.ext._fsr_hooks(FakeGcmd(p.gcode, {'CLEAN': 0}), fsr)
+    fsr.measure()                                   # CLEAN=0
+    assert fsr.wiped == 1
+    p.svv['currently_docked_tool'] = 45
+    p.ext.dock.handle_line('!LRT>>bed_removed>>["NONE", null]>>')
+    p.ext._fsr_hooks(gcmd, fsr)
+    fsr.measure()                                   # the bed was off the plotter
+    assert fsr.wiped == 1
+
+def test_fsr_jogs_need_a_tool_on_the_carriage():
+    ext, printer, *_ = make_with_holder(low=(13,), carried=0)              # only 45 home, nothing on
+    p = Plotter(ext, printer, bed=reply('BED_5'))
+    for name in ('LRT_FSR_Z', 'LRT_FSR_EDGE', 'LRT_FSR_MEASURE'):
+        assert 'no tool on the carriage' in raises(lambda: p.run(name))
+    assert p.toolhead.moves == [] and 'UNDOCK' not in p.gcode.scripts
+
+def test_fsr_bltouch_z_puts_away_a_tool_not_saved_as_carried():
+    # Over the array the BLTouch puts the carriage in the lane of holder 41: a pen
+    # on it that the variables missed (DOCK_RESET) would run into the holders.
+    ext, printer, *_ = make_with_holder(low=(15, 13, 12, 11), carried=0, key_open=False)   # 42 on, not saved
+    p = Plotter(ext, printer)
+
+    class Fsr:
+        def bltouch_z(self, cell):
+            assert not p.svv['currently_docked_tool'], 'BLTouch probing with a tool on'
+            return 4.2
+
+    assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
+    assert p.said('taking 42 as the one on the carriage') and p.undocked == [42] and p.docked == [42]
 
 
 if __name__ == '__main__':
