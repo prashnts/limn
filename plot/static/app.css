@@ -178,7 +178,7 @@ h3 { font-size: 12px; margin: 12px 0 6px; }
 .obj path { vector-effect: none; }
 .obj .hit { fill: transparent; stroke: none; }
 .painting .obj { cursor: crosshair; }
-.painting .obj path.shape:hover { filter: drop-shadow(0 0 .8px var(--accent)); }
+.painting .obj path.shape.hot { filter: drop-shadow(0 0 1px var(--accent)) drop-shadow(0 0 1px var(--accent)); }
 .obj.dim { opacity: .35; }
 .frame { fill: none; stroke: var(--accent); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .handle { fill: var(--panel); stroke: var(--accent); stroke-width: 1.5px; vector-effect: non-scaling-stroke; cursor: nwse-resize; }
@@ -248,6 +248,10 @@ button.danger { color: var(--bad); border-color: var(--bad); margin-left: auto; 
 /* The Scan tab */
 .form.scan .region { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; }
 .form.scan .region input { width: 100%; padding: 2px 4px; }
+.form.scan .film { display: flex; gap: 4px; align-items: center; }
+.form.scan .film select { flex: 1; min-width: 0; }
+.form.scan .film input { width: 4.5em; padding: 2px 4px; }
+.form.scan .film .note { margin: 0; }
 .form.scan input[type=number], .form.scan select { width: 100%; }
 .buttons.wrap { flex-wrap: wrap; }
 .job { margin: 8px 0 4px; font-size: 12px; }
@@ -275,3 +279,13 @@ img.last { width: 100%; margin-top: 6px; border-radius: var(--radius); cursor: z
 .stitching { align-self: center; }
 h2 .check.small { float: right; text-transform: none; letter-spacing: 0; font-size: 11px; }
 .swatch.cam { border: none; color: var(--accent); font-size: 13px; line-height: 14px; text-align: center; }
+
+/* Checking a region's corners: 2 x 2 shots, the region's edges over them */
+.viewer .corners { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+.viewer .corner { position: relative; overflow: hidden; background: #000; border-radius: var(--radius); }
+.viewer .corner img { position: absolute; left: 50%; top: 50%; }
+.viewer .corner svg { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.viewer .corner svg .out { fill: rgb(0 0 0 / 0.45); }
+.viewer .corner svg line { stroke: var(--accent); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.viewer .corner .note { position: absolute; left: 6px; bottom: 4px; margin: 0; color: #fff; text-shadow: 0 0 3px #000; pointer-events: none; }
+.captures .icon.ok { color: var(--ok, #2a9d4b); }

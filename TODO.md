@@ -3,6 +3,8 @@
 ## plot/
 
 - Fixes in the G-code generation (details to come, 2026-09-30).
+- Painting (fixed 2026-10-01): clicks on thin lines missed (a stroke is drawn as wide as the SVG has it, often under a pixel). Shapes are now picked within 6 px, hover shows which, a miss says so. Paths view: only the G-code, the drawing as a faint outline with *drawing*.
+- [ ] Cutting a shape's outline to paint its pieces with different tools: plot/cuts.py (pieces, nearest, keys "k@t") and its tests are in; still to do: `Obj.cuts` + `ShapePaint.segments` in job.py, the slicer drawing each piece with its own group, `/api/objects/{id}/cut`, the Cut tool (C) and segment painting in app.js, UI tests.
 - Text: fixes, and a way to see that a path is far too small for text, eg. a warning in the preview when glyphs come out smaller than the pen can draw.
 - Pen-down: `z_touch - press` (1.2 less 0.15 for fineliners, 0.3 for the Stabilo 88), lifts by the press, `play.clear` and the play (`plot/profiles/play.toml`). The old "pens press too hard" was stale tags: done (`notebooks/act-7-camera-ladder.md`). To watch: touch moved by ~0.2mm from one sheet to the next (the Staedtler and the Stabilo both touched 0.2 low on sheet 2). Either a quick ladder per sheet, or `z_touch` per sheet/mesh.
 
@@ -16,6 +18,14 @@
 
 ## Scan (the camera tool, limn_cam/scan.py, the Scan tab)
 
+- Done 2026-10-01: scans live in RAM (/dev/shm/limn-captures, LIMN_CAPTURES, 2 GB at most, the oldest go): the SD card is spared, a reboot loses them. Kept on the NAS: an S3 bucket (OMV's S3/MinIO; limn_cam/nas.py signs its own requests, no boto3), settings in plot-data/nas.json (owner only), ⇪ per capture or *upload each scan when done*.
+- Done 2026-10-01: Hugin stitching (limn_cam/hugin.py, the viewer's *Hugin*): features on contrast-stretched copies, matches that disagree left out (halftone repeats), the camera's real scale and turn measured from all pairs, then the tiles only slide (+ lens barrel), seams by enblend: no ghosts. Sticker: 0.31 px rms, tiles 0.32 mm from where sent. Needs `sudo apt install hugin-tools enblend` on the Pi.
+- Done 2026-10-01: the region for film: presets (35 mm, 120 6x4.5-6x9, 4x5, mounts) with a margin, drag/resize on the bed, arrows nudge, Z zooms to it, *Check corners* (4 shots, click the film's edge to set the region there, 0.05 mm).
+- [ ] The camera's scale: Hugin measured 119.9 px/mm on the sticker (fov 16.02 x 9.01, turn -179.38) and 116.5 on the whole bed, against pens.toml's 125.9 (15.25 x 8.58, -179.2, before the tube was lengthened). Scan something of known size (a ruler, a printed grid) and set fov from it; the sticker sits a little higher than the paper.
+- [ ] The new light (2026-10-01) flickers: horizontal bands every 137 px, 2.5-14 grey levels deep (the camera's own light: ~1). Run it at full power or on DC/constant current, or set the camera's exposure to a whole number of the flicker's periods (v4l2: exposure_time_absolute, crowsnest v4l2ctl). Check with a Look on plain paper: no bands.
+- [ ] Flat field from a shot of plain paper with the new light (the median of a scan's own tiles leaves blotches on colourful work).
+- [ ] The Pi runs the old plot code (its UI on :4219 didn't answer 2026-10-01): pull, `uv sync`, restart limn_web.
+
 - The camera (holder 41, `cam-u20`, tethered, U20CAM on `/webcam/`, crowsnest `[cam usbcam]`) works in machine Z: `clear_z` 7.5, `z_min` 4 (a guess after the tube was lengthened: measure how low it may go, then lower `z_min` in pens.toml).
 - Done 2026-09-30: focus Z9.2 (above home; a flat peak 9.0-9.4), one shot 15.25 x 8.58 mm (125.9 px/mm), turn -179.2 (upside down, 0.8 degree askew), all in pens.toml. A 20-tile scan of a sticker stitched well (`~/limn-shot/captures/20260930-233601/stitch-126.jpg`, 5240 x 4241): registered on the overlaps, the light's fall-off divided out.
 - [ ] The camera's centre against the tool point (`center` in pens.toml, 0 now): look at crosses a pen drew at known places (`cross_centre`, `px_to_mm` in limn_cam/scan.py). Until then a scan pinned "under the plot" can sit a few mm off.
@@ -26,6 +36,15 @@
 - [ ] Resume a scan cut short from the web tool (the job skipping the tiles it has).
 - [ ] Focus stacking for film; refocus per tile tried only in tests.
 - Film scanning: the backlit bed, stitched tiles, `refocus` for curled film.
+
+## The web UI: keeping it maintainable (2026-10-01 discussion)
+
+Plain HTML/JS with no build step was right while it was small: nothing to install on the Pi, the server serves files as they are. At ~1,900 lines of JS (app.js 1,400, in shared globals) it is at the point where it needs some structure, but not a framework with a build.
+- **Done: browser tests** (plot/tests/test_ui.py, Playwright, Firefox; `uv run --group ui pytest plot/tests/test_ui.py`): painting, the Paths view, corners, region, film presets, Hugin. The paint bug shipped because nothing clicked through the UI; this is the safety net that makes the rest possible.
+- [ ] **ES modules, no bundler**: `<script type="module">`, one module per panel (plot canvas, paint, output, tools, pens, scan, nas) and a small `state.js` (S, api, store) instead of globals. Browsers load them as they are: still no build, still nothing on the Pi.
+- [ ] **Types without TypeScript files**: `// @ts-check` + JSDoc on the modules, checked with `tsc --noEmit` on the laptop only (dev). It catches the wrong field names that are most of the bugs here.
+- When the panels' state gets hard to follow (the redraw rules in fill()/quietly()): Preact + htm (or Lit) vendored as one file in static/, still no build. Not before the modules: most of the pain is globals, not rendering.
+- Not: React/Vite/npm on the Pi. A build step would be the thing that breaks after a `git pull` on the plotter.
 
 ## ext/, klipper/
 

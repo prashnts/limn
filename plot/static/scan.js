@@ -5,11 +5,13 @@
 // It uses app.js's globals: S, api, fill, quietly, svgEl, worldPt, $, $$ ..
 'use strict';
 
-let C = null;                   // /api/camera: settings, cameras, job, captures
+let C = null;                   // /api/camera: settings, cameras, job, captures, store
+let N = null;                   // /api/nas: settings (the secret only as whether there is one), uploads
 let smode = 'region';           // region | pan | look | focus
 let sdrag = null;               // a region being drawn
 let viewing = null;             // {meta, info, view: 'stitch'|'tiles'|file, ppm}
 let camTimer = null;
+let openWhenDone = false;       // the corners being checked: open them when they are in
 
 const scanTab = () => document.body.classList.contains('tab-scan');
 
@@ -32,15 +34,19 @@ $('#ribbon').addEventListener('click', (e) => {
 // --- state from the server ------------------------------------------------------------
 async function loadCamera(background = false) {
   try {
-    C = await api('GET', '/api/camera');
+    [C, N] = await Promise.all([api('GET', '/api/camera'), api('GET', '/api/nas')]);
   } catch {
     return;
   }
-  const draw = () => { renderCamera(); renderJob(); renderCaptures(); };
+  const draw = () => { renderCamera(); renderJob(); renderCaptures(); renderNas(); };
+  if (openWhenDone && C.job && C.job.done) {
+    openWhenDone = false;
+    if (!C.job.error && C.job.scan) openCapture(C.job.scan, 'corners');
+  }
   background ? quietly(draw) : draw();
   drawScanLayer();
   clearTimeout(camTimer);
-  const busy = C.job && !C.job.done;
+  const busy = (C.job && !C.job.done) || Object.values(N.uploads).some((u) => !u.done);
   if (scanTab()) camTimer = setTimeout(() => loadCamera(true), busy ? 1000 : 5000);
 }
 async function patchScan(body) {
@@ -75,6 +81,21 @@ function scanTiles() {
 }
 
 // --- the camera panel ------------------------------------------------------------------
+// Film formats, mm (the frame, or the sheet): offered both ways round
+const FILM = [['35 mm frame', 36, 24], ['35 mm frame with sprockets', 38, 35], ['35 mm strip of 4', 152, 35],
+  ['120 6×4.5', 56, 41.5], ['120 6×6', 56, 56], ['120 6×7', 56, 69.5], ['120 6×9', 56, 84],
+  ['4×5 in sheet', 102, 127], ['Slide mount', 50, 50]];
+function setRegion(r, zoomTo = false) {
+  const q = (v) => +v.toFixed(2);
+  return patchScan({ region: r.map(q) }).then(() => { if (zoomTo) fitRegion(); });
+}
+function fitRegion() {
+  const r = C && C.settings.region;
+  if (!r) return;
+  const pad = Math.max(3, (r[2] - r[0] + r[3] - r[1]) * 0.08);
+  vb = { x: r[0] - pad, y: -r[3] - pad, w: r[2] - r[0] + 2 * pad, h: r[3] - r[1] + 2 * pad };
+  applyVb();
+}
 const fld = (k, label, value, attrs, help) => `<label for="s-${k}" title="${esc(help)}">${label}</label>
   <input id="s-${k}" data-s="${k}" type="number" value="${value ?? ''}" ${attrs} title="${esc(help)}">`;
 function renderCamera() {
@@ -104,13 +125,23 @@ function renderCamera() {
     <select id="s-tool" data-s="tool" title="Which camera tool takes the shots">${cams.map((t) => opt(t.id, c.id, `${t.id} ${t.name}`)).join('')}</select>
     <label title="What one shot covers at its focus height (fov in pens.toml)">One shot</label>
     <div class="mono note" title="What one shot covers at its focus height (fov in pens.toml)">${num(fx, 1)} × ${num(fy, 1)} mm</div>
-    <label title="The region to scan, mm: drag on the bed with the Region tool (R), or type it">Region</label>
+    <label title="The region to scan, mm: drag on the bed with the Region tool (R), move or resize it there, or type it">Region</label>
     <div class="row region" title="From x, y to x, y (mm)">
-      <input data-s="r0" type="number" step="0.5" value="${num(r[0], 1)}" title="Region: from X (mm)">
-      <input data-s="r1" type="number" step="0.5" value="${num(r[1], 1)}" title="Region: from Y (mm)">
-      <input data-s="r2" type="number" step="0.5" value="${num(r[2], 1)}" title="Region: to X (mm)">
-      <input data-s="r3" type="number" step="0.5" value="${num(r[3], 1)}" title="Region: to Y (mm)">
+      <input data-s="r0" type="number" step="0.05" value="${num(r[0], 2)}" title="Region: from X (mm)">
+      <input data-s="r1" type="number" step="0.05" value="${num(r[1], 2)}" title="Region: from Y (mm)">
+      <input data-s="r2" type="number" step="0.05" value="${num(r[2], 2)}" title="Region: to X (mm)">
+      <input data-s="r3" type="number" step="0.05" value="${num(r[3], 2)}" title="Region: to Y (mm)">
     </div>
+    <label for="s-film" title="A region the size of a film format, around the middle of the one there is (or of the paper), with the margin all round">Film</label>
+    <div class="row film">
+      <select id="s-film" title="A region the size of a film format, around the middle of the one there is">
+        <option value="">size of…</option>${FILM.map(([name, w, h]) => [[w, h], ...(w !== h ? [[h, w]] : [])].map(([a, b]) =>
+          `<option value="${a}x${b}">${esc(name)} · ${num(a, 1)} × ${num(b, 1)}</option>`).join('')).join('')}
+      </select>
+      <input id="s-margin" type="number" step="0.5" min="0" value="${num(store.get('filmMargin', 1.5), 1)}" title="Margin all round the format, mm: the frame's edges stay inside">
+      <span class="note">mm</span>
+    </div>
+    <label></label><div class="note">${r[0] !== '' ? `${num(r[2] - r[0], 2)} × ${num(r[3] - r[1], 2)} mm · ` : ''}drag it on the bed, arrows nudge it (Shift ×10, Alt ×0.1), Z zooms to it; Check corners to set its edges on the film</div>
     <label title="Heights are the machine's own Z (no mesh, no tag offset): home is Z8">Clear at</label>
     <div class="note" title="It moves sideways only this high or higher, clear of everything raised on the bed (clear_z in pens.toml); it goes down only over the spot it shoots">Z ${num(c.clear_z, 2)} · lowest Z ${num(lo, 2)}</div>
     ${fld('z', 'Focus z', num(s.z, 2), `step="0.05" min="${lo}" max="${hi}" placeholder="${num(c.focus_z, 2)}"`,
@@ -130,6 +161,13 @@ function renderCamera() {
 }
 $('#camera').addEventListener('change', async (e) => {
   const t = e.target, k = t.dataset.s;
+  if (t.id === 's-margin') { store.set('filmMargin', +t.value || 0); return; }
+  if (t.id === 's-film' && t.value) {
+    const [w, h] = t.value.split('x').map(Number), m = +$('#s-margin').value || 0;
+    const r = C.settings.region, da = S.machine.draw_area;
+    const [cx, cy] = r ? [(r[0] + r[2]) / 2, (r[1] + r[3]) / 2] : [(da[0] + da[2]) / 2, (da[1] + da[3]) / 2];
+    return setRegion([cx - w / 2 - m, cy - h / 2 - m, cx + w / 2 + m, cy + h / 2 + m], true);
+  }
   if (!k) return;
   const s = C.settings, v = t.value === '' ? null : +t.value;
   if (k === 'tool') return patchScan({ tool: t.value });
@@ -185,6 +223,7 @@ function renderJob() {
     <div class="buttons wrap">
       <button data-act="look" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="One shot at the middle of the region, at the focus z (or click the bed with Look, L)">Look</button>
       <button data-act="focus" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Sweep z at the middle of the region and find where it is sharpest (or click the bed with Focus, K)">Find focus</button>
+      <button data-act="corners" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="A shot on each corner of the region: see where its edges fall on what is there, and click to set them (4 shots)">Check corners</button>
       <button data-act="scan" class="primary" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Take every tile of the region: it picks up the camera first if it isn't on the carriage">Scan region</button>
       <button data-act="stop" ${busy ? '' : 'disabled'} title="Stop after the shot it is taking">Stop</button>
       <button data-act="park" ${busy || !has ? 'disabled' : ''} title="Put the camera back in its holder">Put away</button>
@@ -207,6 +246,7 @@ $('#camera-job').addEventListener('click', async (e) => {
   }
   if (act === 'look') await api('POST', '/api/camera/look', { ...mid, z: focusZ() });
   if (act === 'focus') await api('POST', '/api/camera/focus', mid);
+  if (act === 'corners') { await api('POST', '/api/camera/corners'); openWhenDone = true; }
   if (act === 'scan') {
     const n = scanTiles().length;
     if (!confirm(`Scan the region: ${n} shot${n > 1 ? 's' : ''} at z ${num(focusZ(), 2)}?`)) return;
@@ -215,20 +255,65 @@ $('#camera-job').addEventListener('click', async (e) => {
   loadCamera();
 });
 
+// --- the NAS: an S3 bucket the scans go up to (limn_cam/nas.py) ------------------------
+function renderNas() {
+  if (!N) return;
+  const s = N.settings;
+  const f = (k, label, title, attrs = '') => `<label for="n-${k}" title="${title}">${label}</label>
+    <input id="n-${k}" data-n="${k}" value="${esc(s[k] ?? '')}" title="${title}" ${attrs}>`;
+  fill($('#nas'), `
+    ${f('endpoint', 'Endpoint', 'The S3 server, eg. https://nas.local:9000 (OpenMediaVault S3, MinIO)', 'placeholder="https://nas.local:9000"')}
+    ${f('bucket', 'Bucket', 'The bucket the scans go into')}
+    ${f('prefix', 'Folder', 'Inside the bucket: each scan goes to <folder>/<scan id>/')}
+    ${f('access_key', 'Access key', 'The S3 access key', 'autocomplete="off"')}
+    <label for="n-secret_key" title="The S3 secret key: kept on the server (nas.json, its owner only), never shown again">Secret key</label>
+    <input id="n-secret_key" data-n="secret_key" type="password" autocomplete="new-password" placeholder="${s.secret_key ? 'kept: type to change' : ''}"
+      title="The S3 secret key: kept on the server (nas.json, its owner only), never shown again">
+    ${f('region', 'Region', 'MinIO takes any; AWS wants the bucket\'s region')}
+    <label></label><label class="check" title="Upload every scan when it is done, and its Hugin stitch when that is made"><input type="checkbox" data-n="auto"${s.auto ? ' checked' : ''}> upload each scan when done</label>
+    <label></label><div class="buttons"><button data-act="nas-check" ${s.ready ? '' : 'disabled'} title="Write a small file into the bucket: that these settings work">Check</button>
+      <span class="note">${s.ready ? '' : 'needs an endpoint, a bucket and both keys'}</span></div>`);
+}
+$('#nas').addEventListener('change', async (e) => {
+  const k = e.target.dataset.n;
+  if (!k) return;
+  N = await api('PUT', '/api/nas', { [k]: k === 'auto' ? e.target.checked : e.target.value.trim() });
+  renderNas(); renderCaptures();
+});
+$('#nas').addEventListener('click', async (e) => {
+  if (e.target.dataset.act !== 'nas-check') return;
+  const r = await api('POST', '/api/nas/check');
+  toast(`The NAS took ${r.key}`);
+});
+
 // --- captures: the list and the viewer ---------------------------------------------------
 const when = (id) => id.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2}).*/, '$3.$2. $4:$5');
-const kinds = { scan: '▦', focus: '◎', look: '◉' };
+const kinds = { scan: '▦', focus: '◎', look: '◉', corners: '⌜' };
+function upState(c) {
+  const u = N && N.uploads[c.id];
+  if (u && !u.done) return `<span class="icon note" title="Uploading: ${u.i} of ${u.n} files">⇪ ${u.n ? Math.round(100 * u.i / u.n) : 0}%</span>`;
+  if (u && u.error) return `<button class="icon bad" data-up="${esc(c.id)}" title="The upload failed: ${esc(u.error)}. Click to try again">⚠</button>`;
+  if (c.uploaded === 'all') return '<span class="icon ok" title="On the NAS, every file">☁</span>';
+  if (!N || !N.settings.ready) return '';
+  return `<button class="icon" data-up="${esc(c.id)}" title="${c.uploaded ? 'Some of it is on the NAS: upload the rest' : 'Upload it to the NAS'}">⇪</button>`;
+}
 function renderCaptures() {
   if (!C) return;
+  const st = C.store, note = $('#store-note');
+  note.hidden = !st || !st.volatile;
+  if (st) note.textContent = `In the Pi's memory (${num(st.mb, 0)} of ${num(st.max_mb, 0)} MB, the oldest go first): gone after a reboot. ${N && N.settings.ready ? 'Upload what to keep (⇪).' : 'Set up the NAS to keep them.'}`;
   fill($('#captures'), C.captures.map((c) => `
     <li data-id="${esc(c.id)}" class="${viewing && viewing.meta.id === c.id ? 'on' : ''}" title="${esc(c.kind)} ${esc(c.id)}: ${c.count} shot${c.count === 1 ? '' : 's'}${c.region ? ` over ${c.region.map((v) => num(v, 1)).join(', ')}` : ''}${c.error ? ` (${c.error})` : ''}">
       <span class="kind">${kinds[c.kind] || '·'}</span>
       <span class="name">${esc(when(c.id))} <span class="note">${esc(c.kind)} · ${c.count}${c.done ? '' : ' …'}</span></span>
+      ${upState(c)}
       <a class="icon" href="/api/captures/${encodeURIComponent(c.id)}/zip" title="Download all its shots (zip)">⤓</a>
       <button class="icon" data-del="${esc(c.id)}" title="Delete it from the server">✕</button>
     </li>`).join('') || '<li class="note">Nothing yet: look, focus or scan with the camera tool.</li>');
 }
 $('#captures').addEventListener('click', async (e) => {
+  const up = e.target.dataset.up;
+  if (up) { await api('POST', `/api/captures/${encodeURIComponent(up)}/upload`); return loadCamera(); }
   const del = e.target.dataset.del;
   if (del) {
     if (!confirm(`Delete ${del} from the server?`)) return;
@@ -258,7 +343,8 @@ const PPMS = [12, 25, 50, 80];
 async function openCapture(id, view) {
   const c = (C.captures || []).find((x) => x.id === id);
   const k = await capture(id, c ? c.count : -1);
-  viewing = { meta: k.meta, info: k.info, view: view || (k.meta.kind === 'scan' && k.meta.tiles.length > 1 ? 'stitch' : 'tiles'),
+  viewing = { meta: k.meta, info: k.info,
+              view: view || (k.meta.kind === 'corners' ? 'corners' : k.meta.kind === 'scan' && k.meta.tiles.length > 1 ? 'stitch' : 'tiles'),
               ppm: store.get('stitchPpm', 25) };
   renderViewer(); renderCaptures(); drawScanLayer();
 }
@@ -293,6 +379,10 @@ async function renderViewer() {
       <img class="big" src="/api/captures/${id}/stitch?px_per_mm=${ppm}&t=${tiles.length}" alt="stitched"
         onload="document.getElementById('v-wait').remove()" onerror="document.getElementById('v-wait').textContent='could not stitch it'"
         title="The tiles joined where their overlaps agree (registered), the seams faded">`;
+  } else if (view === 'corners') {
+    body = cornersBody(m, id);
+  } else if (view === 'hugin') {
+    body = await huginBody(m, id, tiles);
   } else if (view === 'tiles') {
     body = `<div class="grid-tiles">${tiles.map((t) => `<img data-file="${esc(t.file)}" loading="lazy" src="/api/captures/${id}/thumb/${encodeURIComponent(t.file)}"
       title="${esc(t.file)}: X ${num(t.x, 2)} Y ${num(t.y, 2)} z ${num(t.z, 2)}. Click for the full photo">`).join('')}</div>`;
@@ -305,7 +395,9 @@ async function renderViewer() {
   fill(V, `<div class="vbar">
       <b title="${esc(m.kind)} taken ${esc(m.id)}">${esc(when(m.id))} · ${esc(m.kind)}</b>
       <div class="seg small">
-        ${m.kind === 'scan' ? `<button data-view="stitch" class="${view === 'stitch' ? 'on' : ''}" title="All tiles as one picture: registered on their overlaps, seams faded">Stitched</button>` : ''}
+        ${m.kind === 'scan' ? `<button data-view="stitch" class="${view === 'stitch' ? 'on' : ''}" title="All tiles as one picture, quickly: registered on their overlaps, seams faded">Quick</button>
+          <button data-view="hugin" class="${view === 'hugin' ? 'on' : ''}" title="Stitched by Hugin: features matched across the overlaps, the camera's scale measured, the lens corrected, seams laid where they show least. For film: the precise one">Hugin</button>` : ''}
+        ${m.kind === 'corners' ? `<button data-view="corners" class="${view === 'corners' ? 'on' : ''}" title="The region's corners on what is there: click a shot to put that corner there">Corners</button>` : ''}
         <button data-view="tiles" class="${view === 'tiles' || view.endsWith('.jpg') ? 'on' : ''}" title="Every shot on its own">Tiles</button>
       </div>
       ${m.kind === 'scan' ? `<button data-act="pin" class="${pinned ? 'primary' : ''}" title="Show this scan under the drawings on the Plot tab, where it was taken: place a plot on what is on the bed">${pinned ? '✓ under the plot' : 'Under the plot'}</button>` : ''}
@@ -314,8 +406,81 @@ async function renderViewer() {
       <button data-act="close" title="Close (Esc)">✕</button>
     </div><div class="vbody">${body}</div>`);
 }
-$('#viewer').addEventListener('click', (e) => {
+// The region's corners on what is there: each shot upright, centred where the camera
+// was sent, the region's edges drawn through it and its outside shaded. A click
+// puts that corner (its two edges) there: on a film frame's edge, to the 0.05 mm.
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
+function cornersBody(m, id) {
+  const r = (C && C.settings.region) || m.region, turn = m.turn || 0, [fw, fh] = m.fov, [fx, fy] = footprint(m.fov, turn);
+  const cell = (n) => {
+    const t = m.tiles.find((x) => x.corner === n);
+    if (!t) return '<div class="corner"></div>';
+    const ex = (n[1] === 'l' ? r[0] : r[2]) - t.x, ey = (n[0] === 't' ? r[3] : r[1]) - t.y;   // the edges from its middle, mm
+    const ox = n[1] === 'l' ? [-fx / 2, ex] : [ex, fx / 2];           // outside the region, svg units (mm, y down)
+    const oy = n[0] === 't' ? [-fy / 2, -ey] : [-ey, fy / 2];
+    const shade = (x0, x1, y0, y1) => x1 > x0 && y1 > y0 ? `<rect class="out" x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}"/>` : '';
+    return `<div class="corner" style="aspect-ratio:${fx} / ${fy}">
+      <img src="/api/captures/${id}/file/${encodeURIComponent(t.file)}" alt="${n}"
+        style="width:${fw / fx * 100}%;height:${fh / fy * 100}%;transform:translate(-50%,-50%) rotate(${-turn}deg)">
+      <svg viewBox="${-fx / 2} ${-fy / 2} ${fx} ${fy}" data-corner="${n}" preserveAspectRatio="none">
+        ${shade(ox[0], ox[1], -fy / 2, fy / 2)}${shade(n[1] === 'l' ? ex : -fx / 2, n[1] === 'l' ? fx / 2 : ex, oy[0], oy[1])}
+        <line x1="${ex}" x2="${ex}" y1="${-fy / 2}" y2="${fy / 2}"/><line x1="${-fx / 2}" x2="${fx / 2}" y1="${-ey}" y2="${-ey}"/>
+      </svg>
+      <span class="note mono">${n.toUpperCase()} · X ${num(n[1] === 'l' ? r[0] : r[2], 2)} Y ${num(n[0] === 't' ? r[3] : r[1], 2)}</span></div>`;
+  };
+  return `<p class="note">The region's edges on what the camera saw at each corner (shaded: outside). Click where a corner should be,
+      eg. just outside the film's frame: that corner's two edges go there. Then scan.</p>
+    <div class="corners">${CORNERS.map(cell).join('')}</div>`;
+}
+async function setCorner(n, svgEl_, e) {
+  const t = viewing.meta.tiles.find((x) => x.corner === n);
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svgEl_.getScreenCTM().inverse());
+  const X = +(t.x + p.x).toFixed(2), Y = +(t.y - p.y).toFixed(2);
+  const r = [...C.settings.region];
+  r[n[1] === 'l' ? 0 : 2] = X;
+  r[n[0] === 't' ? 3 : 1] = Y;
+  if (r[2] - r[0] < 1 || r[3] - r[1] < 1) return toast('That would leave no region', true);
+  await patchScan({ region: r });
+  renderViewer();
+}
+
+let hugTimer = null;
+async function huginBody(m, id, tiles) {
+  clearTimeout(hugTimer);
+  const ppm = viewing.ppm, native = (viewing.info && viewing.info.native_ppm) || 126;
+  const opts = [...PPMS, Math.round(native)].map((v) => `<option value="${v}"${v === ppm ? ' selected' : ''}>${v === Math.round(native) ? `${v} px/mm (full)` : `${v} px/mm`}</option>`).join('');
+  const st = await api('GET', `/api/captures/${id}/hugin/status?px_per_mm=${ppm}`);
+  const bar = (extra) => `<div class="row stitchbar"><select id="v-ppm" title="Resolution of the stitch">${opts}</select>${extra}</div>`;
+  if (st.missing.length) return bar(`<span class="note">Hugin isn't installed on the server: <code>sudo apt install hugin-tools enblend</code></span>`);
+  const j = st.job;
+  if (j && !j.done) {
+    hugTimer = setTimeout(() => { if (viewing && viewing.view === 'hugin') renderViewer(); }, 1500);
+    return bar(`<span class="note">stitching with Hugin… ${esc(j.log[j.log.length - 1] || '')}</span>`);
+  }
+  if (!st.info) {
+    return bar(`<button data-act="hugin" class="primary" title="Stitch with Hugin at this resolution: a few seconds for a small region, a minute or two for the whole bed">Stitch with Hugin</button>
+      ${j && j.error ? `<span class="bad">⚠ ${esc(j.error)}</span>` : `<span class="note">${tiles.length} tiles</span>`}`);
+  }
+  const i = st.info, c = i.camera;
+  const scale = Math.abs(c.fov[0] - m.fov[0]) / m.fov[0] > 0.01
+    ? ` · the camera measured ${num(c.px_per_mm, 1)} px/mm, fov ${num(c.fov[0], 2)} × ${num(c.fov[1], 2)} mm, turn ${num(c.turn, 2)}° (pens.toml: ${num(m.fov[0], 2)} × ${num(m.fov[1], 2)}, ${num(m.turn, 1)}°)` : '';
+  const warn = [i.unmatched.length ? `${i.unmatched.length} tile${i.unmatched.length > 1 ? 's' : ''} matched nothing (placed where sent)` : '',
+    i.far.length ? `${i.far.length} landed over ${1.5} mm from where sent` : ''].filter(Boolean).join(' · ');
+  return bar(`<span class="note">${i.width} × ${i.height} px · ${i.kept} matches over ${i.pairs} overlaps, ${num(i.rms_px, 2)} px apart (rms) · tiles moved up to ${num(i.moved_max, 2)} mm${esc(scale)}</span>
+      ${warn ? `<span class="bad">⚠ ${esc(warn)}</span>` : ''}
+      <a class="button" href="/api/captures/${id}/hugin?px_per_mm=${ppm}&download=1" title="Download the stitch (JPEG)">⤓ stitched</a>
+      <a class="button" href="/api/captures/${id}/file/hugin.pto?download=1" title="The Hugin project: open it next to the tiles (unzip them) to fine-tune">⤓ .pto</a>`)
+    + `<img class="big" src="/api/captures/${id}/hugin?px_per_mm=${ppm}&t=${i.width}" alt="stitched by Hugin">`;
+}
+
+$('#viewer').addEventListener('click', async (e) => {
   const t = e.target;
+  const cs = t.closest && t.closest('svg[data-corner]');
+  if (cs) return setCorner(cs.dataset.corner, cs, e);
+  if (t.dataset.act === 'hugin') {
+    await api('POST', `/api/captures/${encodeURIComponent(viewing.meta.id)}/hugin?px_per_mm=${viewing.ppm}`);
+    return renderViewer();
+  }
   if (t.dataset.view) { viewing.view = t.dataset.view; return renderViewer(); }
   if (t.dataset.file) { viewing.view = t.dataset.file; return renderViewer(); }
   if (t.dataset.act === 'close') return closeViewer();
@@ -372,8 +537,7 @@ function drawScanLayer() {
       if (img) svgEl('title', {}, img).textContent = `${c.kind} ${c.id}`;
     }
   }
-  const r = sdrag ? [Math.min(sdrag.a.x, sdrag.b.x), Math.min(sdrag.a.y, sdrag.b.y), Math.max(sdrag.a.x, sdrag.b.x), Math.max(sdrag.a.y, sdrag.b.y)]
-    : C.settings.region;
+  const r = sdrag ? dragRegion(sdrag) : C.settings.region;
   if (r) {
     const c = cam();
     if (c && !sdrag) {
@@ -414,7 +578,8 @@ svg.addEventListener('pointerdown', async (e) => {
   e.preventDefault();
   const p = worldPt(e);
   if (smode === 'region') {
-    sdrag = { a: p, b: p };
+    const grab = regionGrab(p);
+    sdrag = grab ? { ...grab, a: p, b: p, r: [...C.settings.region] } : { a: p, b: p };
     try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
     return drawScanLayer();
   }
@@ -429,21 +594,53 @@ svg.addEventListener('pointerdown', async (e) => {
   }
   loadCamera();
 }, true);
+// The region on the bed: drag an edge or a corner to resize it, inside to move it,
+// outside to draw a new one
+function regionGrab(p) {
+  const r = C && C.settings.region;
+  if (!r) return null;
+  const tol = 6 * mmPerPx();
+  const inY = p.y > r[1] - tol && p.y < r[3] + tol, inX = p.x > r[0] - tol && p.x < r[2] + tol;
+  const edges = {
+    l: inY && Math.abs(p.x - r[0]) < tol, r: inY && Math.abs(p.x - r[2]) < tol,
+    b: inX && Math.abs(p.y - r[1]) < tol, t: inX && Math.abs(p.y - r[3]) < tol };
+  if (edges.l || edges.r || edges.t || edges.b) return { kind: 'edges', edges };
+  if (p.x > r[0] && p.x < r[2] && p.y > r[1] && p.y < r[3]) return { kind: 'move' };
+  return null;
+}
+function dragRegion(d) {
+  if (!d.kind) return [Math.min(d.a.x, d.b.x), Math.min(d.a.y, d.b.y), Math.max(d.a.x, d.b.x), Math.max(d.a.y, d.b.y)];
+  const dx = d.b.x - d.a.x, dy = d.b.y - d.a.y, r = [...d.r];
+  if (d.kind === 'move') return [r[0] + dx, r[1] + dy, r[2] + dx, r[3] + dy];
+  if (d.edges.l) r[0] += dx;
+  if (d.edges.r) r[2] += dx;
+  if (d.edges.b) r[1] += dy;
+  if (d.edges.t) r[3] += dy;
+  return [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])];
+}
+const GRAB_CURSOR = { l: 'ew-resize', r: 'ew-resize', t: 'ns-resize', b: 'ns-resize', lt: 'nwse-resize', rb: 'nwse-resize', rt: 'nesw-resize', lb: 'nesw-resize' };
 svg.addEventListener('pointermove', (e) => {
-  if (!sdrag) return;
+  if (!sdrag) {
+    if (scanTab() && smode === 'region' && C) {
+      const g = regionGrab(worldPt(e));
+      svg.style.cursor = !g ? '' : g.kind === 'move' ? 'move' : GRAB_CURSOR[Object.keys(g.edges).filter((k) => g.edges[k]).join('')] || 'move';
+    }
+    return;
+  }
   sdrag.b = worldPt(e);
   drawScanLayer();
-  hint(`${num(Math.abs(sdrag.b.x - sdrag.a.x), 1)} × ${num(Math.abs(sdrag.b.y - sdrag.a.y), 1)} mm`);
+  const r = dragRegion(sdrag);
+  hint(`${num(r[2] - r[0], 2)} × ${num(r[3] - r[1], 2)} mm · from ${num(r[0], 2)}, ${num(r[1], 2)}`);
 });
 svg.addEventListener('pointerup', async () => {
   const d = sdrag;
   if (!d) return;
   sdrag = null;
   hint('');
-  const snap = (v) => Math.round(v * 2) / 2;
-  const r = [snap(Math.min(d.a.x, d.b.x)), snap(Math.min(d.a.y, d.b.y)), snap(Math.max(d.a.x, d.b.x)), snap(Math.max(d.a.y, d.b.y))];
+  const snap = (v) => Math.round(v * 20) / 20;           // 0.05 mm
+  const r = dragRegion(d).map(snap);
   if (r[2] - r[0] < 1 || r[3] - r[1] < 1) return drawScanLayer();
-  await patchScan({ region: r });
+  await setRegion(r);
 });
 
 function setSmode(m) {
@@ -457,6 +654,7 @@ $('#scan-rail').addEventListener('click', (e) => {
   if (!b) return;
   if (b.dataset.smode) setSmode(b.dataset.smode);
   if (b.dataset.sact === 'fit') fit();
+  if (b.dataset.sact === 'region') fitRegion();
 });
 
 // Keys on the Scan tab (app.js asks first): true when taken
@@ -467,6 +665,14 @@ window.scanKey = (e) => {
   if (viewing && typeof viewing.view === 'string' && viewing.view.endsWith('.jpg') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
     return stepTile(e.key === 'ArrowLeft' ? -1 : 1);
   }
+  const r = C && C.settings.region;
+  const arrows = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, 1], arrowdown: [0, -1] };
+  if (r && !viewing && arrows[key]) {
+    const k = e.shiftKey ? 10 : e.altKey ? 0.1 : 1, [dx, dy] = arrows[key];
+    setRegion([r[0] + dx * k, r[1] + dy * k, r[2] + dx * k, r[3] + dy * k]);
+    return true;
+  }
+  if (key === 'z') { fitRegion(); return true; }
   const modes = { r: 'region', h: 'pan', l: 'look', k: 'focus' };
   if (modes[key]) { setSmode(modes[key]); return true; }
   if (key === 'f') { fit(); return true; }

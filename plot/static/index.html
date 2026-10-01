@@ -19,6 +19,7 @@
     <button data-view="paths" title="The G-code read back: what the plotter will draw, and its travels">Paths</button>
   </div>
   <label class="check plot-only" title="Show the travel moves (pen up) in the Paths view"><input type="checkbox" id="show-travel" checked> travel</label>
+  <label class="check plot-only" title="Show the drawings' outlines, faint, under the paths in the Paths view"><input type="checkbox" id="show-drawing"> drawing</label>
   <label class="check" title="Show the bed's artwork under the drawing, as a guide"><input type="checkbox" id="show-art" checked> bed art</label>
   <label class="check plot-only" id="under-toggle" hidden title="Show the scan pinned with 'Under the plot' (Scan tab) under the drawings, where it was taken: place drawings on what is on the bed"><input type="checkbox" id="show-under" checked> scan</label>
   <label class="check" title="The paper's colour on the canvas, whatever the theme"><input type="color" id="paper-color" value="#ffffff"> paper</label>
@@ -32,6 +33,7 @@
     <section class="scan-only">
       <h2 title="Photos taken with the camera tool, kept on the server (the newest 30). Click one to see it">Captures
         <label class="check small" title="Show the newest captures on the bed, where they were taken"><input type="checkbox" id="shots-on-bed" checked> on the bed</label></h2>
+      <p id="store-note" class="note" hidden></p>
       <ul id="captures" class="list captures"></ul>
     </section>
     <section class="plot-only">
@@ -50,7 +52,7 @@
     <div class="ruler-corner"></div>
     <div id="cursor" class="cursor mono"></div>
     <nav id="scan-rail" class="rail scan-only" aria-label="Scan tools">
-      <button data-smode="region" class="on" title="Region (R): drag on the bed to mark what to scan">
+      <button data-smode="region" class="on" title="Region (R): drag on the bed to mark what to scan; drag its edges to resize it, inside it to move it">
         <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-dasharray="3 2"/></svg></button>
       <button data-smode="pan" title="Pan (H, or hold Space)">
         <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
@@ -59,6 +61,7 @@
       <button data-smode="focus" title="Focus (F): click on the bed to sweep the height there and find where it is sharpest">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg></button>
       <hr>
+      <button data-sact="region" title="Zoom to the region (Z)"><svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z" stroke-dasharray="3 2"/><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg></button>
       <button data-sact="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
     </nav>
     <nav id="rail" class="rail plot-only" aria-label="Tools">
@@ -108,6 +111,10 @@
     <section class="scan-only">
       <h2 title="What the camera is doing, and its last shot">Shots</h2>
       <div id="camera-job"></div>
+    </section>
+    <section class="scan-only">
+      <h2 title="Scans live in the Pi's memory: upload them to an S3 bucket (the NAS) to keep them">NAS</h2>
+      <div id="nas" class="form"></div>
     </section>
     <section class="plot-only">
       <h2 title="Paint shapes of the selected drawing with a tool, or mask or skip them">Paint</h2>
