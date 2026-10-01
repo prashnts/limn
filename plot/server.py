@@ -189,7 +189,7 @@ def create_app(data=None):
     def index():
         # Each script and stylesheet by its version: a browser never runs an old one with a new page
         html = (STATIC / 'index.html').read_text()
-        for name in ('app.js', 'scan.js', 'cams.js', 'app.css'):
+        for name in ('app.js', 'zoom.js', 'scan.js', 'cams.js', 'app.css'):
             html = html.replace(f'/static/{name}"', f'/static/{name}?v={int((STATIC / name).stat().st_mtime)}"')
         return HTMLResponse(html, headers={'Cache-Control': 'no-cache'})
 

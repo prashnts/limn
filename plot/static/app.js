@@ -24,6 +24,12 @@ let preview = null;
 let gcodeLines = null;
 let vb = null;                  // viewBox, svg user units (x, -y)
 const openOpts = new Set();     // colour rows with their options open
+const hiddenObjs = new Set(store.get('hiddenObjs', []));   // drawings not shown (they still plot)
+function setHidden(id, hide) {
+  hide ? hiddenObjs.add(id) : hiddenObjs.delete(id);
+  store.set('hiddenObjs', [...hiddenObjs]);
+  renderObjectList(); renderObjects();
+}
 
 // --- server ---------------------------------------------------------------
 async function api(method, url, body) {
@@ -204,10 +210,36 @@ function zoom(k, at) {
   vb = { x: c.x - (c.x - vb.x) * k, y: c.y - (c.y - vb.y) * k, w: vb.w * k, h: vb.h * k };
   applyVb();
 }
+// A mouse wheel zooms. A trackpad: two fingers pan, a pinch zooms (the browser sends
+// it as a wheel with ctrlKey; Safari as gesture events). They differ in their deltas:
+// a wheel steps in lines, or in whole notches of 50 px or more, and never sideways.
+let trackpadUntil = 0;              // a swipe's momentum goes on in big steps: still the trackpad
+function isWheel(e) {
+  if (Date.now() < trackpadUntil) return false;
+  const notch = e.deltaMode !== 0 || (e.deltaX === 0 && Math.abs(e.deltaY) >= 50 && Number.isInteger(e.deltaY));
+  if (!notch) trackpadUntil = Date.now() + 400;
+  return notch;
+}
+function panBy(dx, dy) {
+  const r = svg.getBoundingClientRect(), k = Math.max(vb.w / r.width, vb.h / r.height);
+  vb = { ...vb, x: vb.x + dx * k, y: vb.y + dy * k };
+  applyVb();
+}
 svg.addEventListener('wheel', (e) => {
   e.preventDefault();
-  zoom(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), userPt(e));
+  if (e.ctrlKey) return zoom(Math.exp(e.deltaY * 0.01), userPt(e));                 // a pinch (or Ctrl+wheel)
+  if (isWheel(e)) return zoom(Math.exp(e.deltaY * 0.0015), userPt(e));
+  const px = e.deltaMode === 1 ? 16 : 1;
+  panBy(e.deltaX * px, e.deltaY * px);
 }, { passive: false });
+let gestureScale = 1;               // Safari: a pinch comes as gesture events
+svg.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureScale = 1; });
+svg.addEventListener('gesturechange', (e) => {
+  e.preventDefault();
+  zoom(gestureScale / e.scale, userPt(e));
+  gestureScale = e.scale;
+});
+svg.addEventListener('contextmenu', (e) => e.preventDefault());       // the right button pans
 
 let spaceDown = false;
 let mode = 'select';    // select | pan | paint
@@ -265,7 +297,7 @@ svg.addEventListener('pointerdown', (e) => {
     if (shape || g) return;
   }
   const capture = () => { try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ } };
-  if (e.button === 1 || spaceDown || mode === 'pan' || (e.button === 0 && !g && !handle)) {
+  if (e.button === 1 || e.button === 2 || spaceDown || mode === 'pan' || (e.button === 0 && !g && !handle)) {
     // Empty canvas: pan; a click without moving deselects
     drag = { kind: 'pan', cx: e.clientX, cy: e.clientY, vb: { ...vb }, click: e.button === 0 && !g && !handle && mode === 'select' };
     svg.classList.add('panning');
@@ -379,7 +411,7 @@ function drawHandles() {
   const L = $('#overlay-layer');
   L.innerHTML = '';
   const o = sel && obj(sel);
-  if (!o || !info(o.id) || mode === 'paint') return;
+  if (!o || !info(o.id) || mode === 'paint' || hiddenObjs.has(o.id)) return;
   const [w0, h0] = info(o.id).size;
   const k = drag && drag.kind === 'scale' && drag.id === o.id ? drag.k : 1;
   const w = w0 * k, h = h0 * k, pl = o.placement;
@@ -553,6 +585,7 @@ async function drawObjects() {
     }
     placeObject(o);
     styleObject(o, g, data);
+    g.style.display = hiddenObjs.has(o.id) ? 'none' : '';
   }
   drawHandles();
   drawRulers();
@@ -694,16 +727,22 @@ function toolOptions(g) {
 const opt = (v, cur, label) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label ?? v)}</option>`;
 
 function renderObjectList() {
+  const ids = new Set(S.job.objects.map((o) => o.id));
+  for (const id of hiddenObjs) if (!ids.has(id)) hiddenObjs.delete(id);
+  const hidden = S.job.objects.filter((o) => hiddenObjs.has(o.id)).length;
   fill($('#objects'), S.job.objects.map((o) => `
-    <li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}">
+    <li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}${hiddenObjs.has(o.id) ? ' hidden' : ''}">
+      <button class="icon eye" data-act="eye" title="${hiddenObjs.has(o.id) ? 'Hidden: show it' : 'Hide it (only from view: it still plots)'}">${hiddenObjs.has(o.id) ? '◌' : '◉'}</button>
       <span class="name">${esc(o.id)}</span>
       <button class="icon" data-act="dup" title="Duplicate">⧉</button>
       <button class="icon" data-act="del" title="Remove">✕</button>
-    </li>`).join(''));
+    </li>`).join('') + (hidden ? `<li class="note">${hidden} hidden from view: ${hidden > 1 ? 'they still plot' : 'it still plots'} (Skip its colours not to)</li>` : ''));
 }
 $('#objects').addEventListener('click', async (e) => {
   const li = e.target.closest('li'); if (!li) return;
   const id = li.dataset.id, act = e.target.dataset.act;
+  if (!id) return;
+  if (act === 'eye') return setHidden(id, !hiddenObjs.has(id));
   if (act === 'del') {
     if (confirm(`Remove ${id} from the bed?`)) setState(await api('DELETE', `/api/objects/${id}`));
   } else if (act === 'dup') {

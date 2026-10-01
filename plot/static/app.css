@@ -300,3 +300,14 @@ h2 .check.small { float: right; text-transform: none; letter-spacing: 0; font-si
 .cams img.live { max-width: 100%; max-height: 100%; object-fit: contain; }
 .cams.big img.live { width: 100%; height: 100%; }
 .cams iframe { width: 100%; height: 360px; border: 0; }
+.list li.hidden .name { color: var(--muted); font-style: italic; }
+.list li .eye { color: var(--accent); }
+.list li.hidden .eye { color: var(--muted); }
+
+/* Pictures that zoom (zoom.js): the scan viewer */
+.viewer .zoombox { position: relative; overflow: hidden; touch-action: none; cursor: zoom-in; }
+.viewer .vbody > .zoombox { width: 100%; flex: 1 1 auto; min-height: 240px; }
+.viewer .zoombox.zoomed { cursor: grab; }
+.viewer .zoombox > img.big { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
+.viewer .corner .zin { position: absolute; inset: 0; }
+.zoombadge { position: absolute; right: 6px; top: 4px; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; pointer-events: none; }
