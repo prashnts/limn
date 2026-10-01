@@ -187,15 +187,28 @@ function extent() {
   const [tx0, ty0, tx1, ty1] = m.travel_area;
   return [Math.min(0, tx0), Math.min(0, ty0), Math.max(m.bed[0], tx1), Math.max(m.bed[1], ty1)];
 }
+// The canvas fills the page; panels float over it. Fitting puts what is fitted in the
+// space between them: --dock-l, --dock-r, --top (panels.js), the rulers, the scrubber.
+function freeArea() {
+  const r = svg.getBoundingClientRect(), cs = getComputedStyle(document.documentElement);
+  const v = (k, d) => parseFloat(cs.getPropertyValue(k)) || d;
+  const ruler = parseFloat(getComputedStyle($('#stage')).getPropertyValue('--ruler')) || 20;
+  return { r, l: v('--dock-l', 0) + ruler + 14, rt: v('--dock-r', 0) + 14, t: v('--top', 0) + ruler + 14, b: 64 };
+}
+function fitTo(x0, y0, x1, y1) {
+  const { r, l, rt, t, b } = freeArea();
+  const fw = Math.max(r.width - l - rt, 80), fh = Math.max(r.height - t - b, 80);
+  const k = Math.max((x1 - x0) / fw, (y1 - y0) / fh);              // mm a pixel
+  vb = { x: x0 - (l + (fw - (x1 - x0) / k) / 2) * k, y: -y1 - (t + (fh - (y1 - y0) / k) / 2) * k, w: r.width * k, h: r.height * k };
+  applyVb();
+}
 function fit() {
   const [x0, y0, x1, y1] = extent();
-  const pad = 6;
-  vb = { x: x0 - pad, y: -y1 - pad, w: x1 - x0 + 2 * pad, h: y1 - y0 + 2 * pad };
-  applyVb();
+  fitTo(x0 - 4, y0 - 4, x1 + 4, y1 + 4);
 }
 function applyVb() {
   svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
-  requestAnimationFrame(() => { drawRulers(); drawHandles(); });
+  requestAnimationFrame(() => { drawRulers(); drawHandles(); if (typeof drawHead === 'function') drawHead(); });
 }
 function userPt(e) {
   const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
@@ -241,6 +254,40 @@ svg.addEventListener('gesturechange', (e) => {
 });
 svg.addEventListener('contextmenu', (e) => e.preventDefault());       // the right button pans
 
+// Two fingers on a touch screen: pinch to zoom, move to pan (before anything else
+// takes the pointer: a second finger ends what the first one started)
+const touches = new Map();
+let pinch = null;
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+svg.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size !== 2) return;
+  const [a, b] = [...touches.values()];
+  pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, m: mid(a, b), vb: { ...vb } };
+  drag = null;
+  if (typeof sdrag !== 'undefined') sdrag = null;
+  svg.classList.remove('panning');
+  e.stopImmediatePropagation();
+}, true);
+svg.addEventListener('pointermove', (e) => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch || touches.size !== 2) return;
+  e.stopImmediatePropagation();
+  const [a, b] = [...touches.values()], m = mid(a, b), r = svg.getBoundingClientRect();
+  const s0 = pinch.vb.w / r.width, s1 = s0 * pinch.d / (Math.hypot(a.x - b.x, a.y - b.y) || 1);
+  const ux = pinch.vb.x + (pinch.m.x - r.left) * s0, uy = pinch.vb.y + (pinch.m.y - r.top) * s0;    // under the fingers at the start
+  vb = { x: ux - (m.x - r.left) * s1, y: uy - (m.y - r.top) * s1, w: r.width * s1, h: r.height * s1 };
+  applyVb();
+}, true);
+for (const type of ['pointerup', 'pointercancel']) {
+  svg.addEventListener(type, (e) => {
+    touches.delete(e.pointerId);
+    if (touches.size < 2 && pinch) { pinch = null; e.stopImmediatePropagation(); }
+  }, true);
+}
+
 let spaceDown = false;
 let mode = 'select';    // select | pan | paint
 let drag = null;        // {kind: 'pan'|'move'|'scale'|'rotate', ...}
@@ -266,17 +313,25 @@ function setMode(m) {
 
 // The shape under the pointer, or the nearest within PICK px: a stroke is drawn as
 // wide as its SVG has it, often under a pixel, and only what is painted takes a click.
+// So when nothing is right under it, every shape is asked again with an invisible
+// stroke 2 PICK px wide (.picking, never painted: it is gone before the next frame).
+// Never through a panel lying over the canvas.
 const PICK = 6;
-const PICK_AT = [[0, 0]];
-for (let r = 1.5; r <= PICK; r += 1.5) for (let k = 0; k < 8; k++) PICK_AT.push([r * Math.cos(k * Math.PI / 4), r * Math.sin(k * Math.PI / 4)]);
 function pickShape(e) {
-  for (const [dx, dy] of PICK_AT) {
-    for (const el of document.elementsFromPoint(e.clientX + dx, e.clientY + dy)) {
-      if (el.matches('#design-layer path.shape')) return el;
-      if (el === svg) break;
-    }
+  const layer = $('#design-layer');
+  const at = () => {
+    const stack = document.elementsFromPoint(e.clientX, e.clientY);
+    if (!stack.length || !svg.contains(stack[0])) return null;
+    return stack.find((el) => el.matches('#design-layer path.shape')) || null;
+  };
+  let el = at();
+  if (!el) {
+    layer.style.setProperty('--pickw', `${2 * PICK}px`);
+    layer.classList.add('picking');
+    el = at();
+    layer.classList.remove('picking');
   }
-  return null;
+  return el;
 }
 let hot = null, hoverAt = null;
 function setHot(el) {
@@ -433,7 +488,6 @@ let cursor = null;
 function drawRulers() {
   const ctm = world.getScreenCTM();
   if (!ctm || !S) return;
-  const box = $('#stage').getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const style = getComputedStyle(document.documentElement);
   const ink = style.getPropertyValue('--muted').trim(), accent = style.getPropertyValue('--accent').trim();
@@ -450,6 +504,7 @@ function drawRulers() {
   }
   for (const axis of ['x', 'y']) {
     const cv = $(axis === 'x' ? '#ruler-x' : '#ruler-y');
+    const box = cv.getBoundingClientRect();          // the rulers sit between the panels
     const W = cv.clientWidth, H = cv.clientHeight;
     cv.width = W * dpr; cv.height = H * dpr;
     const g = cv.getContext('2d');
@@ -793,7 +848,7 @@ function renderObjectPanel() {
   }).join('');
   const painted = Object.keys(o.shapes).length;
   fill(P, `
-    <h2>${esc(o.id)}</h2>
+    <h3 class="objname">${esc(o.id)}</h3>
     <div class="form">
       <label for="f-x">X</label><div class="row"><input id="f-x" type="number" step="0.5" value="${num(o.placement.x)}"> <label for="f-y">Y</label><input id="f-y" type="number" step="0.5" value="${num(o.placement.y)}"></div>
       <label for="f-r">Rotate</label><div class="row"><input id="f-r" type="number" step="15" value="${num(o.placement.rotate)}"> <button data-act="rot90" title="R">⟲ 90°</button></div>
@@ -945,6 +1000,17 @@ function renderOutput() {
 
 const MACHINE_FIELDS = [['z_touch', 'z touch'], ['z_min', 'z min'], ['z_max', 'z max'], ['z_travel', 'z travel'], ['hop_distance', 'hop under'],
   ['clearance', 'clearance'], ['feed_travel', 'travel F'], ['order_time', 'order s']];
+// Rarely needed fields fold away: <details> that remember whether they were open
+function more(key, label, inner, n) {
+  const open = store.get('more:' + key, false);
+  return `<details class="more full" data-more="${key}"${open ? ' open' : ''}><summary>${esc(label)}${n ? ` <span class="note">${n}</span>` : ''}</summary>
+    <div class="form">${inner}</div></details>`;
+}
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d.matches && d.matches('details[data-more]')) store.set('more:' + d.dataset.more, d.open);
+}, true);
+
 function renderMachine() {
   const m = S.machine, over = S.job.machine_overrides;
   const beds = Object.keys(S.beds);
@@ -955,7 +1021,12 @@ function renderMachine() {
     <label></label><label class="check"><input type="checkbox" id="m-follow"${follow ? ' checked' : ''}> follow Klipper</label>
     <label>Paper</label><div class="mono">${m.draw_area.map((v) => num(v, 1)).join(', ')}</div>
     <label>Mesh</label><div class="mono">${esc(m.mesh || '(last loaded)')}</div>
-    ${MACHINE_FIELDS.map(([k, l]) => `<label for="m-${k}">${l}</label><div class="row"><input id="m-${k}" data-k="${k}" type="number" step="0.1" value="${num(m[k])}"${k in over ? ' class="changed"' : ''}>${k in over ? ` <button class="icon" data-reset="${k}" title="Back to the profile">↺</button>` : ''}</div>`).join('')}`);
+    ${MACHINE_FIELDS.filter(([k]) => k === 'z_touch' || k in over).map(field).join('')}
+    ${more('machine', 'More settings', MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).map(field).join(''),
+      MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).length)}`);
+  function field([k, l]) {
+    return `<label for="m-${k}">${l}</label><div class="row"><input id="m-${k}" data-k="${k}" type="number" step="0.1" value="${num(m[k])}"${k in over ? ' class="changed"' : ''}>${k in over ? ` <button class="icon" data-reset="${k}" title="Back to the profile">↺</button>` : ''}</div>`;
+  }
 }
 $('#machine').addEventListener('change', async (e) => {
   const t = e.target;

@@ -189,7 +189,7 @@ def create_app(data=None):
     def index():
         # Each script and stylesheet by its version: a browser never runs an old one with a new page
         html = (STATIC / 'index.html').read_text()
-        for name in ('app.js', 'zoom.js', 'scan.js', 'cams.js', 'app.css'):
+        for name in ('app.js', 'zoom.js', 'scan.js', 'cams.js', 'head.js', 'leds.js', 'panels.js', 'app.css'):
             html = html.replace(f'/static/{name}"', f'/static/{name}?v={int((STATIC / name).stat().st_mtime)}"')
         return HTMLResponse(html, headers={'Cache-Control': 'no-cache'})
 
@@ -437,6 +437,55 @@ def create_app(data=None):
                     ws.fetch_tags()
         threading.Thread(target=go, daemon=True).start()
         return {'job': job}
+
+    @app.get('/api/printer/position')
+    def printer_position():
+        '''Where the head is, often (the canvas shows it): Klipper's live position (the
+        tool point with no tool offset, moving or not), and where the carried tool's
+        tip is (that less the G-code offset: its tag's dx, dy).'''
+        url = moonraker()
+        try:
+            r = requests.get(f'{url}/printer/objects/query',
+                             params={'motion_report': 'live_position', 'toolhead': 'position,homed_axes',
+                                     'gcode_move': 'homing_origin'}, timeout=2)
+            r.raise_for_status()
+            st = r.json()['result']['status']
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+        live = (st.get('motion_report') or {}).get('live_position') or (st.get('toolhead') or {}).get('position')
+        off = (st.get('gcode_move') or {}).get('homing_origin') or [0, 0, 0, 0]
+        homed = (st.get('toolhead') or {}).get('homed_axes') or ''
+        if not live or 'x' not in homed or 'y' not in homed:
+            return {'ok': True, 'homed': homed, 'head': None}
+        return {'ok': True, 'homed': homed, 'head': [round(live[0], 3), round(live[1], 3), round(live[2], 3)],
+                'tip': [round(live[0] - off[0], 3), round(live[1] - off[1], 3)], 'offset': [round(v, 3) for v in off[:3]]}
+
+    @app.get('/api/printer/leds')
+    def printer_leds():
+        '''What the LEDs show now: the UI matrix (neopixel picam, 8 x 4, 1 the top left,
+        row by row) and the dock strip (indockator), as 0-1 RGB, and the states the
+        limn extension set (ext/limn/leds.py), when its Klipper is new enough.'''
+        url = moonraker()
+        try:
+            r = requests.get(f'{url}/printer/objects/query',
+                             params={'neopixel picam': 'color_data', 'neopixel indockator': 'color_data', 'limn': 'leds'},
+                             timeout=2)
+            r.raise_for_status()
+            st = r.json()['result']['status']
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+        rgb = lambda name: [[round(c, 3) for c in px[:3]] for px in (st.get(name) or {}).get('color_data') or []]
+        return {'ok': True, 'ui': rgb('neopixel picam'), 'dock': rgb('neopixel indockator'),
+                'states': (st.get('limn') or {}).get('leds')}
+
+    @app.get('/api/toolhead.svg')
+    def toolhead_svg():
+        '''The toolhead from above (mm, the tool point at the origin): the workspace's
+        toolhead.svg if there is one, else plot/profiles/toolhead.svg.'''
+        p = ws.data / 'toolhead.svg'
+        if not p.exists():
+            p = Path(profile.PROFILES) / 'toolhead.svg'
+        return FileResponse(p, media_type='image/svg+xml', headers={'Cache-Control': 'no-cache'})
 
     @app.get('/api/webcams')
     def webcams():

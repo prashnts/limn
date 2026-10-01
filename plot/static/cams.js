@@ -40,7 +40,6 @@ async function showCams(name) {
       <span class="grow"></span>
       <a class="button" href="${esc(camUrl(cur.snapshot_url))}" target="_blank" title="One still picture, in a new tab">snapshot ↗</a>
       <a class="button" href="${esc(camUrl(cur.stream_url))}" target="_blank" title="The stream on its own, in a new tab">open ↗</a>
-      <button data-act="cams-size" title="Bigger or smaller">⤢</button>
       <button data-act="cams-close" title="Close (the stream stops)">✕</button>
     </div>
     <div class="vbody">${live ? `<img class="live" src="${esc(camUrl(cur.stream_url))}" alt="${esc(cur.name)}" style="transform:${t}"
@@ -57,7 +56,6 @@ $('#cams').addEventListener('click', (e) => {
   if (!t) return;
   if (t.dataset.cam) showCams(t.dataset.cam);
   if (t.dataset.act === 'cams-close') hideCams();
-  if (t.dataset.act === 'cams-size') $('#cams').classList.toggle('big');
 });
 $('#cams-button').addEventListener('click', () => ($('#cams').hidden ? showCams() : hideCams()));
 loadWebcams();

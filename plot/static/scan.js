@@ -93,8 +93,7 @@ function fitRegion() {
   const r = C && C.settings.region;
   if (!r) return;
   const pad = Math.max(3, (r[2] - r[0] + r[3] - r[1]) * 0.08);
-  vb = { x: r[0] - pad, y: -r[3] - pad, w: r[2] - r[0] + 2 * pad, h: r[3] - r[1] + 2 * pad };
-  applyVb();
+  fitTo(r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad);
 }
 const fld = (k, label, value, attrs, help) => `<label for="s-${k}" title="${esc(help)}">${label}</label>
   <input id="s-${k}" data-s="${k}" type="number" value="${value ?? ''}" ${attrs} title="${esc(help)}">`;
@@ -146,6 +145,7 @@ function renderCamera() {
     <div class="note" title="It moves sideways only this high or higher, clear of everything raised on the bed (clear_z in pens.toml); it goes down only over the spot it shoots">Z ${num(c.clear_z, 2)} · lowest Z ${num(lo, 2)}</div>
     ${fld('z', 'Focus z', num(s.z, 2), `step="0.05" min="${lo}" max="${hi}" placeholder="${num(c.focus_z, 2)}"`,
       `Machine Z of the camera when shooting: where it is sharpest. Empty: the camera's own (${num(c.focus_z, 2)}). Find it with Focus (K) on the bed. From ${lo} (its z_min) to ${hi}`)}
+    ${more('camera', 'More: overlap, refocus, settle, sweep, flicker', `
     ${fld('overlap', 'Overlap %', num(s.overlap * 100, 0), 'step="5" min="0" max="80"', 'How much of a shot the next one shares: more for stitching, less for fewer shots')}
     ${fld('refocus', 'Refocus ±', num(s.refocus, 2), 'step="0.05" min="0"', 'mm up and down around the focus z at every tile, keeping the sharpest shot: for film or paper that curls. 0: off (quicker)')}
     ${fld('refocus_step', 'its step', num(s.refocus_step, 2), 'step="0.05" min="0.05"', 'Steps of that refocus sweep, mm')}
@@ -163,6 +163,7 @@ function renderCamera() {
       <span class="note">frames</span>
     </div>
     <label></label><label class="check" title="Stay at the shooting z between tiles instead of lifting to the clear height: quicker, only for a flat region with nothing raised in it"><input type="checkbox" data-s="low"${s.low ? ' checked' : ''}> stay low between tiles</label>
+`)}
     <label></label><div class="note">${n ? `${n} shot${n > 1 ? 's' : ''}, about ${Math.ceil(n * per / 60)} min` : 'Draw a region on the bed (R)'}</div>`);
 }
 $('#camera').addEventListener('change', async (e) => {

@@ -311,3 +311,128 @@ h2 .check.small { float: right; text-transform: none; letter-spacing: 0; font-si
 .viewer .zoombox > img.big { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
 .viewer .corner .zin { position: absolute; inset: 0; }
 .zoombadge { position: absolute; right: 6px; top: 4px; font-size: 11px; color: #fff; text-shadow: 0 0 3px #000; pointer-events: none; }
+
+/* The head, live (head.js) */
+#head-layer { pointer-events: none; }
+#head-layer .head-outline { opacity: 0.8; }
+#head-layer .head-cross { stroke: #e0245e; stroke-width: 1.5px; vector-effect: non-scaling-stroke; fill: none; }
+#head-layer .head-label { fill: #e0245e; font-family: ui-monospace, monospace; paint-order: stroke; stroke: var(--paper, #fff); stroke-width: 3px; vector-effect: non-scaling-stroke; }
+#head-layer .head-view { fill: rgb(224 36 94 / 0.06); stroke: #e0245e; stroke-dasharray: 4 3; stroke-width: 1px; vector-effect: non-scaling-stroke; }
+
+/* ====================================================================================
+   The layout (2026-10-01): the canvas is the whole page; the top bar, the docks' panels
+   and the windows float over it as cards (panels.js). --dock-l, --dock-r, --top: what
+   the panels take, set by panels.js; the canvas's own tools keep clear of them.
+   ==================================================================================== */
+:root {
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --top: 60px; --dock-l: 316px; --dock-r: 306px;
+  --r: 12px;
+  --card: color-mix(in srgb, var(--panel) 90%, transparent);
+  --shadow: 0 1px 3px rgb(0 0 0 / .08), 0 4px 16px rgb(0 0 0 / .10);
+  --touch: 32px;
+}
+body { display: block; }
+#stage { position: fixed; inset: 0; z-index: 0; }
+#canvas { left: 0; top: 0; width: 100%; height: 100%; }
+.ruler.x { top: var(--top); left: calc(var(--dock-l) + var(--ruler)); width: auto; right: var(--dock-r); border-radius: 0 6px 0 0; }
+.ruler.y { left: var(--dock-l); top: calc(var(--top) + var(--ruler)); height: auto; bottom: 8px; border-radius: 0 0 0 6px; }
+.ruler-corner { left: var(--dock-l); top: var(--top); border-radius: 6px 0 0 0; }
+.ruler { opacity: .92; }
+.rail { left: calc(var(--dock-l) + var(--ruler) + 10px); top: calc(var(--top) + var(--ruler) + 10px);
+  border: none; border-radius: var(--r); background: var(--card); box-shadow: var(--shadow); padding: 5px; }
+.rail button { width: 38px; height: 38px; border-radius: 9px; }
+.zoom { right: calc(var(--dock-r) + 10px); top: calc(var(--top) + var(--ruler) + 10px); }
+.zoom button { min-width: 36px; min-height: 36px; border: none; background: var(--card); box-shadow: var(--shadow); border-radius: 9px; }
+.hint { left: calc(var(--dock-l) + var(--ruler) + 66px); top: calc(var(--top) + var(--ruler) + 14px); }
+.cursor { left: calc(var(--dock-l) + var(--ruler) + 10px); bottom: 66px; }
+.scrub { left: calc(var(--dock-l) + 10px); right: calc(var(--dock-r) + 10px); bottom: 10px; border: none; border-radius: var(--r);
+  background: var(--card); box-shadow: var(--shadow); backdrop-filter: blur(12px); padding: 6px 10px; }
+.scrub button { min-height: var(--touch); min-width: var(--touch); }
+.gcode { right: calc(var(--dock-r) + 10px); bottom: 66px; border: none; border-radius: var(--r); box-shadow: var(--shadow); }
+
+/* The top bar */
+header.topbar { position: fixed; top: 8px; left: 8px; right: 8px; height: 46px; z-index: 5; border: none; border-radius: var(--r);
+  background: var(--card); backdrop-filter: blur(14px); box-shadow: var(--shadow); gap: 10px; overflow-x: auto; scrollbar-width: none; }
+.topbar button, .topbar .button { min-height: var(--touch); }
+.topbar .seg button { min-height: var(--touch); }
+#layout-button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+/* The docks and their panels */
+.dock { position: fixed; top: var(--top); bottom: 8px; z-index: 4; width: 300px; display: flex; flex-direction: column; gap: 8px;
+  background: none !important; border: none !important; overflow-y: auto; overflow-x: hidden; pointer-events: none;
+  scrollbar-width: thin; padding-bottom: 4px; }
+#left { left: 8px; }
+#right { right: 8px; width: 292px; }
+body.bare .dock, body.bare #floats { display: none; }
+#floats { position: fixed; inset: 0; z-index: 6; pointer-events: none; }
+section.panel { pointer-events: auto; flex: none; padding: 0; border: none; border-radius: var(--r);
+  background: var(--card); backdrop-filter: blur(14px); box-shadow: var(--shadow); }
+section.panel.floating { position: fixed; max-height: calc(100vh - var(--top) - 8px); overflow: auto; z-index: 6; }
+section.panel.dragging { opacity: .92; box-shadow: 0 12px 36px rgb(0 0 0 / .28); z-index: 30; }
+.phead { display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 2px 4px 2px 12px; cursor: grab; touch-action: none; user-select: none; }
+section.panel[data-fixed] .phead { cursor: default; }
+.phead h2 { flex: 1; margin: 0; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.phead .grip { color: var(--muted); opacity: .55; font-size: 14px; margin-left: -4px; }
+.phead .pcollapse { width: 34px; height: 34px; font-size: 14px; transition: transform .15s; }
+section.panel.collapsed .pcollapse { transform: rotate(-90deg); }
+section.panel.collapsed .pbody { display: none; }
+.pbody { padding: 0 12px 12px; }
+.dropline { flex: none; height: 4px; margin: -2px 6px; border-radius: 2px; background: var(--accent); pointer-events: none; }
+section.panel[data-panel="drawing"]:has(> .pbody > #object-panel[hidden]) { display: none; }
+.objname { margin: 0 0 8px; font-size: 14px; }
+
+/* Touch: things to press are big enough for a finger */
+.panel button, .panel .button, .panel select, .panel input:not([type=checkbox]):not([type=radio]):not([type=color]):not([type=range]):not([type=file]) {
+  min-height: var(--touch); }
+.panel .icon { min-width: var(--touch); }
+.list li { min-height: 38px; }
+.panel .seg.small button { padding: 4px 10px; }
+.palette button { min-height: 38px; }
+input[type=checkbox] { width: 18px; height: 18px; }
+details.more { margin: 4px 0; }
+details.more summary { cursor: pointer; color: var(--muted); padding: 6px 0; list-style-position: inside; }
+details.more > .form { margin-top: 4px; }
+.form details.more { grid-column: 1 / -1; }
+
+/* Numbers and the technical: monospace, digits lined up */
+input[type=number], .stats, .status, .pill, #scrub-line, .cursor, .hint, .gcode, .groups .meta, .tools .grid input,
+.opts input, .form .mono, .mono, .note.mono, .ledlegend dd, #head-layer .head-label, .zoombadge, .captures .name .note {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; }
+input[type=number] { font-size: 12px; }
+
+/* Windows: the scan viewer, the cameras */
+.win { position: fixed; z-index: 7; display: flex; flex-direction: column; overflow: hidden; border-radius: var(--r);
+  background: var(--panel); box-shadow: 0 10px 40px rgb(0 0 0 / .28); min-width: 280px; min-height: 160px; }
+.win:has(> [hidden]) { display: none; }
+.win[data-win="viewer"]:not(.placed) { left: calc(var(--dock-l) + var(--ruler) + 60px); top: calc(var(--top) + var(--ruler) + 8px);
+  right: calc(var(--dock-r) + 8px); bottom: 8px; }
+.win[data-win="cams"]:not(.placed) { right: calc(var(--dock-r) + 12px); bottom: 66px; width: min(480px, 50vw); }
+.win > .viewer, .win > .cams { position: relative; inset: auto; width: auto; flex: 1; min-height: 0; margin: 0;
+  border: none; border-radius: 0; box-shadow: none; z-index: auto; }
+.win .vbar { cursor: grab; touch-action: none; user-select: none; }
+.win .vbar button, .win .vbar .button { min-height: var(--touch); }
+.wresize { position: absolute; right: 0; bottom: 0; width: 26px; height: 26px; cursor: nwse-resize; touch-action: none; z-index: 2;
+  background: linear-gradient(135deg, transparent 55%, var(--muted) 55%, var(--muted) 60%, transparent 60%, transparent 70%, var(--muted) 70%, var(--muted) 75%, transparent 75%); opacity: .6; }
+.cams.big { position: relative; inset: auto; }
+
+/* The LED matrix UI, live (leds.js) */
+#leds svg.ledmatrix { width: 100%; height: auto; display: block; }
+.ledmatrix .ledbg { fill: #111; }
+.ledmatrix rect.led { fill: #262626; transition: fill .12s; }
+.ledmatrix rect.led.lit { filter: drop-shadow(0 0 4px var(--glow)); }
+.ledmatrix .ledlabels { opacity: .38; pointer-events: none; mix-blend-mode: screen; }
+#leds svg.dockstrip { width: 100%; height: auto; display: block; margin-top: 8px; }
+.dockstrip rect.led { fill: #2a2a2a; }
+.dockstrip text { font: 7px var(--mono); fill: var(--muted); text-anchor: middle; }
+.ledlegend { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 8px 0 0; font-size: 12px; }
+.ledlegend dt { color: var(--muted); }
+.ledlegend dd { margin: 0; }
+.ruler.x { width: calc(100vw - var(--dock-l) - var(--ruler) - var(--dock-r)); }
+.ruler.y { height: calc(100vh - var(--top) - var(--ruler) - 8px); }
+.form.scan .film { flex-wrap: nowrap; }
+.form.scan .film select { width: 100%; }
+#left { width: 320px; }
+.form.scan .film select { flex: 1 1 auto; min-width: 0; width: auto; }
+.form.scan .film input { flex: 0 0 4.5em; width: 4.5em; min-width: 0; }
+#design-layer.picking path.shape { stroke: rgb(0 0 0 / 0.004) !important; stroke-width: var(--pickw) !important; vector-effect: non-scaling-stroke; }

@@ -1207,6 +1207,7 @@ class Limn:
             'scan': self._scan_status(eventtime),
             'drying': self.drying.status(self.clock(), self._printing()) if self.drying else {},
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
+            'leds': {k: v for k, v in self._led_states.items() if v},     # what the UI and dock LEDs show (leds.py)
         }
 
 
