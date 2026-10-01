@@ -23,12 +23,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 | 2026-09-26 | **First use of AI in this project**: branch `llm-v1` |
 | 2026-09-29 | Limn's own SVG → G-code generator and web UI replace PrusaSlicer (`llm-v2`) |
 | 2026-09-30 | Cameras measure where each pen touches the paper (`limn_cam`) |
+| 2026-10-01 | Scanning for film (Hugin, flicker, NAS); the plot UI over the canvas; the LED display, live |
 
 ---
 
 ## [Unreleased] - `llm-v2`
 
-Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`.
+Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its two milestones follow.
+
+## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display
+
+<img src="docs/plot-ui.png" alt="The plot UI: a drawing on BED_5, its colours and tools, the head live on the canvas, the LED display" width="800">
+
+<img src="docs/plot-ui-scan.png" alt="The Scan tab: captures on the bed, a region of 12 shots, the camera's view under the head, the NAS settings" width="800">
+
+### Added
+- **Scans kept in RAM, and on the NAS** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)): captures live in `/dev/shm` (2 GB at most, the oldest go first), so the Pi's SD card isn't worn. They upload to an S3 bucket (OpenMediaVault's S3, MinIO) through `limn_cam/nas.py`, which signs its own requests: no boto3. Settings in the Scan tab's *NAS* panel, saved in `plot-data/nas.json`; ⇪ per capture, or each scan when it is done.
+- **Hugin stitching** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), `limn_cam/hugin.py`, the viewer's *Hugin*):
+  - Features are found on contrast-stretched copies, and matches that disagree are left out (halftone repeats).
+  - The camera's real scale and turn are measured from all the overlaps; then the tiles only slide, plus the lens's barrel.
+  - enblend lays the seams: no more ghosting. On the sticker test, 0.31 px RMS, tiles within 0.32 mm of where they were sent.
+  - Needs `sudo apt install hugin-tools enblend` on the Pi. The `.pto` project is kept, to fine-tune in Hugin.
+- 🔧 **Flicker detection in every shot** ([`56259ea`](https://github.com/prashnts/limn/commit/56259ea), `limn_cam/flicker.py`): a light dimmed by PWM leaves dark bands across a rolling-shutter shot. They are found per column (so a negative's own edges don't count) and taken out with the brightest of 3 frames: 1.2 → 0.44 grey levels under the new light. The Scan tab warns, and each tile records it.
+- **A region for film** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), [`4275211`](https://github.com/prashnts/limn/commit/4275211)):
+  - Film presets (35 mm, 120 6×4.5 – 6×9, 4×5 in, mounts) with a margin.
+  - The region drags and resizes on the bed; arrows nudge it, Z zooms to it.
+  - *Check corners*: 4 shots, the region's edges drawn over them; a click sets a corner, to 0.05 mm, zoomed in for precision.
+- 🔧 **The head, live on the canvas** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)): Klipper's position, the toolhead's outline from above (`plot/profiles/toolhead.svg`, traced from the overhead camera, mm, the tool point at its origin), a crosshair at the carried tool's tip, and the camera's view while it is on.
+- 🔧 **The LED display** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f), *Display* panel): the LED matrix UI (a Unicorn pHAT, 8 × 4) and the dock strip, live from the LEDs' colours in Klipper, with the matrix's art over them and what each part says. The limn extension now reports its LED states (`printer.limn.leds`). The matrix is documented in the README, its art in `docs/led-matrix-ui.svg`.
+- **The plot UI over the canvas** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)):
+  - The canvas is the whole page; the panels are cards over it. A tap folds one, its grip moves it to the other side or out over the canvas. The drawings and captures stay put. *Panels* (or `\`) hides them all.
+  - The scan viewer and the cameras are windows that move and resize.
+  - Built for touch: bigger controls, two fingers pan and zoom.
+  - Numbers and technical details in monospace.
+  - Rarely needed settings fold away (*More settings*).
+- Klipper's cameras live in an overlay, and a link to Fluidd ([`56259ea`](https://github.com/prashnts/limn/commit/56259ea)). Each drawing and scan shows or hides; several scans can lie under the plot ([`4275211`](https://github.com/prashnts/limn/commit/4275211)). Right-drag and trackpad swipes pan, a pinch zooms; the scan previews zoom too ([`4275211`](https://github.com/prashnts/limn/commit/4275211)).
+- Browser tests (Playwright, the `ui` dependency group: `uv run --group ui pytest plot/tests/test_ui.py`) ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)).
+
+### Changed
+- The Paths view shows only the G-code; the drawing as a faint outline with *drawing* ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)).
+- The overhead camera now gives 800 × 600 snapshots: its mapping onto the bed was fitted again (`GEOMETRY.md`) ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)).
+
+### Fixed
+- Painting missed thin lines (often under a pixel wide on screen): shapes are now picked within 6 px, hover shows which, a miss says so ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), [`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)).
+
+### Known issues
+- The camera's scale: Hugin measured 119.9 px/mm, `pens.toml` says 125.9 (before the tube was lengthened). To set from a scan of a ruler.
+- The new light flickers: taken out in software, best fixed at the light (full power, or a driver without PWM).
+- Cutting an outline to paint its pieces: only the geometry (`plot/cuts.py`) is in.
+- The Pi needs Klipper restarted for the LED states, and the plot UI pulled and restarted (`limn_web`).
+
+## [2026.09.30] - Limn's own plot generator, cameras, hand-scanned pens
 
 ### Added
 - **Camera scans of the bed** ([`51bc888`](https://github.com/prashnts/limn/commit/51bc888) … [`621fe50`](https://github.com/prashnts/limn/commit/621fe50), [`e0ed019`](https://github.com/prashnts/limn/commit/e0ed019), 2026-09-30 – 10-01): `limn_cam/scan.py` and `stitch.py` stitch the bed together from camera frames. The plot UI gets a scan view (`plot/static/scan.js`).
@@ -254,6 +299,8 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 - Project created on [Hackaday.io](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) (2026-03-30).
 
 [Unreleased]: https://github.com/prashnts/limn/compare/c824bc8...llm-v2
+[2026.10.01]: https://github.com/prashnts/limn/compare/e0ed019...llm-v2
+[2026.09.30]: https://github.com/prashnts/limn/compare/c824bc8...e0ed019
 [2026.09.29]: https://github.com/prashnts/limn/compare/b73db7d...c824bc8
 [2026.09.27]: https://github.com/prashnts/limn/compare/0f2ae2d...b73db7d
 [2026.09.23]: https://github.com/prashnts/limn/compare/675c45d...0f2ae2d
