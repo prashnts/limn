@@ -17,14 +17,15 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class Group(BaseModel):
-    '''What to do with one colour of a drawing ('stroke #e2001a', 'fill #ffffff').'''
+    '''What to do with one colour of a drawing ('stroke #e2001a', 'fill #ffffff').
+    None: as its tool draws (tools.DRAW: the job's draw settings, the tool's own).'''
     model_config = ConfigDict(extra='forbid')
     tool: str | None = None         # None: not drawn
     mask: bool = False              # not drawn, but hides what is under it (white casings)
-    stroke: Literal['auto', 'centerline', 'width'] = 'auto'     # width: fill the stroke's area
-    fill: Literal['hatch', 'crosshatch', 'concentric', 'none'] = 'hatch'
-    angle: float = 45
-    border: bool = True             # fills: outline the area too
+    stroke: Literal['auto', 'centerline', 'width'] | None = None     # width: fill the stroke's area
+    fill: Literal['hatch', 'crosshatch', 'concentric', 'none'] | None = None
+    angle: float | None = None
+    border: bool | None = None      # fills: outline the area too
     spacing: float | None = None    # fills: instead of the tool's
 
 
@@ -92,6 +93,9 @@ class Obj(BaseModel):
     texts: dict[str, TextSpec] = {}     # but these, by index
     placement: Placement = Field(default_factory=Placement)
     surface: SurfaceSpec = Field(default_factory=SurfaceSpec)
+    # Regions where nothing of it is drawn (eg. over what is printed there already):
+    # polygons in the drawing's mm at scale 1, y up, like its shapes before the scale
+    masks: list[list[tuple[float, float]]] = []
 
 
 class Job(BaseModel):
@@ -100,6 +104,8 @@ class Job(BaseModel):
     machine_overrides: dict = {}    # e.g. {"z_travel": 6, "z_max": 6.5}
     tools: str = 'tools'
     tool_overrides: dict[str, dict] = {}    # by tool: keys of tools.toml, e.g. {"T0": {"width": 0.4}}
+    draw: dict = {}                 # how every tool draws (tools.DRAW), e.g. {"feed": 2000, "bleed": 0.3};
+                                    # a tool's tool_overrides win
     tool_order: list[str] | None = None
     objects: list[Obj] = []
     _root: Path = PrivateAttr(default_factory=lambda: Path('.'))

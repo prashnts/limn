@@ -441,3 +441,120 @@ input[type=number] { font-size: 12px; }
 .form > *, .form .row > input, .form .row > select { min-width: 0; }
 .form.scan .region { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pbody { overflow-x: hidden; }
+
+/* ====================================================================================
+   2026-10-02: buttons that line up, round colours, what the new panels need, a phone
+   ==================================================================================== */
+/* Colours are round, whatever the touch size of the buttons around them */
+.swatch { flex: none; }
+.panel .sws .sw, .sws .sw { width: 26px; height: 26px; min-width: 26px; min-height: 26px !important; padding: 0;
+  border-radius: 50%; flex: none; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12); }
+.sws { gap: 6px; }
+.sws input[type=color] { width: 26px; height: 26px; border-radius: 50%; overflow: hidden; padding: 0; border: 1px solid var(--line); }
+.sws input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+.sws input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; }
+.sws input[type=color]::-moz-color-swatch { border: none; border-radius: 50%; }
+.swatch.dot, .palette .swatch, .tools .tool .head .swatch, .stats .swatch { width: 14px; height: 14px; border-radius: 50%; }
+.palette button { display: grid; grid-template-columns: 14px auto 1fr; align-items: center; column-gap: 7px; text-align: left;
+  padding: 4px 8px; min-width: 0; }
+.palette button .sub { margin-left: 0; text-align: right; line-height: 1.2; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.palette button[data-to="mask"], .palette button[data-to="skip"], .palette button[data-to="reset"] { display: flex; justify-content: center; }
+.palette { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.tools .tool .head { align-items: center; row-gap: 4px; }
+.tools .tool .head .note { flex: none; }
+.buttons { flex-wrap: wrap; align-items: center; }
+.buttons > * { flex: 1 1 auto; text-align: center; }
+.buttons > .primary { flex-basis: 100%; }
+.list li button.icon { flex: none; }
+.row.nowrap { flex-wrap: nowrap; }
+.row.nowrap > input { flex: 1; min-width: 0; }
+a.button, .button { line-height: 1.6; }
+
+/* The drawings: top first, the selected one's order buttons */
+.list li { flex-wrap: wrap; }
+.list li .order { flex-basis: 100%; display: flex; align-items: center; gap: 2px; padding-left: 30px; }
+.list li .order .note { margin: 0 0 0 6px; }
+.list li .order button { font-size: 15px; color: var(--ink); }
+.list li .order button:disabled { opacity: .25; }
+
+/* Masked regions on a drawing; the mask tool */
+.objmask { fill: url(#mask-hatch); stroke: var(--bad); stroke-width: 1.2px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.objmask.on { stroke-width: 2.5px; }
+#canvas.mask-mode, #canvas.mask-mode .obj { cursor: crosshair; }
+#canvas.mask-mode .objmask { pointer-events: visiblePainted; cursor: pointer; }
+.hatch-line { stroke: var(--bad); stroke-width: .25; opacity: .7; }
+.mask-draft { fill: color-mix(in srgb, var(--bad) 10%, transparent); stroke: var(--bad); stroke-width: 1.5px; stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke; pointer-events: none; }
+.masks li { min-height: 32px; }
+
+/* Shapes too small or dense for their tool (left out, or warned about) */
+.obj path.shape.small { stroke-dasharray: .4 .3; filter: drop-shadow(0 0 .25px var(--bad)) drop-shadow(0 0 .25px var(--bad)); }
+.obj.dim path.shape.small { filter: none; }
+
+/* The Printer panel: its macros, where Fluidd is */
+.macros { margin-top: 10px; display: grid; gap: 6px; }
+.mgroup { display: grid; grid-template-columns: 74px 1fr; gap: 6px; align-items: start; }
+.mlabel { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 9px; }
+.mbuttons { display: flex; flex-wrap: wrap; gap: 4px; }
+.mbuttons button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; }
+.macros .note { grid-column: 1 / -1; margin: 0; }
+.printer-url { margin-top: 10px; }
+.printer-url .note { grid-column: 1 / -1; margin: 0; }
+
+/* The Drawing panel and the tools' tuning: numbers, then choices */
+.drawset .grid, .tools .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 6px; }
+.drawset .grid label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); min-width: 0; }
+.drawset .grid input, .drawset .grid select, .tools .grid select { width: 100%; min-width: 0; padding: 2px 4px; font-size: 12px; }
+.drawset .changed, .tools .grid select.changed { border-color: var(--accent); }
+.tools .grid label { min-width: 0; }
+
+/* Keyboard shortcuts (?) */
+.keys-help { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgb(0 0 0 / .35); padding: 16px; }
+.keys-help .card { background: var(--panel); border-radius: var(--r); box-shadow: 0 12px 40px rgb(0 0 0 / .3); padding: 16px 20px;
+  max-width: 760px; width: 100%; max-height: calc(100vh - 32px); overflow: auto; }
+.keys-help h2 { display: flex; align-items: center; justify-content: space-between; }
+.keys-help .cols { columns: 2 300px; column-gap: 28px; }
+.keys-help section { break-inside: avoid; padding: 0; border: none; margin-bottom: 12px; }
+.keys-help h3 { margin: 0 0 4px; }
+.keys-help dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; font-size: 12px; }
+.keys-help dd { margin: 0; color: var(--muted); }
+kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--bg); white-space: nowrap; }
+
+/* A phone: the canvas on top, the panels under it, scrolled like a page (panels.js) */
+@media (max-width: 760px) {
+  html, body { height: auto; min-height: 100%; overflow: auto; }
+  body { display: flex; flex-direction: column; }
+  header.topbar { position: relative; top: 0; left: 0; right: 0; order: 0; height: auto; min-height: 46px; flex-wrap: wrap;
+    border-radius: 0; gap: 6px; padding: 6px 8px; overflow: visible; }
+  header.topbar .check { font-size: 12px; }
+  header.topbar .grow { display: none; }
+  #slice-status { order: 10; }
+  #stage { position: relative; inset: auto; order: 1; flex: none; height: 62vh; height: 62svh; min-height: 300px; --ruler: 16px; }
+  .dock { position: static; width: auto !important; order: 2; overflow: visible; pointer-events: auto; padding: 8px 8px 0;
+    top: auto; bottom: auto; }
+  #right { order: 3; padding-bottom: 16px; }
+  #floats { display: none; }
+  .phead { cursor: pointer; touch-action: auto; }
+  .phead .grip { display: none; }
+  section.panel { backdrop-filter: none; background: var(--panel); }
+  .ruler.x { width: calc(100% - var(--ruler)); }
+  .ruler.y { height: calc(100% - var(--ruler) - 8px); }
+  .rail { flex-direction: row; top: auto; bottom: 62px; left: 8px; padding: 3px; flex-wrap: wrap; max-width: calc(100% - 16px); }
+  .rail hr { width: auto; height: 22px; border-top: none; border-left: 1px solid var(--line); margin: 0 2px; align-self: center; }
+  .rail button { width: 36px; height: 36px; }
+  .zoom { top: calc(var(--ruler) + 6px); right: 6px; }
+  .hint { left: calc(var(--ruler) + 6px); right: 60px; top: calc(var(--ruler) + 6px); white-space: normal; }
+  .cursor { display: none; }
+  .scrub { left: 6px; right: 6px; bottom: 6px; padding: 4px 6px; gap: 4px; }
+  #scrub-line { display: none; }
+  .gcode { left: 6px; right: 6px; width: auto; bottom: 56px; max-height: 50%; }
+  .win, .win.placed { left: 6px !important; right: 6px !important; top: 6px !important; bottom: 6px !important;
+    width: auto !important; height: auto !important; min-width: 0; }
+  .wresize { display: none; }
+  .toast { max-width: calc(100vw - 24px); bottom: 12px; }
+  .keys-help .cols { columns: 1; }
+}
+.drawset .grid.choices, .tools .grid.choices { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 4px; }
+.tools .grid.choices label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }

@@ -8,6 +8,7 @@
 # subpaths, flattened to within `tolerance` mm. Coordinates are mm on the page,
 # y down, as in the SVG. <text> is kept as text for the fonts to render.
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -132,6 +133,16 @@ def _flatten(sub, tolerance):
         closed = False if len(a) < 4 else closed
         s = np.asarray(LineString(a).simplify(tolerance).coords)
     return (s if len(s) >= 2 else a), closed
+
+
+IMAGE = re.compile(rb'<(?:[\w-]+:)?image\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*?(?:/>|>.*?</(?:[\w-]+:)?image\s*>)', re.S)
+
+
+def strip_images(data: bytes) -> tuple[bytes, int]:
+    '''The SVG without its <image>s (a plotter can't draw them, and they make the file
+    heavy) -> (svg, how many went).'''
+    out, n = IMAGE.subn(b'', data)
+    return out, n
 
 
 @lru_cache(maxsize=16)

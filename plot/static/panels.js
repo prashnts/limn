@@ -7,9 +7,14 @@
 // windows: moved by their bar, resized by their corner. Where everything is lives in
 // this browser (store 'layout'); *Panels* hides them all (or \) and puts them back
 // where they started. --dock-l, --dock-r, --top tell the canvas's tools what is free.
+//
+// On a phone (narrow) there is no room to float: the canvas takes the top of the page
+// and the panels follow it, one column, scrolled like a page; a header only folds.
 'use strict';
 
-const LAYOUT_VERSION = 1;
+const LAYOUT_VERSION = 2;           // 2: the panels' order of 2026-10-02 (the printer's together)
+const narrow = matchMedia('(max-width: 760px)');
+const isNarrow = () => narrow.matches;
 const layout = (() => {
   const l = store.get('layout', null);
   return l && l.v === LAYOUT_VERSION ? l : { v: LAYOUT_VERSION, panels: {}, windows: {} };
@@ -48,11 +53,13 @@ function makePanel(sec, dock, order) {
 
 function applyLayout() {
   const panels = $$('section[data-panel]');
+  // narrow: a floating one goes back to its dock (where it is kept for a wide screen)
+  const dockOf = (p) => (where(p).dock === 'float' && isNarrow() ? home[p.dataset.panel].dock : where(p).dock);
   for (const side of ['left', 'right']) {
-    panels.filter((p) => where(p).dock === side).sort((a, b) => where(a).order - where(b).order)
+    panels.filter((p) => dockOf(p) === side).sort((a, b) => where(a).order - where(b).order)
       .forEach((p) => { p.classList.remove('floating'); p.style.left = p.style.top = p.style.width = ''; docks[side].append(p); });
   }
-  for (const p of panels.filter((p) => where(p).dock === 'float')) {
+  for (const p of panels.filter((p) => dockOf(p) === 'float')) {
     const w = where(p);
     p.classList.add('floating');
     p.style.width = `${Math.max(240, w.w || 290)}px`;
@@ -67,6 +74,15 @@ function applyLayout() {
 // How much of the canvas the docks take, for the canvas's own tools
 let insetsWere = '';
 function insets() {
+  if (isNarrow()) {                         // the panels are under the canvas, not over it
+    const now = 'narrow';
+    if (now === insetsWere) return;
+    insetsWere = now;
+    const st = document.documentElement.style;
+    st.setProperty('--dock-l', '0px'); st.setProperty('--dock-r', '0px'); st.setProperty('--top', '0px');
+    if (typeof drawRulers === 'function') requestAnimationFrame(drawRulers);
+    return;
+  }
   const bare = document.body.classList.contains('bare');
   const shown = (d) => !bare && $$(':scope > section[data-panel]', d).some((p) => p.offsetParent !== null);
   const L = shown(docks.left) ? docks.left.getBoundingClientRect().right + 8 : 8;
@@ -96,7 +112,8 @@ document.addEventListener('pointermove', (e) => {
   if (!pdrag || e.pointerId !== pdrag.id) return;
   const { p } = pdrag;
   if (!pdrag.started) {
-    if (pdrag.fixed || Math.hypot(e.clientX - pdrag.sx, e.clientY - pdrag.sy) < 6) return;
+    if (Math.hypot(e.clientX - pdrag.sx, e.clientY - pdrag.sy) < 6) return;
+    if (pdrag.fixed || isNarrow()) { pdrag.swiped = true; return; }       // a swipe: the page scrolls
     const r = p.getBoundingClientRect();
     pdrag.started = true;
     pdrag.dx = e.clientX - r.left;
@@ -117,7 +134,7 @@ document.addEventListener('pointerup', (e) => {
   const d = pdrag;
   pdrag = null;
   if (!d.started) {                         // a tap: fold or unfold
-    if (e.target.closest(INTERACTIVE) && !d.fold) return;
+    if (d.swiped || (e.target.closest(INTERACTIVE) && !d.fold)) return;
     setWhere(d.p, { collapsed: !where(d.p).collapsed });
     d.p.classList.toggle('collapsed', where(d.p).collapsed);
     insets();
@@ -137,6 +154,8 @@ document.addEventListener('pointerup', (e) => {
   }
   applyLayout();
 });
+
+document.addEventListener('pointercancel', (e) => { if (pdrag && e.pointerId === pdrag.id && !pdrag.started) pdrag = null; });
 
 function dropTarget(e) {
   const lr = docks.left.getBoundingClientRect(), rr = docks.right.getBoundingClientRect();
@@ -239,3 +258,9 @@ applyLayout();
 new MutationObserver(() => requestAnimationFrame(insets)).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 for (const d of Object.values(docks)) new MutationObserver(() => requestAnimationFrame(insets)).observe(d, { attributes: true, subtree: true, attributeFilter: ['hidden'] });
 window.addEventListener('resize', () => { insetsWere = ''; insets(); });
+narrow.addEventListener('change', () => {
+  insetsWere = '';
+  applyLayout();
+  windows.forEach((w) => w.place());
+  if (typeof fit === 'function' && S) requestAnimationFrame(fit);
+});

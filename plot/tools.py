@@ -30,12 +30,15 @@ import importlib
 import importlib.util
 import math
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 REGISTRY: dict[str, type['Tool']] = {}
+# How a tool draws, apart from what its pen is: the job's `draw` gives them to every
+# tool (a kind without the field ignores it), its tool_overrides to one tool.
+DRAW = ('feed', 'plunge_feed', 'overlap', 'link', 'fill', 'angle', 'border', 'stroke', 'bleed', 'small', 'layers')
 
 
 def kind(name):
@@ -83,6 +86,15 @@ class Tool(BaseModel):
     source: str = 'profile'     # profile: tools.toml; tag: its tag; stale: a tag from before a hand was there
     press: float | None = None      # mm past first touch (machine.z_touch); None: z_down as it is
     press_max: float | None = None  # never more, whatever a job asks: fineliners are delicate
+    # How it draws, whatever the pen: the job's `draw` sets them for every tool, its
+    # tool_overrides for one (DRAW). A colour's own fill/stroke settings win over these.
+    fill: Literal['hatch', 'crosshatch', 'concentric', 'none'] = 'hatch'
+    angle: float = 45           # fills: degrees
+    border: bool = True         # fills: outline the area too
+    stroke: Literal['auto', 'centerline', 'width'] = 'auto'     # width: fill the stroke's area
+    bleed: float = 0.0          # mm kept clear around what another tool (or a mask) draws on top
+    layers: bool = False        # a darker ink over it doesn't cut it: it goes under (light first, dark over it)
+    small: Literal['skip', 'warn', 'draw'] = 'skip'     # shapes too small or too dense for its line
 
     @property
     def call(self):

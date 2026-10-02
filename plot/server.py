@@ -30,10 +30,12 @@ from .job import Group, Job, Obj, Placement, ShapePaint
 from .preview import parse
 from .profile import bed_papers, load_pens, reach
 from .slicer import Cache, default_groups, text_shapes
+from .tools import DRAW, Tool
 
 STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
-OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'text', 'texts', 'surface'}
+OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'text', 'texts', 'surface', 'masks'}
+SETTINGS = {'printer_url': ''}      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are
 
 
 def _d(p, closed):
@@ -61,6 +63,15 @@ class Workspace:
         self.nas_uploads = {}       # scan id -> limn_cam.nas.Upload
         self.hugin_jobs = {}        # scan id -> {ppm, done, error, log}: stitching with Hugin
         self.scan_path = self.data / 'scan.json'
+        self.settings_path = self.data / 'settings.json'
+        self.gcode_help = None      # Klipper's commands (Moonraker's gcode/help), None: not asked yet
+
+    def settings(self):
+        try:
+            got = json.loads(self.settings_path.read_text())
+        except (OSError, ValueError):
+            got = {}
+        return {**SETTINGS, **{k: v for k, v in got.items() if k in SETTINGS}}
 
     def save(self):
         self.job.save(self.job_path)
@@ -132,7 +143,9 @@ class Workspace:
         pens = load_pens()
         holders = [{'t': f'T{i}', 'holder': h, 'tag': (self.tags or {}).get(str(h))}
                    for i, h in enumerate(machine.holders)]
-        return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine),
+        draw = {k: Tool.model_fields[k].default for k in DRAW if k in Tool.model_fields}
+        draw['plunge_feed'] = None
+        return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine), 'draw': draw,
                 'tools': {k: {**t.model_dump(), 'spacing': t.spacing, 'draws': t.draws} for k, t in tools.items()},
                 'pens': pens, 'kinds': pen_library.kinds(), 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
@@ -145,7 +158,8 @@ class Workspace:
         h, s = d.size[1], o.scale
         local = lambda p: np.column_stack([p[:, 0] * s, (h - p[:, 1]) * s])
         out = []
-        for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, []), key=lambda sh: sh.index):
+        _, tools = load(self.job, self.tags)
+        for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, [], tools), key=lambda sh: sh.index):
             out.append({'i': sh.index, 'stroke': sh.stroke, 'fill': sh.fill, 'w': sh.width * s,
                         'so': sh.stroke_opaque, 'fo': sh.fill_opaque, 'line': sh.line,
                         'text': sh.line or any(t.index == sh.index for t in d.texts), 'rule': sh.rule,
@@ -167,7 +181,9 @@ class Workspace:
                 bounds[o.id] = [*c[:, :2].min(axis=0).tolist(), *c[:, :2].max(axis=0).tolist()]
         self.unsafe = result.unsafe
         return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
-                'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds, 'ms': round((time.monotonic() - t0) * 1000)}
+                'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
+                'small': {o.id: sliced[o.id].small for o in self.job.objects if sliced[o.id].small},
+                'ms': round((time.monotonic() - t0) * 1000)}
 
 
 def _unique(names, stem):
@@ -207,7 +223,7 @@ def create_app(data=None):
 
     @app.post('/api/objects')
     async def add_object(file: UploadFile = File(...)):
-        data = await file.read()
+        data, images = svg.strip_images(await file.read())
         with ws.lock:
             oid = _unique({o.id for o in ws.job.objects}, Path(file.filename or 'drawing').stem)
             path = ws.uploads / f'{oid}.svg'
@@ -226,7 +242,7 @@ def create_app(data=None):
             ws.remember()
             ws.job.objects.append(obj)
             ws.save()
-            return {'id': oid, 'state': ws.state()}
+            return {'id': oid, 'images': images, 'state': ws.state()}
 
     @app.patch('/api/objects/{oid}')
     def patch_object(oid: str, body: dict = Body(...)):
@@ -239,6 +255,25 @@ def create_app(data=None):
             ws.remember()
             ws.job.objects[ws.job.objects.index(o)] = new
             ws.save()
+            return ws.state()
+
+    @app.post('/api/objects/{oid}/order')
+    def order(oid: str, body: dict = Body(...)):
+        '''{to: front|back|forward|backward}: later in the job is on top (it hides what
+        is under it, emit.hidden), as the canvas draws them.'''
+        with ws.lock:
+            o = ws.obj(oid)
+            objs = list(ws.job.objects)
+            i = objs.index(o)
+            j = {'front': len(objs) - 1, 'back': 0, 'forward': i + 1, 'backward': i - 1}.get(body.get('to'))
+            if j is None:
+                raise HTTPException(400, 'to: front, back, forward or backward')
+            j = min(max(j, 0), len(objs) - 1)
+            if j != i:
+                ws.remember()
+                objs.insert(j, objs.pop(i))
+                ws.job.objects = objs
+                ws.save()
             return ws.state()
 
     @app.post('/api/objects/{oid}/duplicate')
@@ -306,15 +341,17 @@ def create_app(data=None):
 
     @app.patch('/api/job')
     def patch_job(body: dict = Body(...)):
-        '''{machine_overrides: {key: value|null}, tool_overrides: {tool: {key: value|null}}, tool_order}'''
+        '''{machine_overrides: {key: value|null}, tool_overrides: {tool: {key: value|null}},
+        draw: {key: value|null} (every tool, tools.DRAW), tool_order}'''
         with ws.lock:
             job = ws.job
-            mo = dict(job.machine_overrides)
-            for k, v in (body.get('machine_overrides') or {}).items():
-                if v is None:
-                    mo.pop(k, None)
-                else:
-                    mo[k] = v
+            mo, draw = dict(job.machine_overrides), dict(job.draw)
+            for cur, key in ((mo, 'machine_overrides'), (draw, 'draw')):
+                for k, v in (body.get(key) or {}).items():
+                    if v is None:
+                        cur.pop(k, None)
+                    else:
+                        cur[k] = v
             to = {k: dict(v) for k, v in job.tool_overrides.items()}
             for tid, over in (body.get('tool_overrides') or {}).items():
                 cur = to.setdefault(tid, {})
@@ -323,11 +360,11 @@ def create_app(data=None):
                         cur.pop(k, None)
                     else:
                         cur[k] = v
-            new = job.model_copy(update={'machine_overrides': mo, 'tool_overrides': {k: v for k, v in to.items() if v},
+            new = job.model_copy(update={'machine_overrides': mo, 'draw': draw, 'tool_overrides': {k: v for k, v in to.items() if v},
                                          'tool_order': body.get('tool_order', job.tool_order)})
             new._root = ws.data
             try:
-                load(new)
+                load(new, ws.tags)
             except Exception as e:
                 raise HTTPException(400, str(e))
             ws.remember()
@@ -494,11 +531,15 @@ def create_app(data=None):
         from urllib.parse import urlsplit
         with ws.lock:
             machine, _ = load(ws.job)
-        fluidd = machine.fluidd
+        set_url = ws.settings()['printer_url']
+        fluidd = set_url or machine.fluidd
+        guessed = False
         if not fluidd:
             u = urlsplit(machine.moonraker)
             if u.hostname not in ('localhost', '127.0.0.1', '::1'):
                 fluidd = f'{u.scheme}://{u.hostname}' + (f':{u.port}' if u.port and u.port != 7125 else '')
+            else:
+                guessed = True      # Moonraker on this host: Fluidd is on the page's host, perhaps
         try:
             r = requests.get(f'{machine.moonraker.rstrip("/")}/server/webcams/list', timeout=3)
             r.raise_for_status()
@@ -508,7 +549,66 @@ def create_app(data=None):
             error = None
         except Exception as e:
             cams, error = [], f'Moonraker at {machine.moonraker}: {e}'
-        return {'fluidd': fluidd, 'webcams': cams, 'error': error}
+        return {'fluidd': fluidd.rstrip('/'), 'guessed': guessed, 'set': bool(set_url), 'webcams': cams, 'error': error}
+
+    @app.get('/api/settings')
+    def settings_get():
+        return ws.settings()
+
+    @app.put('/api/settings')
+    def settings_put(body: dict = Body(...)):
+        '''{printer_url}: where Fluidd (and its cameras' relative URLs) is, as this browser
+        reaches it, eg. https://limn.example: when the page's own host isn't it.'''
+        cur = ws.settings()
+        for k, v in body.items():
+            if k not in SETTINGS:
+                raise HTTPException(400, f'no setting {k}')
+            v = (v or '').strip().rstrip('/')
+            if k == 'printer_url' and v and not re.match(r'^https?://[^\s/]+', v):
+                raise HTTPException(400, f'printer_url {v!r}: http(s)://host[:port][/path]')
+            cur[k] = v
+        ws.settings_path.write_text(json.dumps(cur, indent=2) + '\n')
+        return cur
+
+    def macro_list():
+        '''The machine's macro buttons, and one per holder (T0..) and UNDOCK; the ones
+        Klipper has no command for left out (all when it can't be asked).'''
+        machine, tools = load(ws.job, ws.tags)
+        url = moonraker()
+        if ws.gcode_help is None:
+            try:
+                r = requests.get(f'{url}/printer/gcode/help', timeout=3)
+                r.raise_for_status()
+                ws.gcode_help = {k.upper(): v for k, v in r.json()['result'].items()}
+            except Exception:
+                pass
+        helps = ws.gcode_help
+        out = [m.model_dump() for m in machine.macros]
+        for i, h in enumerate(machine.holders):
+            t = tools.get(f'T{i}')
+            out.append({'label': f'T{i}', 'gcode': f'T{i}', 'group': 'Tools', 'confirm': True,
+                        'title': f'Pick up T{i} (holder {h})' + (f': {t.name}' if t and t.name else ''),
+                        'color': t.color if t else None})
+        out.append({'label': 'Put away', 'gcode': 'UNDOCK', 'group': 'Tools', 'confirm': True,
+                    'title': 'The carried tool back into its holder'})
+        if helps is not None:
+            out = [m for m in out if m['gcode'].split()[0].upper() in helps]
+        return out, helps is not None
+
+    @app.get('/api/printer/macros')
+    def macros():
+        out, known = macro_list()
+        return {'macros': out, 'checked': known}
+
+    @app.post('/api/printer/macro')
+    def run_macro(body: dict = Body(...)):
+        '''{gcode}: one of the macro buttons (no other G-code), run in the background.'''
+        gcode = (body.get('gcode') or '').strip()
+        out, _ = macro_list()
+        m = next((m for m in out if m['gcode'] == gcode), None)
+        if m is None:
+            raise HTTPException(400, f'{gcode!r} is not one of the macro buttons')
+        return run_on_printer(f'running {gcode}', gcode)
 
     @app.post('/api/scan')
     def scan(body: dict = Body(default={})):

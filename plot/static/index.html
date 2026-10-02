@@ -32,13 +32,18 @@
       <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
     <button data-mode="paint" title="Paint with a tool (P)">
       <svg viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z M12 6l6 6"/></svg></button>
+    <button data-mode="mask" title="Mask (M): drag over the selected drawing where it isn't to be drawn, eg. over what is printed there">
+      <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 12l8-8M4 20L20 4M12 20l8-8"/></svg></button>
     <hr>
     <button data-act="undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-3"/></svg></button>
     <button data-act="redo" title="Redo (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h3"/></svg></button>
     <hr>
     <button data-act="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    <button data-act="keys" title="Keyboard shortcuts (?)"><svg viewBox="0 0 24 24"><path d="M3 7h18v11H3z"/><path d="M7 11h1M11 11h1M15 11h1M7 14h10"/></svg></button>
   </nav>
   <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+    <defs><pattern id="mask-hatch" patternUnits="userSpaceOnUse" width="1.2" height="1.2" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="1.2" class="hatch-line"/></pattern></defs>
     <g id="world" transform="scale(1,-1)">
       <g id="bed-layer"></g>
       <g id="scan-under"></g>
@@ -114,6 +119,14 @@
       <h2 title="The selected drawing: where it is, its colours and tools, its texts">Selected drawing</h2>
       <div id="object-panel" hidden></div>
     </section>
+    <section class="plot-only" data-panel="fonts" data-collapsed>
+      <h2 title="Fonts for the texts of the drawings: TTF/OTF as they are, SVG fonts drawn as single lines">Fonts</h2>
+      <label class="drop small" title="Upload fonts: click to pick, or drop them on the page">
+        <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
+        Upload TTF / OTF (source) or SVG fonts (single line)
+      </label>
+      <ul id="fonts" class="list"></ul>
+    </section>
   </aside>
 
   <aside id="right" class="dock" data-dock="right">
@@ -144,7 +157,7 @@
       </div>
       <div id="palette" class="palette"></div>
       <p class="note">Pick a tool, then click shapes. Shift-click paints the whole colour. Esc stops.</p>
-      <p class="note keys">V select · H pan · P paint · drag corners to scale (Alt: about the middle) · knob to turn (Shift: 15°) · R quarter turn · arrows nudge (Shift 10, Alt 0.1) · Ctrl+D duplicate · Del remove · Ctrl+Z / Ctrl+Shift+Z</p>
+      <p class="note">Shift+0-9 paints with T0-T9. <a href="#" data-act="keys">Keyboard shortcuts</a> (?)</p>
     </section>
     <section class="plot-only" data-panel="output">
       <h2 title="What the plot will take, what may go wrong, and sending it to Klipper">Output</h2>
@@ -156,36 +169,35 @@
         <button id="print" class="primary" title="Send the G-code to Klipper and start plotting it">Upload &amp; plot</button>
       </div>
     </section>
-    <section class="plot-only" data-panel="machine">
-      <h2 title="The plotter's settings for this job: the bed, z limits, travels. A changed one shows ↺ to go back">Machine</h2>
-      <div id="machine" class="form"></div>
+    <section data-panel="printer">
+      <h2 title="Klipper, through Moonraker: its state, buttons for its macros, where Fluidd is">Printer</h2>
+      <div id="printer" class="form"></div>
+      <div id="macros" class="macros"></div>
+      <div id="printer-url" class="form printer-url"></div>
     </section>
     <section data-panel="tools">
       <h2 title="What is in each holder, from its tag: give a tool its pen type and colour, tune how it draws">Tools</h2>
       <div id="tools" class="tools"></div>
     </section>
-    <section class="plot-only" data-panel="pens" data-collapsed>
-      <h2 title="The library of tool types (plot/profiles/pens.toml): pens and how they draw, and cameras">Pens</h2>
-      <div id="pens" class="pens"></div>
-    </section>
-    <section class="plot-only" data-panel="fonts" data-collapsed>
-      <h2 title="Fonts for the texts of the drawings: TTF/OTF as they are, SVG fonts drawn as single lines">Fonts</h2>
-      <label class="drop small" title="Upload fonts: click to pick, or drop them on the page">
-        <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
-        Upload TTF / OTF (source) or SVG fonts (single line)
-      </label>
-      <ul id="fonts" class="list"></ul>
-    </section>
     <section data-panel="display">
       <h2 title="The LED matrix UI on the toolhead side (a Unicorn pHAT, 8 x 4) and the dock strip, as they shine now">Display</h2>
       <div id="leds"></div>
     </section>
-    <section data-panel="printer">
-      <h2 title="Klipper, through Moonraker">Printer</h2>
-      <div id="printer" class="form"></div>
+    <section class="plot-only" data-panel="drawset" data-collapsed>
+      <h2 title="How every tool draws, whatever its pen: speed, fills, the gap kept from other inks (bleed), shapes too small for the line">Drawing</h2>
+      <div id="drawset" class="drawset"></div>
+    </section>
+    <section class="plot-only" data-panel="machine">
+      <h2 title="The plotter's settings for this job: the bed, z limits, travels. A changed one shows ↺ to go back">Machine</h2>
+      <div id="machine" class="form"></div>
+    </section>
+    <section class="plot-only" data-panel="pens" data-collapsed>
+      <h2 title="The library of tool types (plot/profiles/pens.toml): pens and how they draw, and cameras">Pens</h2>
+      <div id="pens" class="pens"></div>
     </section>
   </aside>
 <div id="floats"></div>
+<div id="keys-help" class="keys-help" hidden role="dialog" aria-label="Keyboard shortcuts"></div>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
 <script src="/static/zoom.js"></script>
