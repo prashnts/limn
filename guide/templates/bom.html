@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% from 'macros.html' import badge, download_all %}
+{% block title %}Bill of materials{% endblock %}
+{% block main %}
+<h1>Bill of materials</h1>
+<p class="lede">What to buy, find or print for one Limn. The list is the project's
+<a href="https://hackaday.io/project/205431/components">Hackaday component list</a>; the counts on the right come from the CAD.</p>
+{{ download_all(zipped, root) }}
+
+{% set shop = bom | selectattr('0.shop') | list %}
+{% if shop %}
+<h2>From the Bambu Lab store</h2>
+<p>The screws, nuts, pins, bushings and the power switch are Bambu Lab's Maker's Supply parts: their codes link to the
+<a href="https://eu.store.bambulab.com/collections/makers-supply">EU store</a>.</p>
+<table class="bom">
+  <thead><tr><th class="num">Qty</th><th></th><th>Part</th><th>Code</th><th class="num">Packs</th></tr></thead>
+  <tbody>
+  {% for p, n in shop | sort(attribute='0.code') %}
+  <tr>
+    <td class="num">{{ n }}</td>
+    <td class="thumbcell">{% if p.thumb %}<img loading="lazy" src="{{ root }}{{ p.thumb }}" alt="">{% endif %}</td>
+    <td><a href="{{ root }}parts/{{ p.slug }}.html">{{ p.shop.name }}</a></td>
+    <td class="mono"><a href="{{ p.shop.url }}">{{ p.code }}</a></td>
+    <td class="num">{{ (n / p.shop.pack) | round(0, 'ceil') | int }} <span class="fine">of {{ p.shop.pack }}</span></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Components</h2>
+<table class="bom">
+  <thead><tr><th class="num">Qty</th><th>Part</th><th>For</th><th>In the CAD</th></tr></thead>
+  <tbody>
+  {% for e in components %}
+  <tr>
+    <td class="num">{{ e.qty }}</td>
+    <td><strong>{{ e.name }}</strong>{% if e.reclaimed %} {{ badge('reclaimed') }}{% endif %}</td>
+    <td>{{ e.use or '' }}{% if e.note %}<div class="fine">{{ e.note }}</div>{% endif %}</td>
+    <td>{% for p in e.pages %}<a href="{{ root }}parts/{{ p.slug }}.html">{{ p.name }}</a> <span class="qty">×{{ p.qty }}</span>{% if not loop.last %}<br>{% endif %}{% else %}<span class="fine">—</span>{% endfor %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% for kind, items in bom | groupby('0.kind') %}
+<h2>{{ KINDS[kind] }} <span class="fine">from the CAD</span></h2>
+<table class="bom">
+  <thead><tr><th class="num">Qty</th><th></th><th>Part</th><th>Reference</th></tr></thead>
+  <tbody>
+  {% for p, n in items %}
+  <tr>
+    <td class="num">{{ n }}</td>
+    <td class="thumbcell">{% if p.thumb %}<img loading="lazy" src="{{ root }}{{ p.thumb }}" alt="">{% endif %}</td>
+    <td><a href="{{ root }}parts/{{ p.slug }}.html">{{ p.name }}</a>{% if p.mirrored %} <span class="fine">({{ p.mirrored }} mirrored)</span>{% endif %}</td>
+    <td class="mono">{% if p.shop %}<a href="{{ p.shop.url }}">{{ p.code }}</a>{% else %}{{ p.code or '' }}{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endfor %}
+{% endblock %}

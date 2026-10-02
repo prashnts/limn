@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% from 'macros.html' import badge, download_all %}
+{% block title %}Parts{% endblock %}
+{% block main %}
+<h1>Parts</h1>
+<p class="lede">Every design in Limn: {{ pages | length }} of them. The biggest assemblies come first, then the parts, by how many Limn has. Pick an assembly to see what's in it.</p>
+{{ download_all(zipped, root) }}
+<div class="filters" role="group" aria-label="Show">
+  <button type="button" class="on" data-kind="">All</button>
+  {% for k, label in KINDS.items() %}{% set n = pages | selectattr('kind', 'eq', k) | list | length %}{% if n %}<button type="button" data-kind="{{ k }}">{{ label }} <span>{{ n }}</span></button>{% endif %}{% endfor %}
+  <select aria-label="Inside an assembly">
+    <option value="">Inside: all of Limn</option>
+    {% for a, depth in tree[1:] %}<option value="{{ a.slug }}">{{ ' ' * (depth - 1) }}{{ a.name }} ({{ size[a.slug] }})</option>{% endfor %}
+  </select>
+  <input type="search" placeholder="Find a part" aria-label="Find a part">
+</div>
+<div class="cards parts">
+  {% for p in pages %}{% set parent = (p.parents.values() | list)[0] if p.parents else None %}
+  <div class="cardwrap{% if size[p.slug] and size[p.slug] >= 40 %} big{% endif %}" data-kind="{{ p.kind }}" data-in=" {{ within[p.slug] | join(' ') }} " data-slug="{{ p.slug }}" data-name="{{ (p.name ~ ' ' ~ p.designs | join(' ')) | lower }}">
+    <a class="card" href="{{ root }}parts/{{ p.slug }}.html">
+      <div class="card-img">{% if p.thumb %}<img loading="lazy" src="{{ root }}{{ p.thumb }}" alt="">{% else %}<div class="noimg">{{ p.name[:1] }}</div>{% endif %}</div>
+      <div class="card-body">
+        <div class="card-title">{{ p.name }}{% if p.qty > 1 %} <span class="qty">×{{ p.qty }}</span>{% endif %}</div>
+        <div class="card-meta">{{ badge(p.kind) }}{% if size[p.slug] %} <span class="pill">{{ size[p.slug] }} parts</span>{% endif %}</div>
+        {% if parent and parent.slug != catalog.top.slug %}<div class="card-in">in {{ parent.name }}{% if p.parents | length > 1 %} +{{ p.parents | length - 1 }}{% endif %}</div>{% endif %}
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+<script>
+const bs = document.querySelectorAll('.filters button'), q = document.querySelector('.filters input'),
+      sel = document.querySelector('.filters select');
+let kind = '';
+const show = () => document.querySelectorAll('.cardwrap').forEach(c =>
+  c.hidden = (kind && c.dataset.kind !== kind) || !c.dataset.name.includes(q.value.toLowerCase())
+             || (sel.value && !c.dataset.in.includes(` ${sel.value} `)));
+bs.forEach(b => b.onclick = () => { bs.forEach(x => x.classList.toggle('on', x === b)); kind = b.dataset.kind; show(); });
+q.oninput = show;
+sel.onchange = () => { show(); history.replaceState(null, '', sel.value ? `#in=${sel.value}` : location.pathname); };
+const h = location.hash.match(/^#in=(.+)$/);
+if (h) { sel.value = h[1]; show(); }
+</script>
+{% endblock %}

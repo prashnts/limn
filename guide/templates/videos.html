@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% from 'macros.html' import video %}
+{% block title %}Videos{% endblock %}
+{% block main %}
+<h1>Videos</h1>
+<p class="lede">Limn at work, from the <a href="{{ playlist }}">YouTube playlist</a>, newest first. Part pages show the ones about them.</p>
+<div class="yts">{% for v in videos %}{{ video(v) }}{% endfor %}</div>
+{% endblock %}

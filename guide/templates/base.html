@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Limn{% endblock %} · Limn guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Karla:ital,wght@0,400;0,600;0,700;1,400&family=Fira+Code:wght@400;500&display=swap">
+<link rel="stylesheet" href="{{ root }}static/style.css">
+<link rel="icon" href="{{ root }}static/icon.svg">
+<script type="importmap">
+{ "imports": { "three": "{{ root }}static/three/three.module.js", "three/addons/": "{{ root }}static/three/addons/" } }
+</script>
+<script type="module" src="{{ root }}static/viewer.js"></script>
+</head>
+<body>
+<header class="bar">
+  <div class="wrap bar-in">
+    <a class="brand" href="{{ root }}index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20 L12 4 L20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><circle cx="12" cy="4" r="2" fill="currentColor"/></svg>Limn <span>guide</span></a>
+    <nav>
+      <a href="{{ root }}machine.html"{% if url == 'machine.html' %} class="on"{% endif %}>Machine</a>
+      <a href="{{ root }}parts/index.html"{% if url == 'parts/index.html' %} class="on"{% endif %}>Parts</a>
+      <a href="{{ root }}bom.html"{% if url == 'bom.html' %} class="on"{% endif %}>Bill of materials</a>
+      <a href="{{ root }}videos.html"{% if url == 'videos.html' %} class="on"{% endif %}>Videos</a>
+      <a href="{{ root }}log/index.html"{% if url.startswith('log/') %} class="on"{% endif %}>Log</a>
+      {% for u, m in nav %}<a href="{{ root }}{{ u }}"{% if url == u %} class="on"{% endif %}>{{ m.nav }}</a>{% endfor %}
+      <a href="{{ GITHUB }}" class="ext">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+{% block main %}{% endblock %}
+</main>
+<footer class="wrap foot">
+  Built from <code>{{ source }}</code> by <code>guide/build.py</code>. Models and drawings: the Limn project.
+</footer>
+</body>
+</html>
