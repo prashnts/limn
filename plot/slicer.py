@@ -12,13 +12,23 @@
 # Strokes wider than the tool fill their area (concentric), thinner ones are
 # drawn on their centre line. Paths come out in object mm, y up, draped on
 # the object's surface: (n, 3), z the surface.
+#
+# What another tool (or a mask) draws on top is kept `bleed` mm clear of, so
+# inks that run don't meet. Shapes too small or too dense for the tool's line
+# (the pen would fill in their insides: small handwriting, tiny text) are
+# skipped, or only warned about (the tool's `small`). The object's masks are
+# regions where nothing of it is drawn. With a tool's `layers`, a darker ink on
+# top doesn't cut it: it is drawn whole, first, and the dark ink over it keeps
+# its edges crisp (a light fill under a black outline).
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import shapely
+from shapely.geometry import MultiLineString, Polygon
 from shapely.ops import unary_union
 
 from . import svg
@@ -28,6 +38,9 @@ from .job import Group, Obj
 from .surface import make
 
 WIDE = 1.5      # auto: strokes this many tool widths wide or more fill their area
+SMALL = 2.5     # a shape less than this many tool widths across is a blob (but a dot, under half one)
+LOST = 0.7      # too dense: the tool's line paints over this much of the space inside a shape
+TEXT_MIN = 8    # auto: text whose caps are under this many tool widths is drawn in its line font
 
 
 @dataclass
@@ -37,10 +50,79 @@ class Sliced:
     bounds: tuple | None            # x0, y0, x1, y1 of the paths, object mm
     texts: int = 0                  # <text> not drawn (yet)
     problems: list[str] = field(default_factory=list)
+    cover: dict = field(default_factory=dict)   # tool ('': a mask) -> the area its opaque paint hides, object mm
+    small: list[int] = field(default_factory=list)  # shapes too small or dense for their tool
+
+
+def lost_detail(paths, width, ink=None):
+    '''How much of a shape's inside a line `width` wide paints over: 0 nothing (a line,
+    a dot), 1 all of it (a blob). ink: the area it really covers (the stroke as wide
+    as the SVG has it, a fill's area); paths: its lines, object mm.'''
+    lines = [p for p in paths if len(p) >= 2]
+    if not lines:
+        return 0.0
+    g = MultiLineString(lines)
+    x0, y0, x1, y1 = g.bounds
+    across = max(x1 - x0, y1 - y0)
+    if across < width / 2:
+        return 0.0                  # a dot, meant as one
+    hull = g.convex_hull
+    if hull.area < 1e-9:
+        return 0.0                  # straight
+    r = np.asarray(shapely.minimum_rotated_rectangle(hull).exterior.coords)
+    thick = min(math.dist(r[0], r[1]), math.dist(r[1], r[2]))
+    if thick < width / 4:
+        return 0.0                  # a line
+    if across < SMALL * width:
+        return 1.0                  # small: the pen makes a blob of it
+    if thick < width:
+        return 0.0                  # long and thinner than the pen: a line, only its wobble is lost
+    inside = hull.difference(ink if ink is not None else g.buffer(0.01))
+    if inside.area < 0.15 * hull.area:
+        return 0.0
+    pen = ink.buffer(width / 2) if ink is not None else g.buffer(width / 2)
+    return inside.intersection(pen).area / inside.area
+
+
+def cut(paths, geom):
+    '''The paths (n, 2) less what lies in `geom`.'''
+    if geom is None or geom.is_empty:
+        return paths
+    shapely.prepare(geom)
+    out = []
+    for p in paths:
+        line = MultiLineString([p]) if len(p) >= 2 else None
+        if line is None or not geom.intersects(line):
+            out.append(p)
+        elif not geom.covers(line):
+            out += lines_of(line.difference(geom))
+    return out
+
+
+def mask_area(obj):
+    '''The object's masks, object mm (scaled).'''
+    polys = [shapely.make_valid(Polygon([(x * obj.scale, y * obj.scale) for x, y in m]))
+             for m in obj.masks if len(m) >= 3]
+    return unary_union(polys) if polys else None
 
 
 def _rgb(hexc):
     return np.array([int(hexc[i:i + 2], 16) for i in (1, 3, 5)], float)
+
+
+def lightness(hexc):
+    '''0 black .. 1 white: how light an ink looks (relative luminance).'''
+    try:
+        return float(_rgb(hexc) @ (0.2126, 0.7152, 0.0722)) / 255
+    except (ValueError, TypeError, IndexError):
+        return 0.0
+
+
+def goes_under(tool, over):
+    '''Whether `tool`'s ink is drawn whole under the ink of `over` (a tool, None: a mask):
+    with `layers`, a lighter ink isn't cut by a darker one; it plots first (emit).'''
+    return (tool is not None and over is not None and tool.layers and over.id != tool.id
+            and lightness(over.color) < lightness(tool.color) - 0.05)
 
 
 def colour_distance(a, b):
@@ -59,7 +141,8 @@ def nearest_tool(colour, tools):
 
 
 def default_groups(drawing, tools):
-    '''Each colour to the tool of the nearest colour; near white is the paper: a mask.'''
+    '''Each colour to the tool of the nearest colour; near white is the paper: a mask.
+    Fill and stroke settings left None: as the tool draws.'''
     out = {}
     for key in drawing.groups():
         colour = key.split(' ', 1)[1]
@@ -84,9 +167,12 @@ def text_font(run, spec, fonts):
     return fonts.path(info.file) if info else None
 
 
-def text_shapes(d, obj, fonts, problems):
-    '''The drawing's <text> as shapes: the glyphs' outlines (source) or strokes (line).'''
+def text_shapes(d, obj, fonts, problems, tools=None):
+    '''The drawing's <text> as shapes: the glyphs' outlines (source) or strokes (line).
+    With the tools: in auto, text too small for its tool's line in its own font is
+    drawn in its line font.'''
     out = []
+    groups = groups_for(obj, d, tools) if tools else {}
     for run in d.texts:
         spec = obj.texts.get(str(run.index), obj.text)
         colour = run.fill or run.stroke
@@ -94,6 +180,15 @@ def text_shapes(d, obj, fonts, problems):
             continue
         src = text_font(run, spec, fonts)
         mode = ('source' if src else 'line') if spec.mode == 'auto' else spec.mode
+        g = groups.get(f'fill {colour}')
+        tool = tools.get(g.tool) if g is not None and g.tool else None
+        if mode == 'source' and spec.mode == 'auto' and tool is not None:
+            m = run.matrix
+            cap = cap_height(src, run.size) * abs(m[0] * m[3] - m[1] * m[2]) ** 0.5 * obj.scale
+            if cap < TEXT_MIN * tool.width:
+                problems.append(f'{obj.id}: "{run.text[:20]}" is {cap:.1f} mm high, too small for {tool.id}\'s '
+                                f'{tool.width:g} mm line in its own font: drawn in {spec.line_font}')
+                mode = 'line'
         if mode == 'source' and src is None:
             problems.append(f'{obj.id}: no font for {run.family or "?"} ("{run.text[:20]}"), '
                             f'drawn in {spec.line_font}')
@@ -119,7 +214,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     groups = groups_for(obj, d, tools)
     height, s = d.size[1], obj.scale
     problems = []
-    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems), key=lambda sh: sh.index)
+    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems, tools), key=lambda sh: sh.index)
 
     def local(p):
         return np.column_stack([p[:, 0] * s, (height - p[:, 1]) * s])
@@ -132,14 +227,30 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             return None
         return tools[g.tool]
 
-    items = []      # (shape, paths, stroke group, fill group, fill area, stroke area, cover)
+    def setting(g, t, k):
+        '''A colour's own fill or stroke setting, else how its tool draws.'''
+        v = getattr(g, k) if g is not None else None
+        return v if v is not None else getattr(t, k)
+
+    small = {}                      # tool -> shapes too small or dense for it
+
+    def too_small(sh, t, paths, ink):
+        '''Whether to leave this part out: too small or dense for the tool (its `small`).'''
+        if t is None or t.small == 'draw' or lost_detail(paths, t.width, ink) < LOST:
+            return False
+        small.setdefault(t.id, set()).add(sh.index)
+        return t.small == 'skip'
+
+    items = []      # (shape, paths, stroke group, fill group, fill area, stroke area, wide, stroke covers, covers)
     for sh in shapes:
         paths = [local(p) for p in sh.paths]
         paint = obj.shapes.get(str(sh.index))
         sg = ((paint.stroke if paint and paint.stroke else None) or groups.get(f'stroke {sh.stroke}')) if sh.stroke else None
         fg = ((paint.fill if paint and paint.fill else None) or groups.get(f'fill {sh.fill}')) if sh.fill else None
         if sh.line:
-            items.append((sh, paths, None, fg, None, None, False, False, None))
+            if too_small(sh, tool_of(fg), paths, None):
+                fg = None
+            items.append((sh, paths, None, fg, None, None, False, False, []))
             continue
         stroke_on = sg is not None and (sg.tool is not None or sg.mask)
         fill_on = fg is not None and (fg.tool is not None or fg.mask)
@@ -147,27 +258,47 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         if fill_on:
             rings = [p if c else np.vstack([p, p[:1]]) for p, c in zip(paths, sh.closed)]
             fill_area = region(rings, sh.rule)
+            if too_small(sh, tool_of(fg), paths, fill_area):
+                fg, fill_on, fill_area = None, False, None
         st = tool_of(sg)
-        wide = st is not None and (sg.stroke == 'width' or (sg.stroke == 'auto' and sh.width * s >= st.width * WIDE))
+        wide = st is not None and (setting(sg, st, 'stroke') == 'width'
+                                   or (setting(sg, st, 'stroke') == 'auto' and sh.width * s >= st.width * WIDE))
+        if st is not None and not wide and too_small(sh, st, paths,
+                                                     stroke_area(paths, sh.closed, max(sh.width * s, 0.02))):
+            sg, stroke_on, st = None, False, None
         stroke_covers = obj.occlude and stroke_on and sh.stroke_opaque
         s_area = stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join) if (wide or stroke_covers) else None
-        cover = []
+        covers = []                 # (area, tool id; '' a mask): what it hides of the shapes under it
         if obj.occlude and fill_on and sh.fill_opaque and fill_area is not None:
-            cover.append(fill_area)
+            covers.append((fill_area, fg.tool or ''))
         if stroke_covers:
-            cover.append(s_area)
-        items.append((sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers,
-                      unary_union(cover) if cover else None))
+            covers.append((s_area, sg.tool or ''))
+        items.append((sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, covers))
 
-    covers = [it[-1] for it in items]
-    idx = [i for i, c in enumerate(covers) if c is not None and not c.is_empty]
-    tree = shapely.STRtree([covers[i] for i in idx]) if idx else None
+    flat = [(i, geom, t) for i, it in enumerate(items) for geom, t in it[-1] if not geom.is_empty]
+    tree = shapely.STRtree([g for _, g, _ in flat]) if flat else None
+    grown = {}
 
-    def above(i, geom):
+    def above(i, geom, tool):
+        '''What the shapes painted after shape i hide of `geom`: what another tool
+        (or a mask) draws there is kept the tool's `bleed` clear of.'''
         if tree is None or geom is None or geom.is_empty:
             return None
-        hits = [idx[j] for j in tree.query(geom) if idx[j] > i]
-        return unary_union([covers[j] for j in hits]) if hits else None
+        bleed = tool.bleed if tool is not None else 0
+        hits = []
+        for j in tree.query(geom.buffer(bleed) if bleed > 0 else geom):
+            k, g, t = flat[j]
+            if k <= i or goes_under(tool, tools.get(t)):
+                continue
+            if bleed > 0 and t != tool.id:
+                if (j, bleed) not in grown:
+                    grown[(j, bleed)] = g.buffer(bleed)
+                g = grown[(j, bleed)]
+            hits.append(g)
+        return unary_union(hits) if hits else None
+
+    def less(geom, hide):
+        return geom if hide is None else geom.difference(hide)
 
     out: dict[str, list[np.ndarray]] = {}
     for i, (sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, _) in enumerate(items):
@@ -175,32 +306,42 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         if sh.line:
             if ft is not None:
                 lines = centerlines(paths, sh.closed)
-                hide = above(i, lines)
-                out.setdefault(ft.id, []).extend(lines_of(lines if hide is None else lines.difference(hide)))
+                out.setdefault(ft.id, []).extend(lines_of(less(lines, above(i, lines, ft))))
             continue
+        st = tool_of(sg)
         if ft is not None and fill_area is not None:
             area = fill_area
-            if stroke_covers:
-                area = area.difference(s_area)
-            hide = above(i, area)
-            if hide is not None:
-                area = area.difference(hide)
+            if stroke_covers and not goes_under(ft, st):
+                gap = ft.bleed if st is None or st.id != ft.id else 0
+                area = area.difference(s_area.buffer(gap) if gap > 0 else s_area)
+            area = less(area, above(i, area, ft))
             out.setdefault(ft.id, []).extend(
-                fill(area, ft.width, fg.spacing or ft.spacing, fg.fill, fg.angle, fg.border))
-        st = tool_of(sg)
+                fill(area, ft.width, fg.spacing or ft.spacing, setting(fg, ft, 'fill'), setting(fg, ft, 'angle'),
+                     setting(fg, ft, 'border')))
         if st is not None:
             if wide:
-                area = s_area
-                hide = above(i, area)
-                if hide is not None:
-                    area = area.difference(hide)
+                area = less(s_area, above(i, s_area, st))
                 out.setdefault(st.id, []).extend(fill(area, st.width, st.spacing, 'concentric', border=True))
             else:
                 lines = centerlines(paths, sh.closed)
-                hide = above(i, lines)
-                if hide is not None:
-                    lines = lines.difference(hide)
-                out.setdefault(st.id, []).extend(lines_of(lines))
+                out.setdefault(st.id, []).extend(lines_of(less(lines, above(i, lines, st))))
+
+    for t, idx in small.items():
+        how = 'left out' if tools[t].small == 'skip' else 'drawn anyway'
+        problems.append(f'{obj.id}: {len(idx)} shape{"s" if len(idx) > 1 else ""} too small or dense for '
+                        f'{t}\'s {tools[t].width:g} mm line, {how} (scale it up, or a finer pen)')
+
+    masked = mask_area(obj)
+    if masked is not None:
+        out = {t: cut(ps, masked) for t, ps in out.items()}
+    cover = {}
+    if obj.occlude:
+        by = {}
+        for it in items:
+            for geom, t in it[-1]:
+                by.setdefault(t, []).append(geom)
+        cover = {t: less(unary_union(gs), masked) for t, gs in by.items()}
+        cover = {t: g for t, g in cover.items() if not g.is_empty}
 
     surface = make(obj.surface, root)
     draped = {t: [surface.drape(p) for p in ps] for t, ps in out.items() if ps}
@@ -209,7 +350,8 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     if pts:
         a = np.vstack(pts)
         bounds = (*a[:, :2].min(axis=0), *a[:, :2].max(axis=0))
-    return Sliced(draped, surface, bounds, len(d.texts), problems)
+    return Sliced(draped, surface, bounds, len(d.texts), problems, cover,
+                  sorted(set().union(*small.values())) if small else [])
 
 
 class Cache:

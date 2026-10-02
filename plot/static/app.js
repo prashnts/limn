@@ -98,6 +98,9 @@ const HELP = {
   power: 'Laser power, 0-255',
   reload_every: 'A brush goes back to its well every this many mm',
   well_z: 'Brush height in the well',
+  bleed: 'mm kept clear around what another tool (or a mask) draws on top: inks that run don\'t meet',
+  layers: 'Light under dark: a lighter ink isn\'t cut out where a darker one draws over it, it is drawn whole and the light pens plot first, so the dark outlines over them stay crisp. Cut out: each ink only where it shows',
+  small: 'Shapes too small or dense for the tool\'s line (it would fill them in: tiny handwriting, text): leave them out, draw them with a warning, or just draw them',
   dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (twice that while printing)',
   webcam: 'The camera\'s name in Moonraker\'s webcams',
   focus_z: 'Camera: the G-code z where what lies on the bed is sharpest',
@@ -125,7 +128,7 @@ const HELP = {
 function helpify(root) {
   for (const el of root.querySelectorAll('input, select, button, label')) {
     if (el.title) continue;
-    const k = el.dataset.k || el.dataset.f || el.dataset.pf || el.dataset.p || el.id;
+    const k = el.dataset.k || el.dataset.dk || el.dataset.f || el.dataset.pf || el.dataset.p || el.id;
     if (k && HELP[k]) el.title = HELP[k];
   }
 }
@@ -162,6 +165,7 @@ async function runSlice() {
   try {
     preview = await api('POST', '/api/slice');
     gcodeLines = null;
+    markSmall();
     renderPreview();
     renderOutput();
     status(`${preview.lines} lines · ${preview.ms} ms`);
@@ -289,7 +293,8 @@ for (const type of ['pointerup', 'pointercancel']) {
 }
 
 let spaceDown = false;
-let mode = 'select';    // select | pan | paint
+let mode = 'select';    // select | pan | paint | mask
+let maskSel = null;     // {id, i}: a masked region picked with the mask tool
 let drag = null;        // {kind: 'pan'|'move'|'scale'|'rotate', ...}
 
 const rad = (d) => d * Math.PI / 180;
@@ -305,8 +310,11 @@ function setMode(m) {
   mode = m;
   if (m !== 'paint') paintTo = null;
   else if (!paintTo) paintTo = (Object.values(S.tools).find((t) => t.draws !== false) || {}).id;
+  if (m !== 'mask') maskSel = null;
   $$('#rail [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
   svg.classList.toggle('pan-mode', m === 'pan');
+  svg.classList.toggle('mask-mode', m === 'mask');
+  renderObjects();
   renderPalette();
   drawHandles();
 }
@@ -342,6 +350,21 @@ function setHot(el) {
 }
 
 svg.addEventListener('pointerdown', (e) => {
+  if (mode === 'mask' && e.button === 0 && !spaceDown) {
+    const m = e.target.closest('.objmask');
+    if (m) {
+      maskSel = { id: m.closest('g.obj').dataset.id, i: +m.dataset.m };
+      sel = maskSel.id; store.set('sel', sel); render();
+      return;
+    }
+    const g = e.target.closest('g.obj');
+    const id = sel || (g && g.dataset.id);
+    if (!id) return flash('Select a drawing first, then drag over the part of it not to draw');
+    maskSel = null;
+    drag = { kind: 'mask', id, start: worldPt(e), at: worldPt(e) };
+    try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+    return;
+  }
   const handle = e.target.closest('[data-handle]');
   const picking = mode === 'paint' && paintTo && e.button === 0 && !spaceDown;
   const shape = picking ? pickShape(e) : e.target.closest('path.shape');
@@ -402,6 +425,15 @@ svg.addEventListener('pointermove', (e) => {
     applyVb();
     return;
   }
+  if (drag.kind === 'mask') {
+    drag.at = w;
+    const L = $('#overlay-layer');
+    L.innerHTML = '';
+    const [a, b] = [drag.start, w];
+    svgEl('rect', { class: 'mask-draft', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) }, L);
+    hint(`${num(Math.abs(a.x - b.x), 1)} × ${num(Math.abs(a.y - b.y), 1)} mm not drawn`);
+    return;
+  }
   const o = obj(drag.id);
   drag.moved = true;
   $('#paths-layer').classList.add('stale');
@@ -442,6 +474,18 @@ svg.addEventListener('pointerup', async () => {
     if (d.click && sel) { sel = null; store.set('sel', sel); render(); }
     return;
   }
+  if (d.kind === 'mask') {
+    $('#overlay-layer').innerHTML = '';
+    const o = obj(d.id), [a, b] = [d.start, d.at];
+    if (!o || Math.abs(a.x - b.x) < 0.3 || Math.abs(a.y - b.y) < 0.3) return;
+    // the rectangle's corners, in the drawing's own mm (scale 1), as the slicer has its shapes
+    const poly = [[a.x, a.y], [b.x, a.y], [b.x, b.y], [a.x, b.y]].map(([x, y]) => {
+      const l = toLocal(o.placement, { x, y });
+      return [+(l.x / o.scale).toFixed(3), +(l.y / o.scale).toFixed(3)];
+    });
+    maskSel = { id: o.id, i: (o.masks || []).length };
+    return patchObj(o.id, { masks: [...(o.masks || []), poly] });
+  }
   if (!d.moved) return;
   const o = obj(d.id);
   const body = { placement: o.placement };
@@ -458,7 +502,8 @@ function flash(text, ms = 2500) {
 function hint(text) {
   if (!text && Date.now() < flashUntil) return;     // a flash() stays its while
   $('#hint').textContent = text || (mode === 'paint' && paintTo
-    ? `Painting ${paintTo} · ${paintTarget} · ${paintScope} (shift: whole colour) · Esc to stop` : '');
+    ? `Painting ${paintTo} · ${paintTarget} · ${paintScope} (shift: whole colour) · Esc to stop`
+    : mode === 'mask' ? 'Mask: drag where the drawing isn\'t drawn · Del removes a picked one' : '');
 }
 
 // The selected object's frame: corners scale (alt: about the middle), the knob turns (shift: 15°)
@@ -466,7 +511,7 @@ function drawHandles() {
   const L = $('#overlay-layer');
   L.innerHTML = '';
   const o = sel && obj(sel);
-  if (!o || !info(o.id) || mode === 'paint' || hiddenObjs.has(o.id)) return;
+  if (!o || !info(o.id) || mode === 'paint' || mode === 'mask' || hiddenObjs.has(o.id)) return;
   const [w0, h0] = info(o.id).size;
   const k = drag && drag.kind === 'scale' && drag.id === o.id ? drag.k : 1;
   const w = w0 * k, h = h0 * k, pl = o.placement;
@@ -640,10 +685,39 @@ async function drawObjects() {
     }
     placeObject(o);
     styleObject(o, g, data);
+    drawMasks(o, g);
     g.style.display = hiddenObjs.has(o.id) ? 'none' : '';
+    L.appendChild(g);             // the job's order: later on top, as it plots (emit.hidden)
   }
+  markSmall();
   drawHandles();
   drawRulers();
+}
+
+// Shapes too small or dense for their tool's line (the slice says which): outlined in
+// the Tools view, so it shows what 'too small' leaves out
+function markSmall() {
+  const small = (preview && preview.small) || {};
+  for (const g of $$('#design-layer g.obj')) {
+    const set = new Set(small[g.dataset.id] || []);
+    for (const p of $$('path.shape', g)) p.classList.toggle('small', set.has(+p.dataset.i));
+  }
+}
+
+// Its masked regions: nothing of the drawing is drawn in them (object mm, like its shapes)
+function drawMasks(o, g) {
+  for (const m of $$('.objmask', g)) m.remove();
+  (o.masks || []).forEach((m, i) => {
+    const d = 'M' + m.map(([x, y]) => `${x * o.scale},${y * o.scale}`).join(' L') + 'Z';
+    const p = svgEl('path', { class: 'objmask' + (maskSel && maskSel.id === o.id && maskSel.i === i ? ' on' : ''), d, 'data-m': i }, g);
+    svgEl('title', {}, p).textContent = 'Masked: not drawn here (the mask tool, M: click it, then Del)';
+  });
+}
+async function removeMask(id, i) {
+  const o = obj(id);
+  if (!o) return;
+  maskSel = null;
+  await patchObj(id, { masks: o.masks.filter((_, k) => k !== i) });
 }
 
 function styleObject(o, g, data) {
@@ -779,24 +853,39 @@ function toolOptions(g) {
   opts.push(`<option value="skip"${cur === 'skip' ? ' selected' : ''}>skip</option>`);
   return opts.join('');
 }
+const STROKES = { auto: 'auto width', centerline: 'centre line', width: 'full width' };
+// How a tool draws (its fill, stroke, ..): the job's settings for all, its own tuning; no tool: the job's
+const drawOf = (tid) => (tid && S.tools[tid]) || { ...S.draw, ...S.job.draw };
 const opt = (v, cur, label) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label ?? v)}</option>`;
 
+// The list has the top drawing first: one over another hides what is under it (where
+// it paints opaque, its 'what is on top hides' on), on the canvas and on the paper
+const ORDER = [['front', '⤒', 'Bring to front (Shift+])'], ['forward', '↑', 'Bring forward (])'],
+  ['backward', '↓', 'Send backward ([)'], ['back', '⤓', 'Send to back (Shift+[)']];
 function renderObjectList() {
   const ids = new Set(S.job.objects.map((o) => o.id));
   for (const id of hiddenObjs) if (!ids.has(id)) hiddenObjs.delete(id);
   const hidden = S.job.objects.filter((o) => hiddenObjs.has(o.id)).length;
-  fill($('#objects'), S.job.objects.map((o) => `
+  const n = S.job.objects.length;
+  fill($('#objects'), [...S.job.objects].reverse().map((o, k) => `
     <li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}${hiddenObjs.has(o.id) ? ' hidden' : ''}">
       <button class="icon eye" data-act="eye" title="${hiddenObjs.has(o.id) ? 'Hidden: show it' : 'Hide it (only from view: it still plots)'}">${hiddenObjs.has(o.id) ? '◌' : '◉'}</button>
       <span class="name">${esc(o.id)}</span>
-      <button class="icon" data-act="dup" title="Duplicate">⧉</button>
-      <button class="icon" data-act="del" title="Remove">✕</button>
+      <button class="icon" data-act="dup" title="Duplicate (Ctrl+D)">⧉</button>
+      <button class="icon" data-act="del" title="Remove (Del)">✕</button>
+      ${o.id === sel && n > 1 ? `<div class="order" role="group" aria-label="Order">${ORDER.map(([to, icon, title]) =>
+        `<button class="icon" data-order="${to}" title="${title}"${(to === 'front' || to === 'forward' ? k === 0 : k === n - 1) ? ' disabled' : ''}>${icon}</button>`).join('')}
+        <span class="note">${k === 0 ? 'on top' : k === n - 1 ? 'at the bottom' : `${k + 1} of ${n}`}</span></div>` : ''}
     </li>`).join('') + (hidden ? `<li class="note">${hidden} hidden from view: ${hidden > 1 ? 'they still plot' : 'it still plots'} (Skip its colours not to)</li>` : ''));
+}
+async function reorder(id, to) {
+  setState(await api('POST', `/api/objects/${id}/order`, { to }));
 }
 $('#objects').addEventListener('click', async (e) => {
   const li = e.target.closest('li'); if (!li) return;
   const id = li.dataset.id, act = e.target.dataset.act;
   if (!id) return;
+  if (e.target.dataset.order) return reorder(id, e.target.dataset.order);
   if (act === 'eye') return setHidden(id, !hiddenObjs.has(id));
   if (act === 'del') {
     if (confirm(`Remove ${id} from the bed?`)) setState(await api('DELETE', `/api/objects/${id}`));
@@ -818,12 +907,14 @@ function renderObjectPanel() {
     const open = openOpts.has(o.id + g.key);
     const meta = [`${g.shapes}×`, g.texts ? `${g.texts} text` : '', g.length ? `${num(g.length / 1000, 2)} m` : '',
       g.widths.length ? 'w ' + g.widths.slice(0, 3).map((w) => num(w, 2)).join('/') : ''].filter(Boolean).join(' · ');
+    // Left empty: as its tool draws (the Drawing panel for every tool, a tool's own tuning)
+    const t = drawOf(cur.tool);
     const opts = part === 'fill'
-      ? `<select data-f="fill">${['hatch', 'crosshatch', 'concentric', 'none'].map((v) => opt(v, cur.fill)).join('')}</select>
-         <label>∠<input type="number" data-f="angle" value="${num(cur.angle)}" step="15"></label>
-         <label><input type="checkbox" data-f="border"${cur.border ? ' checked' : ''}> border</label>
+      ? `<select data-f="fill">${opt('', cur.fill ?? '', `${t.fill} (tool)`)}${['hatch', 'crosshatch', 'concentric', 'none'].map((v) => opt(v, cur.fill ?? '')).join('')}</select>
+         <label>∠<input type="number" data-f="angle" value="${num(cur.angle)}" step="15" placeholder="${num(t.angle)}"></label>
+         <select data-f="border">${opt('', cur.border == null ? '' : cur.border ? '1' : '0', `${t.border ? 'border' : 'no border'} (tool)`)}${opt('1', cur.border == null ? '' : cur.border ? '1' : '0', 'border')}${opt('0', cur.border == null ? '' : cur.border ? '1' : '0', 'no border')}</select>
          <label>gap<input type="number" data-f="spacing" value="${num(cur.spacing)}" step="0.05" min="0.05" placeholder="tool"></label>`
-      : `<select data-f="stroke">${[['auto', 'auto width'], ['centerline', 'centre line'], ['width', 'full width']].map(([v, l]) => opt(v, cur.stroke, l)).join('')}</select>`;
+      : `<select data-f="stroke">${opt('', cur.stroke ?? '', `${STROKES[t.stroke]} (tool)`)}${Object.entries(STROKES).map(([v, l]) => opt(v, cur.stroke ?? '', l)).join('')}</select>`;
     return `<tr data-key="${esc(g.key)}">
         <td><span class="swatch ${part}" style="${part === 'stroke' ? 'border-color' : 'background'}:${esc(colour)}"></span></td>
         <td><div class="key">${esc(part)} ${esc(colour)}${over ? ' •' : ''}</div><div class="meta">${esc(meta)}</div></td>
@@ -859,6 +950,12 @@ function renderObjectPanel() {
     <h3>Colours (${I.groups.length})</h3>
     <table class="groups"><tbody>${groups}</tbody></table>
     ${I.texts.length ? `<h3>Texts (${I.texts.length})</h3>${texts}` : ''}
+    <h3>Masked regions${o.masks.length ? ` (${o.masks.length})` : ''}</h3>
+    ${o.masks.length ? `<ul class="list masks">${o.masks.map((m, i) => `<li data-m="${i}" class="${maskSel && maskSel.id === o.id && maskSel.i === i ? 'on' : ''}">
+        <span class="name">${num(Math.max(...m.map((p) => p[0])) * o.scale - Math.min(...m.map((p) => p[0])) * o.scale, 1)} × ${num(Math.max(...m.map((p) => p[1])) * o.scale - Math.min(...m.map((p) => p[1])) * o.scale, 1)} mm</span>
+        <button class="icon" data-unmask="${i}" title="Draw there again">✕</button></li>`).join('')}</ul>
+        <div class="row"><button data-act="unmask-all">Clear all</button></div>`
+      : `<p class="note">Nothing of it is drawn in a masked region, eg. over what is on the paper already. <button data-act="mask-tool" title="M">Mask tool</button></p>`}
     ${painted ? `<h3>Painted shapes</h3><div class="row">${painted} shape${painted > 1 ? 's' : ''} painted apart from their colour <button data-act="unpaint">Clear</button></div>` : ''}
     ${Object.keys(I.skipped || {}).length ? `<p class="note">Not drawn: ${esc(Object.entries(I.skipped).map(([k, v]) => `${v} ${k}`).join(', '))}</p>` : ''}`);
 }
@@ -879,10 +976,9 @@ $('#object-panel').addEventListener('change', async (e) => {
     const g = { ...(o.groups[key] || info(o.id).groups.find((x) => x.key === key).default) };
     const f = t.dataset.f;
     if (f === 'to') { g.tool = ['mask', 'skip'].includes(t.value) ? null : t.value; g.mask = t.value === 'mask'; }
-    else if (f === 'border') g.border = t.checked;
-    else if (f === 'angle') g.angle = +t.value;
-    else if (f === 'spacing') g.spacing = t.value === '' ? null : +t.value;
-    else g[f] = t.value;
+    else if (f === 'border') g.border = t.value === '' ? null : t.value === '1';
+    else if (f === 'angle' || f === 'spacing') g[f] = t.value === '' ? null : +t.value;
+    else g[f] = t.value === '' ? null : t.value;
     return patchObj(o.id, { groups: { ...o.groups, [key]: g } });
   }
   const run = t.closest('.text-run');
@@ -928,6 +1024,16 @@ $('#object-panel').addEventListener('click', async (e) => {
     centre(o);
   } else if (act === 'unpaint') {
     patchObj(o.id, { shapes: {} });
+  } else if (act === 'unmask-all') {
+    maskSel = null;
+    patchObj(o.id, { masks: [] });
+  } else if (act === 'mask-tool') {
+    setMode('mask');
+  } else if (e.target.dataset.unmask) {
+    removeMask(o.id, +e.target.dataset.unmask);
+  } else if (e.target.closest('.masks li')) {
+    maskSel = { id: o.id, i: +e.target.closest('li').dataset.m };
+    render();
   }
 });
 
@@ -1039,7 +1145,46 @@ $('#machine').addEventListener('click', async (e) => {
   if (k) setState(await api('PATCH', '/api/job', { machine_overrides: { [k]: null } }));
 });
 
-const TOOL_FIELDS = ['width', 'press', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max'];
+const TOOL_FIELDS = ['width', 'press', 'overlap', 'feed', 'z_down', 'hop', 'link', 'plunge_feed', 'wear', 'focus', 'power', 'reload_every', 'well_z', 'z_min', 'z_max', 'angle', 'bleed'];
+// How it draws, whatever the pen (tools.DRAW): for every tool in the Drawing panel, one
+// tool's own in its tuning. Number fields, then choices.
+const PEN_OWN = new Set(['feed', 'plunge_feed', 'overlap', 'link']);     // empty: each pen's own
+const DRAW_NUMS = [['feed', 'speed'], ['plunge_feed', 'plunge'], ['overlap', 'overlap'], ['link', 'link'], ['angle', 'fill ∠'], ['bleed', 'bleed']];
+const DRAW_CHOICES = {
+  fill: [['hatch', 'hatch'], ['crosshatch', 'crosshatch'], ['concentric', 'rings'], ['none', 'no fill']],
+  border: [['1', 'border'], ['0', 'no border']],
+  stroke: Object.entries(STROKES),
+  small: [['skip', 'leave out'], ['warn', 'warn, draw'], ['draw', 'draw']],
+  layers: [['1', 'light under dark'], ['0', 'cut out']],
+};
+const BOOL_CHOICES = new Set(['border', 'layers']);
+const asChoice = (v) => (v === true ? '1' : v === false ? '0' : v ?? '');
+const fromChoice = (k, v) => (v === '' ? null : BOOL_CHOICES.has(k) ? v === '1' : v);
+const choiceLabel = (k, v) => (DRAW_CHOICES[k].find(([c]) => c === asChoice(v)) || [, String(v)])[1];
+function choices(k, cur, dflt, attr) {
+  return `<select ${attr}>${opt('', asChoice(cur), `${choiceLabel(k, dflt)} (default)`)}${DRAW_CHOICES[k].map(([v, l]) => opt(v, asChoice(cur), l)).join('')}</select>`;
+}
+
+function renderDraw() {
+  const d = S.job.draw, base = S.draw;
+  const nums = DRAW_NUMS.map(([k, l]) => `<label>${l}<input type="number" step="any" data-dk="${k}" value="${d[k] == null ? '' : num(d[k], 3)}"
+      placeholder="${PEN_OWN.has(k) ? 'pen’s' : num(base[k], 3)}"${k in d ? ' class="changed"' : ''}></label>`).join('');
+  const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${k === 'small' ? 'too small' : k}${choices(k, d[k], base[k], `data-dk="${k}"${k in d ? ' class="changed"' : ''}`)}</label>`).join('');
+  const n = Object.keys(d).length;
+  fill($('#drawset'), `<div class="grid">${nums}</div><div class="grid choices">${sels}</div>
+    <p class="note">For every tool, whatever its pen; a tool’s tuning wins (Tools), a colour’s own fill and stroke over both.</p>
+    ${n ? `<button class="icon" data-act="reset-draw" title="Back to each pen's and the defaults">↺ ${n} changed</button>` : ''}`);
+}
+$('#drawset').addEventListener('change', async (e) => {
+  const k = e.target.dataset.dk;
+  if (!k) return;
+  const v = e.target.tagName === 'SELECT' ? fromChoice(k, e.target.value) : e.target.value === '' ? null : +e.target.value;
+  setState(await api('PATCH', '/api/job', { draw: { [k]: v } }));
+});
+$('#drawset').addEventListener('click', async (e) => {
+  if (e.target.dataset.act !== 'reset-draw') return;
+  setState(await api('PATCH', '/api/job', { draw: Object.fromEntries(Object.keys(S.job.draw).map((k) => [k, null])) }));
+});
 // Each holder: what its tag says, and what the card would write to it (draft)
 const drafts = {};
 const openTune = new Set();     // tool cards with their tuning open
@@ -1101,6 +1246,8 @@ function renderTools() {
     // with a press, z_down and hop don't count: pen-down is z_touch less it, the lift comes from it and the play
     const fields = TOOL_FIELDS.filter((k) => k in tool && !(tool.press != null && (k === 'z_down' || k === 'hop'))).map((k) =>
       `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
+    const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${k === 'small' ? 'too small' : k}${choices(k, k in o ? tool[k] : null,
+      k in S.job.draw ? S.job.draw[k] : S.draw[k], `data-k="${k}" data-sel="1"${k in o ? ' class="changed"' : ''}`)}</label>`).join('');
     const tuned = Object.keys(o).length;
     const dry = ((printer && printer.drying) || {})[String(holder)];
     const dryBadge = dry ? `<span class="badge ${dry.stage ? 'bad' : 'warn'}" title="Out of its cap in the machine; ${Math.round(dry.limit / 60)} min allowed (TOOL_DRY RESET=1 T=${holder} after priming it)">uncapped ${Math.floor(dry.uncapped / 60)} min</span>` : '';
@@ -1115,7 +1262,7 @@ function renderTools() {
         <button data-act="write" class="${changed ? 'primary' : ''}"${busy || !changed ? ' disabled' : ''} title="Dock ${esc(t)}, write this onto its tag, put it back">Write to tag</button>
       </div>
       <details data-tune="${esc(t)}"${tuned || openTune.has(t) ? ' open' : ''}><summary>tune: ${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ' · changed here' : ''}</summary>
-        <div class="grid">${fields}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
+        <div class="grid">${fields}</div><div class="grid choices">${sels}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
     </div>`;
   }).join('');
   fill($('#tools'), head + cards);
@@ -1141,7 +1288,8 @@ $('#tools').addEventListener('change', async (e) => {
   if (el.dataset.d === 'color') return redraft(t, { color: el.value });
   if (el.dataset.d === 'name') { Object.assign(drafts[t], { name: el.value.trim(), named: !!el.value.trim() }); return renderTools(); }
   if (!el.dataset.k) return;
-  setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: { [el.dataset.k]: el.value === '' ? null : +el.value } } }));
+  const v = el.dataset.sel ? fromChoice(el.dataset.k, el.value) : el.value === '' ? null : +el.value;
+  setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: { [el.dataset.k]: v } } }));
 });
 $('#tools').addEventListener('click', async (e) => {
   const el = e.target;
@@ -1313,13 +1461,13 @@ const DRAG_STEP = {
   'f-x': 0.5, 'f-y': 0.5, 'f-r': 1, 'f-s': 1, angle: 5, spacing: 0.01,
   z_min: 0.05, z_max: 0.1, z_travel: 0.1, hop_distance: 1, clearance: 0.1, feed_travel: 100, order_time: 0.05,
   dry: 5, width: 0.01, press: 0.02, press_max: 0.02, z_touch: 0.05, overlap: 0.05, feed: 100, z_down: 0.05, hop: 0.05, link: 0.01, plunge_feed: 50, wear: 0.005,
-  focus: 0.1, power: 5, reload_every: 10, well_z: 0.05, dips: 1,
+  focus: 0.1, power: 5, reload_every: 10, well_z: 0.05, dips: 1, bleed: 0.05,
 };
 const NON_NEGATIVE = new Set(['press', 'press_max', 'f-s', 'spacing', 'hop_distance', 'clearance', 'feed_travel', 'order_time', 'width', 'overlap',
-  'feed', 'link', 'plunge_feed', 'wear', 'power', 'reload_every', 'dips']);
+  'feed', 'link', 'plunge_feed', 'wear', 'power', 'reload_every', 'dips', 'bleed']);
 const PX_PER_STEP = 6;
 let numDrag = null;
-const fieldOf = (input) => input.dataset.k || input.dataset.f || input.dataset.pf || input.id;
+const fieldOf = (input) => input.dataset.k || input.dataset.dk || input.dataset.f || input.dataset.pf || input.id;
 function dragStep(input) {
   const s = DRAG_STEP[fieldOf(input)];
   if (s) return s;
@@ -1382,7 +1530,7 @@ async function pollPrinter() {
     toast(job.error ? `${job.what}: ${job.error}` : `${job.what}: done`, !!job.error);
   }
   lastJob = job;
-  if (printer.tools_changed) setState(await api('GET', '/api/state'), { quiet: true });
+  if (printer.tools_changed) { setState(await api('GET', '/api/state'), { quiet: true }); loadMacros(); }
   else if (S) quietly(renderTools);
   const pill = $('#printer-pill');
   if (!printer.ok) {
@@ -1401,6 +1549,8 @@ async function pollPrinter() {
     }
   }
   quietly(renderPrinter);
+  quietly(renderMacros);
+  if (printer.ok && macros && !macros.checked) loadMacros();      // Klipper is back: which it has
 }
 function renderPrinter() {
   const p = printer;
@@ -1411,8 +1561,39 @@ function renderPrinter() {
     <label>Tools home</label><div>${p.occupied ? esc(p.occupied.join(', ')) || 'none' : '?'}</div>
     <label>Homed</label><div>${esc(p.homed || 'no')}</div>
     <label>At</label><div class="mono note">${esc(p.url)}</div>`
-    : `<div class="full note">Can't reach Moonraker at ${esc(p.url || '?')}: ${esc(p.error || '')}</div>`);
+    : `<div class="full note" title="${esc(p.error || '')}">Can't reach Moonraker at <span class="mono">${esc(p.url || '?')}</span>${
+      /refused/i.test(p.error || '') ? ': nothing answers there' : /timed? ?out/i.test(p.error || '') ? ': it doesn\'t answer in time' : ''}.</div>`);
 }
+// Klipper's useful macros as buttons (the machine profile's, those Klipper has, one per holder)
+let macros = null;
+async function loadMacros() {
+  try { macros = await api('GET', '/api/printer/macros'); } catch { macros = null; }
+  renderMacros();
+}
+function renderMacros() {
+  const el = $('#macros');
+  if (!macros || !macros.macros.length) { fill(el, ''); return; }
+  const job = printer && printer.job;
+  const busy = !!(job && !job.done) || !!(printer && ['printing', 'paused'].includes(printer.state));
+  const groups = {};
+  for (const m of macros.macros) (groups[m.group] = groups[m.group] || []).push(m);
+  fill(el, Object.entries(groups).map(([g, ms]) => `<div class="mgroup"><span class="mlabel">${esc(g)}</span>
+      <div class="mbuttons">${ms.map((m) => `<button data-gcode="${esc(m.gcode)}" title="${esc((m.title ? m.title + ' · ' : '') + m.gcode)}"${busy ? ' disabled' : ''}>${m.color
+        ? `<span class="swatch dot" style="background:${esc(m.color)}"></span>` : ''}${esc(m.label)}</button>`).join('')}</div></div>`).join('')
+    + (busy && job && !job.done ? `<p class="note">${esc(job.what)}…</p>` : '')
+    + (macros.checked ? '' : '<p class="note">Klipper didn’t answer: not every one of these may be there.</p>'));
+}
+$('#macros').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-gcode]');
+  if (!b) return;
+  const m = macros.macros.find((x) => x.gcode === b.dataset.gcode);
+  if (m.confirm && !confirm(`${m.label}: send ${m.gcode} to Klipper? (the machine moves)`)) return;
+  const r = await api('POST', '/api/printer/macro', { gcode: m.gcode });
+  printer = { ...(printer || {}), job: r.job };
+  toast(`${m.gcode} sent`);
+  renderMacros(); renderTools(); watchJob();
+});
+
 async function send(start) {
   if (start && !confirm('Send this plot to Klipper and start it?')) return;
   const r = await api('POST', '/api/printer/upload', { start });
@@ -1433,7 +1614,7 @@ async function addSvgs(files, at) {
       const o = r.state.job.objects.find((x) => x.id === r.id);
       setState(await api('PATCH', `/api/objects/${r.id}`, { placement: { ...o.placement, x: +(at.x - s[0] / 2).toFixed(2), y: +(at.y - s[1] / 2).toFixed(2) } }));
     } else setState(r.state);
-    toast(`${r.id} added`);
+    toast(`${r.id} added` + (r.images ? ` · ${r.images} image${r.images > 1 ? 's' : ''} taken out: they can't be plotted` : ''));
   }
 }
 $('#svg-input').addEventListener('change', (e) => { addSvgs([...e.target.files]); e.target.value = ''; });
@@ -1477,14 +1658,65 @@ $('#zoom-fit').addEventListener('click', fit);
 $('#zoom-in').addEventListener('click', () => zoom(0.8));
 $('#zoom-out').addEventListener('click', () => zoom(1.25));
 
+// Keyboard shortcuts: the table is the help (?) too
+const KEYS = [
+  ['Tools', [['V', 'select, move, scale, turn'], ['H', 'pan (or hold Space, or the right button)'], ['P', 'paint with a tool'],
+    ['Shift+0 … 9', 'paint with T0 … T9'], ['M', 'mask: drag over a drawing where it isn’t drawn'], ['Esc', 'stop: back to select, then deselect']]],
+  ['View', [['1  2  3', 'Original · Tools · Paths'], ['F  0', 'fit the bed'], ['Z', 'zoom to the selected drawing'], ['+  −', 'zoom in, out'],
+    ['T', 'travels in the Paths view'], ['G', 'the G-code beside the canvas'], ['\\', 'hide or show the panels'], ['?', 'these shortcuts']]],
+  ['The selected drawing', [['← → ↑ ↓', 'nudge 1 mm (Shift 10, Alt 0.1)'], ['R  Shift+R', 'turn a quarter, either way'], ['C', 'centre it on the paper'],
+    ['Tab  Shift+Tab', 'select the next, the previous drawing'], [']  [', 'bring forward, send backward'], ['Shift+]  Shift+[', 'to the front, to the back'],
+    ['Ctrl+D', 'duplicate'], ['Del', 'remove it (a masked region, with the mask tool)']]],
+  ['Plot', [['K', 'play the plot, pause'], [',  .', 'one G-code line back, on'], ['Shift+,  Shift+.', '100 lines back, on'], ['Home  End', 'the first line, the last'],
+    ['Ctrl+S', 'download the G-code'], ['Ctrl+Z  Ctrl+Shift+Z', 'undo, redo']]],
+  ['Canvas', [['wheel, pinch', 'zoom'], ['two fingers', 'pan (a trackpad, a touch screen)'], ['drag a corner', 'scale (Alt: about the middle)'],
+    ['drag the knob', 'turn (Shift: 15° steps)'], ['drag a number', 'change it (Shift finer, Ctrl coarser)']]],
+];
+function toggleKeys(show) {
+  const el = $('#keys-help');
+  show = show ?? el.hidden;
+  if (show) {
+    el.innerHTML = `<div class="card"><h2>Keyboard shortcuts <button class="icon" data-act="keys-close" title="Close (Esc)">✕</button></h2>
+      <div class="cols">${KEYS.map(([h, ks]) => `<section><h3>${h}</h3><dl>${ks.map(([k, d]) =>
+        `<dt>${k.split('  ').map((x) => `<kbd>${esc(x)}</kbd>`).join(' ')}</dt><dd>${esc(d)}</dd>`).join('')}</dl></section>`).join('')}</div></div>`;
+  }
+  el.hidden = !show;
+}
+$('#keys-help').addEventListener('click', (e) => { if (e.target === e.currentTarget || e.target.dataset.act === 'keys-close') toggleKeys(false); });
+document.addEventListener('click', (e) => {
+  const k = e.target.closest && e.target.closest('[data-act="keys"]');
+  if (k) { e.preventDefault(); toggleKeys(); }
+});
+function zoomToSel() {
+  const o = sel && obj(sel);
+  if (!o || !info(o.id)) return fit();
+  const [w, h] = info(o.id).size;
+  const c = [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => toWorld(o.placement, { x, y }));
+  const xs = c.map((p) => p.x), ys = c.map((p) => p.y), m = Math.max(w, h) * 0.08 + 2;
+  fitTo(Math.min(...xs) - m, Math.min(...ys) - m, Math.max(...xs) + m, Math.max(...ys) + m);
+}
+async function scrubBy(d, to) {
+  if (!preview) return;
+  stopPlay();
+  await loadGcode();
+  const sc = $('#scrubber');
+  const line = Math.max(0, Math.min(preview.lines, to ?? +sc.value + d));
+  if (view !== 'paths') setView('paths');
+  sc.value = line;
+  scrubTo(line);
+}
+
 window.addEventListener('keydown', async (e) => {
   if (e.target.closest && e.target.closest('input, select, textarea')) return;
+  if (!$('#keys-help').hidden && (e.key === 'Escape' || e.key === '?')) { e.preventDefault(); return toggleKeys(false); }
   if (document.body.classList.contains('tab-scan') && window.scanKey && window.scanKey(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   if (mod && key === 'z') { e.preventDefault(); return undo(e.shiftKey); }
   if (mod && key === 'y') { e.preventDefault(); return undo(true); }
+  if (mod && key === 's') { e.preventDefault(); return $('#download').click(); }
   if (e.key === ' ') { spaceDown = true; svg.classList.add('pan-mode'); e.preventDefault(); return; }
+  if (e.key === '?') return toggleKeys(true);
   if (e.key === 'Escape') {
     if (mode !== 'select') setMode('select');
     else if (sel) { sel = null; store.set('sel', sel); render(); }
@@ -1498,14 +1730,52 @@ window.addEventListener('keydown', async (e) => {
     }
     return;
   }
+  if (document.body.classList.contains('tab-scan')) {          // the rest is the Plot tab's
+    if (key === '+' || key === '=') zoom(0.8);
+    else if (key === '-') zoom(1.25);
+    return;
+  }
+  const digit = /^Digit(\d)$/.exec(e.code);
+  if (digit && e.shiftKey) {
+    const t = S.tools[`T${digit[1]}`];
+    if (!t || t.draws === false) return flash(`No T${digit[1]} to paint with`);
+    paintTo = t.id;
+    return setMode('paint');
+  }
+  if (digit && !e.altKey && ['1', '2', '3'].includes(digit[1])) return setView(['original', 'tools', 'paths'][+digit[1] - 1]);
+  if (digit && digit[1] === '0') return fit();
   if (key === 'v') return setMode('select');
   if (key === 'h') return setMode('pan');
   if (key === 'p') return setMode('paint');
+  if (key === 'm') return setMode('mask');
   if (key === 'f') return fit();
+  if (key === 'z') return zoomToSel();
   if (key === '+' || key === '=') return zoom(0.8);
   if (key === '-') return zoom(1.25);
+  if (key === 't') { $('#show-travel').click(); return; }
+  if (key === 'g') { $('#gcode-toggle').click(); return; }
+  if (key === 'k') { $('#play').click(); return; }
+  if (e.code === 'Comma') return scrubBy(e.shiftKey ? -100 : -1);
+  if (e.code === 'Period') return scrubBy(e.shiftKey ? 100 : 1);
+  if (e.key === 'Home') return scrubBy(0, 0);
+  if (e.key === 'End') return scrubBy(0, preview ? preview.lines : 0);
+  if (e.key === 'Tab' && S.job.objects.length) {
+    e.preventDefault();
+    const ids = [...S.job.objects].reverse().map((o) => o.id);        // as the list has them: top first
+    const i = ids.indexOf(sel);
+    sel = ids[((i < 0 ? (e.shiftKey ? 0 : -1) : i) + (e.shiftKey ? -1 : 1) + ids.length) % ids.length];
+    store.set('sel', sel);
+    return render();
+  }
   const o = sel && obj(sel);
   if (!o) return;
+  if (mode === 'mask' && maskSel && maskSel.id === o.id && (e.key === 'Delete' || e.key === 'Backspace')) {
+    e.preventDefault();
+    return removeMask(o.id, maskSel.i);
+  }
+  if (e.code === 'BracketRight') return reorder(o.id, e.shiftKey ? 'front' : 'forward');
+  if (e.code === 'BracketLeft') return reorder(o.id, e.shiftKey ? 'back' : 'backward');
+  if (key === 'c') return centre(o);
   const d = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
   const moves = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, d], ArrowDown: [0, -d] };
   if (moves[e.key]) {
@@ -1542,6 +1812,7 @@ function render() {
   renderObjectPanel();
   renderPalette();
   renderMachine();
+  renderDraw();
   renderTools();
   renderPens();
   renderFonts();
@@ -1554,6 +1825,7 @@ function render() {
   setView(view);
   setState(S);
   pollPrinter();
+  loadMacros();
   // Quicker while a tool scanned by hand waits for its holder
   (function poll() {
     setTimeout(async () => {

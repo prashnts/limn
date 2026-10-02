@@ -415,10 +415,10 @@ def test_panels_fold_float_dock_and_reset(page, base, drawing):
     page.wait_for_selector('section[data-panel="paint"] .phead')
     assert page.locator('#ruler-x').bounding_box()['width'] > 200          # the rulers sit between the panels
     # A tap on the header folds it, another unfolds it
-    page.click('section[data-panel="machine"] .phead h2')
-    assert 'collapsed' in page.get_attribute('section[data-panel="machine"]', 'class')
-    page.click('section[data-panel="machine"] .phead h2')
-    assert 'collapsed' not in page.get_attribute('section[data-panel="machine"]', 'class')
+    page.click('section[data-panel="output"] .phead h2')
+    assert 'collapsed' in page.get_attribute('section[data-panel="output"]', 'class')
+    page.click('section[data-panel="output"] .phead h2')
+    assert 'collapsed' not in page.get_attribute('section[data-panel="output"]', 'class')
     # Out over the canvas: it floats
     h = page.locator('section[data-panel="paint"] .phead h2').bounding_box()
     drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
@@ -517,3 +517,203 @@ def test_two_fingers_pinch_the_canvas(page, base, drawing):
     assert v1[2] == pytest.approx(v0[2] / 2, rel=0.02)
     assert requests.get(base + '/api/state').json()['job']['objects'][0]['placement'] == \
         page.evaluate('() => S.job.objects[0].placement')                    # nothing was moved by the fingers
+
+
+# --- 2026-10-02: a phone, the drawings' order, masks, keys, how every tool draws, macros ----
+def objects(base):
+    return requests.get(base + '/api/state').json()['job']['objects']
+
+
+def place_three(base, drawing):
+    drawing(THIN, 'a.svg')
+    for n in 'bc':
+        requests.post(base + '/api/objects', files={'file': (f'{n}.svg', THIN.encode(), 'image/svg+xml')})
+    return [o['id'] for o in objects(base)]
+
+
+def test_a_phone_scrolls_the_panels_under_the_canvas(page, base, drawing):
+    drawing()
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.goto(base + '/')
+    page.wait_for_selector('section[data-panel="paint"] .phead')
+    stage, drawings = page.locator('#stage').bounding_box(), page.locator('section[data-panel="drawings"]').bounding_box()
+    assert stage['y'] < drawings['y'] and drawings['y'] >= stage['y'] + stage['height'] - 1     # under the canvas
+    assert drawings['width'] > 340                                                         # the page's width
+    assert page.evaluate('document.scrollingElement.scrollHeight') > 2 * 844                 # it scrolls
+    assert page.locator('#floats section').count() == 0
+    # The printer's panel is reached by scrolling the page; a tap on its header folds it
+    page.locator('section[data-panel="printer"] .phead h2').scroll_into_view_if_needed()
+    assert page.evaluate('scrollY') > 0
+    page.click('section[data-panel="printer"] .phead h2')
+    assert 'collapsed' in page.get_attribute('section[data-panel="printer"]', 'class')
+    # A wide screen again: the panels float over the canvas
+    page.set_viewport_size({'width': 1280, 'height': 720})
+    page.wait_for_function('() => getComputedStyle(document.querySelector("#right")).position === "fixed"')
+
+
+def test_order_drawings_from_the_list_and_keys(page, base, drawing):
+    a, b, c = place_three(base, drawing)
+    page.goto(base + '/')
+    page.wait_for_selector(f'#objects li[data-id="{c}"]')
+    assert page.eval_on_selector_all('#objects li[data-id]', 'ls => ls.map(l => l.dataset.id)') == [c, b, a]   # top first
+    page.click(f'#objects li[data-id="{a}"] .name')
+    with page.expect_response(lambda r: '/order' in r.url):
+        page.click(f'#objects li[data-id="{a}"] [data-order="front"]')
+    assert [o['id'] for o in objects(base)] == [b, c, a]
+    page.wait_for_function(f'() => [...document.querySelectorAll("#design-layer g.obj")].pop().dataset.id === "{a}"')
+    page.mouse.click(5, 400)                                    # off the panels: keys go to the canvas
+    page.click(f'#objects li[data-id="{a}"] .name')
+    with page.expect_response(lambda r: '/order' in r.url):
+        page.keyboard.press('BracketLeft')
+    assert [o['id'] for o in objects(base)] == [b, a, c]
+    with page.expect_response(lambda r: '/order' in r.url):
+        page.keyboard.press('Shift+BracketLeft')
+    assert [o['id'] for o in objects(base)] == [a, b, c]
+    # Tab: the next in the list; 1 2 3: the views; ?: the shortcuts
+    page.keyboard.press('Tab')
+    assert page.get_attribute('#objects li.on', 'data-id') == c
+    page.keyboard.press('3')
+    assert 'on' in page.get_attribute('#views [data-view="paths"]', 'class')
+    page.keyboard.press('1')
+    assert 'on' in page.get_attribute('#views [data-view="original"]', 'class')
+    page.keyboard.press('2')
+    page.keyboard.press('Shift+Slash')
+    assert page.is_visible('#keys-help') and 'Bring forward'.lower() in page.text_content('#keys-help').lower()
+    page.keyboard.press('Escape')
+    assert not page.is_visible('#keys-help')
+    page.keyboard.press('Shift+Digit4')
+    assert 'on' in page.get_attribute('#palette [data-to="T4"]', 'class')
+    page.keyboard.press('Escape')
+
+
+def test_mask_a_region_with_the_mask_tool(page, base, drawing):
+    oid = drawing(THIN)
+    page.goto(base + '/')
+    page.wait_for_selector('g.obj path.shape')
+    page.click(f'#objects li[data-id="{oid}"] .name')
+    page.keyboard.press('m')
+    assert 'on' in page.get_attribute('#rail [data-mode="mask"]', 'class')
+    # Over the middle of both lines: they are cut there
+    p0, p1 = screen_point(page, 0, 0.4, (0, -40)), screen_point(page, 1, 0.6, (0, 40))
+    with page.expect_response(lambda r: f'/api/objects/{oid}' in r.url and r.request.method == 'PATCH'):
+        drag(page, p0, p1)
+    masks = objects(base)[0]['masks']
+    assert len(masks) == 1 and len(masks[0]) == 4
+    page.wait_for_selector('g.obj path.objmask')
+    page.wait_for_function('() => !document.querySelector("#paths-layer").classList.contains("stale")')
+    gcode = requests.get(base + '/api/gcode?inline=1').text
+    assert gcode.count('\nG1 X') >= 4                                    # 2 lines, each in 2 pieces
+    # Click the region, Del: drawn there again
+    box = page.locator('g.obj path.objmask').bounding_box()
+    page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    with page.expect_response(lambda r: r.request.method == 'PATCH'):
+        page.keyboard.press('Delete')
+    assert objects(base)[0]['masks'] == []
+    page.keyboard.press('Escape')
+
+
+def test_how_every_tool_draws(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.click('section[data-panel="drawset"] .phead h2')
+    page.wait_for_selector('#drawset [data-dk="bleed"]')
+    page.fill('#drawset [data-dk="bleed"]', '0.3')
+    with page.expect_response(lambda r: '/api/job' in r.url):
+        page.press('#drawset [data-dk="bleed"]', 'Enter')
+        page.locator('#drawset [data-dk="bleed"]').blur()
+    st = requests.get(base + '/api/state').json()
+    assert st['job']['draw'] == {'bleed': 0.3} and st['tools']['T1']['bleed'] == 0.3
+    with page.expect_response(lambda r: '/api/job' in r.url):
+        page.select_option('#drawset [data-dk="small"]', 'warn')
+    assert requests.get(base + '/api/state').json()['job']['draw'] == {'bleed': 0.3, 'small': 'warn'}
+    page.click('#drawset [data-act="reset-draw"]')
+    page.wait_for_function('() => !document.querySelector("#drawset [data-act=reset-draw]")')
+    assert requests.get(base + '/api/state').json()['job']['draw'] == {}
+
+
+def test_colour_buttons_are_round(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('#palette .swatch')
+    for sel in ('#palette .swatch', '#tools .sws input[type=color]'):
+        b = page.locator(sel).first.bounding_box()
+        assert abs(b['width'] - b['height']) < 1, sel
+    page.select_option('#tools .tool select[data-d="pen"]', index=1)
+    b = page.locator('#tools .sws .sw').first.bounding_box()
+    assert abs(b['width'] - b['height']) < 1 and b['width'] >= 24
+
+
+def test_macro_buttons_run_on_klipper(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+    sent = []
+
+    class R:
+        status_code = 200
+
+        def __init__(self, result):
+            self.result = result
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': self.result}
+
+    def get(u, **kw):
+        if u.endswith('/printer/gcode/help'):
+            return R({'G28': 'Home', 'LAZY_HOME': '', 'T0': '', 'T1': '', 'UNDOCK': '', 'BED_MESH_CLEAR': ''})
+        if 'objects/query' in u:
+            return R({'status': {'print_stats': {'state': 'standby'}}})
+        raise requests.ConnectionError('no')
+    monkeypatch.setattr(srv.requests, 'get', get)
+    monkeypatch.setattr(srv.requests, 'post', lambda u, json=None, **kw: sent.append(json['script']) or R({}))
+    app.state.ws.gcode_help = None
+    try:
+        page.goto(url + '/')
+        page.wait_for_selector('#macros button[data-gcode="G28"]')
+        assert page.locator('#macros button[data-gcode="LIMN_CALIBRATE_ALL"]').count() == 0     # Klipper hasn't it
+        assert page.locator('#macros button[data-gcode="T0"] .swatch').count() == 1
+        page.once('dialog', lambda d: d.accept())
+        page.click('#macros button[data-gcode="G28"]')
+        page.wait_for_function('() => document.querySelector("#toast").textContent.includes("G28 sent")')
+        for _ in range(50):
+            if sent:
+                break
+            time.sleep(0.05)
+        assert sent == ['G28']
+        # One without a question
+        page.click('#macros button[data-gcode="BED_MESH_CLEAR"]')
+        for _ in range(50):
+            if len(sent) > 1:
+                break
+            time.sleep(0.05)
+        assert sent[-1] == 'BED_MESH_CLEAR'
+    finally:
+        app.state.ws.gcode_help = None
+        app.state.ws.printer_job = None
+
+
+def test_where_fluidd_is_for_the_cameras(page, served, monkeypatch):
+    url, app = served
+    import plot.server as srv
+
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'result': {'webcams': [{'name': 'top', 'stream_url': '/webcam4/?action=stream', 'enabled': True}]}}
+    real = srv.requests.get
+    monkeypatch.setattr(srv.requests, 'get', lambda u, **kw: R() if 'webcams/list' in u else real(u, **kw))
+    try:
+        page.goto(url + '/')
+        page.wait_for_selector('#printer-url-in')
+        page.fill('#printer-url-in', 'https://limn.example')
+        page.click('#printer-url [data-act="save-url"]')
+        page.wait_for_function('() => document.querySelector("#fluidd-link").href.startsWith("https://limn.example")')
+        page.click('#cams-button')
+        page.wait_for_selector('#cams [data-cam="top"]')
+        assert page.get_attribute('#cams a.button:has-text("open")', 'href') == 'https://limn.example/webcam4/?action=stream'
+    finally:
+        requests.put(url + '/api/settings', json={'printer_url': ''})

@@ -70,6 +70,89 @@ rect = [112, 0, 180, 177]
 # rect = [0, 170, 20, 177]
 # z = 2.5
 
+# Buttons for Klipper's macros in the web UI (Printer panel), the useful ones of
+# Fluidd's. One shows only when Klipper has its command; the tool changes (T0.., UNDOCK)
+# come from `holders`. confirm = false: no question first (only for what doesn't move).
+[[macros]]
+label = "Home"
+gcode = "G28"
+group = "Home"
+title = "Home every axis"
+
+[[macros]]
+label = "Home if needed"
+gcode = "LAZY_HOME"
+group = "Home"
+title = "Home the axes that aren't"
+
+[[macros]]
+label = "Reset dock"
+gcode = "DOCK_RESET"
+group = "Tools"
+title = "Forget which tool is carried (after a crash)"
+
+[[macros]]
+label = "Sensors"
+gcode = "LIMN_SENSOR_CALIBRATE"
+group = "Calibration"
+title = "LRT_CALIBRATE: the bed's touch sensors"
+
+[[macros]]
+label = "Carried tool"
+gcode = "LIMN_TOOL_CALIBRATE"
+group = "Calibration"
+title = "The carried tool's offsets on the bed's sensors"
+
+[[macros]]
+label = "All tools"
+gcode = "LIMN_CALIBRATE_ALL"
+group = "Calibration"
+title = "Every holder's tool, one after the other"
+
+[[macros]]
+label = "Read bed"
+gcode = "LRT_READ_BED_ID"
+group = "Calibration"
+title = "Which bed is placed"
+
+[[macros]]
+label = "Calibrate"
+gcode = "BED_MESH_CALIBRATE"
+group = "Bed mesh"
+title = "Probe the bed for a new mesh"
+
+[[macros]]
+label = "Paper mesh"
+gcode = "LRT_MESH_CALIBRATE"
+group = "Bed mesh"
+title = "LRT_MESH_CALIBRATE: the meshes of the bed on the plotter"
+
+[[macros]]
+label = "Load paper"
+gcode = "BED_MESH_PROFILE LOAD=lrt_paper"
+group = "Bed mesh"
+title = "Load the lrt_paper mesh"
+confirm = false
+
+[[macros]]
+label = "Clear"
+gcode = "BED_MESH_CLEAR"
+group = "Bed mesh"
+title = "No mesh"
+confirm = false
+
+[[macros]]
+label = "Lights on"
+gcode = "LIGHTS_ON"
+group = "Lights"
+confirm = false
+
+[[macros]]
+label = "Lights off"
+gcode = "LIGHTS_OFF"
+group = "Lights"
+confirm = false
+
 # The Z axis's play (GEOMETRY.md): a pen pressed past touch lifts the axis, and
 # only lets go of the paper once it has come back down. After a stroke the pen
 # rises its press, then `clear`, then per_press x press (more far from the

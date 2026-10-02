@@ -27,6 +27,17 @@ class Zone(BaseModel):
     z: float | None = None      # its top; None: keep out
 
 
+class Macro(BaseModel):
+    '''A button for a Klipper macro (the useful ones of Fluidd's): only shown when
+    Klipper has its command.'''
+    model_config = ConfigDict(extra='forbid')
+    label: str
+    gcode: str
+    group: str = 'Printer'
+    title: str = ''
+    confirm: bool = True            # it moves the machine: ask first
+
+
 class Play(BaseModel):
     '''The Z axis's play (GEOMETRY.md): a pen pressed past touch lifts the axis,
     and it only lets go of the paper once the axis has come back down. The lift
@@ -97,6 +108,7 @@ class Machine(BaseModel):
     tool_end: str = ''
     end: str = ''
     zones: list[Zone] = []
+    macros: list[Macro] = []        # buttons in the web UI's Printer panel; T0.. and UNDOCK come from holders
 
 
 def _path(name, suffix='.toml'):

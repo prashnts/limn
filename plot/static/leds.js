@@ -83,7 +83,8 @@ function renderLeds() {
   const P = $('#leds');
   if (!P) return;
   if (!ledData || !ledData.ok) {
-    P.innerHTML = `<p class="note">${esc((ledData && ledData.error) ? `No LEDs: ${ledData.error}` : 'Asking Klipper…')}</p>`;
+    P.innerHTML = (ledData && ledData.error) ? `<p class="note" title="${esc(ledData.error)}">No LEDs: Klipper doesn't answer.</p>`
+      : '<p class="note">Asking Klipper…</p>';
     return;
   }
   const shape = `${(ledData.ui || []).length}/${(ledData.dock || []).length}`;

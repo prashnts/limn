@@ -17,7 +17,8 @@ KEY = re.compile(r'[a-z0-9._-]{1,8}')      # it goes on the tag, tool_holder.py 
 BARE = re.compile(r'[A-Za-z0-9_-]+')
 HEX = re.compile(r'#[0-9a-fA-F]{6}')
 OWN = ('short', 'name', 'kind', 'dry')     # the library's own keys go first, then the tool's
-NOT_TUNABLE = {'id', 'kind', 'name', 'color', 'macro', 'begin', 'end', 'pen', 'holder', 'source'}
+NOT_TUNABLE = {'id', 'kind', 'name', 'color', 'macro', 'begin', 'end', 'pen', 'holder', 'source',
+               'angle', 'bleed'}     # how it draws (tools.DRAW): the job's, not the pen's
 
 
 def kinds():

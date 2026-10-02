@@ -20,13 +20,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from shapely import affinity
 from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import unary_union
 
 from .gcode import Writer, num
 from .order import improve, join, order
 from .preview import parse, stats
 from .profile import load_machine, load_pens, load_tools, reach, with_tags
-from .slicer import Cache
+from .slicer import Cache, cut, goes_under, lightness
+from .tools import DRAW
 
 KEEP_OUT = math.inf
 
@@ -237,10 +240,52 @@ def _on_paper(machine, oid, tid, placed, problems):
     return out
 
 
+def _placed(geom, src, dst):
+    '''geom in the coordinates of a drawing placed at `src`, in those of one at `dst`.'''
+    g = affinity.translate(affinity.rotate(geom, src.rotate, origin=(0, 0)), src.x, src.y)
+    return affinity.rotate(affinity.translate(g, -dst.x, -dst.y), -dst.rotate, origin=(0, 0))
+
+
+def hidden(job, tools, sliced):
+    '''Drawings hide what is under them, like the SVGs do inside one: the later in the
+    job (sent to the front) over the earlier, where they paint opaque (occlude on).
+    -> {object id: {tool: the area of it hidden, its own mm}}, kept the tool's bleed
+    clear of what another tool (or a mask) draws over it.'''
+    out = {}
+    objs = job.objects
+    for i, lo in enumerate(objs):
+        s = sliced[lo.id]
+        if not s.paths or not s.bounds:
+            continue
+        x0, y0, x1, y1 = s.bounds
+        mine = box(x0, y0, x1, y1)
+        tops = []
+        for hi in objs[i + 1:]:
+            if not hi.occlude:
+                continue
+            for t, geom in sliced[hi.id].cover.items():
+                g = _placed(geom, hi.placement, lo.placement)
+                if g.intersects(mine):
+                    tops.append((t, g))
+        if not tops:
+            continue
+        hide = {}
+        for tid in s.paths:
+            tool = tools.get(tid)
+            bleed = tool.bleed if tool is not None else 0
+            gs = [g.buffer(bleed) if bleed > 0 and t != tid else g for t, g in tops
+                  if not goes_under(tool, tools.get(t))]
+            if gs:
+                hide[tid] = unary_union(gs)
+        out[lo.id] = hide
+    return out
+
+
 def emit(job, machine, tools, sliced) -> Result:
     problems = []
     by_tool: dict[str, list[np.ndarray]] = {}
     obstacles = [ZoneObstacle(z) for z in machine.zones]
+    under = hidden(job, tools, sliced)
     for obj in job.objects:
         s = sliced[obj.id]
         problems += [p for p in s.problems if p not in problems]
@@ -253,11 +298,15 @@ def emit(job, machine, tools, sliced) -> Result:
             if not tools[tid].draws:
                 problems.append(f'{obj.id}: {tid} is a {tools[tid].kind}, it doesn\'t draw: not drawn')
                 continue
+            if tid in under.get(obj.id, {}):
+                paths = [s.surface.drape(p) for p in cut([p[:, :2] for p in paths], under[obj.id][tid])]
             placed = _on_paper(machine, obj.id, tid, [obj.placement.apply(p) for p in paths], problems)
             by_tool.setdefault(tid, []).extend(placed)
 
     first = job.tool_order or list(tools)
     used = [t for t in first if by_tool.get(t)] + [t for t in by_tool if t not in first]
+    if any(tools[t].layers for t in used):
+        used.sort(key=lambda t: -lightness(tools[t].color))     # light first: the dark goes over it
     e = Emitter(machine, Planner(machine, obstacles))
     g = e.g
     g.comment('limn-plot 1')
@@ -312,6 +361,13 @@ def load(job, tags=None):
     tools = load_tools(near(job.tools))
     if tags:
         tools = with_tags(tools, load_pens(), tags, machine.holders)
+    bad = set(job.draw) - set(DRAW)
+    if bad:
+        raise ValueError(f'draw: no setting {", ".join(sorted(bad))} (there are {", ".join(DRAW)})')
+    draw = {k: v for k, v in job.draw.items() if v is not None}
+    if draw:
+        tools = {tid: type(t)(**{**t.model_dump(), **{k: v for k, v in draw.items() if k in type(t).model_fields}})
+                 for tid, t in tools.items()}
     for tid, over in job.tool_overrides.items():
         if tid in tools and over:
             if 'press_max' in over:
