@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% from 'macros.html' import video %}
+{% block title %}{{ post.title }}{% endblock %}
+{% block main %}
+<div class="crumbs"><a href="{{ root }}log/index.html">Log</a></div>
+<h1>{{ post.title }}</h1>
+<div class="byline">
+  {{ post.date.strftime('%-d %B %Y') }} · {{ post.author }}
+  {% if post.hackaday %} · Hackaday log #{{ post.hackaday }}, <a href="{{ post.source }}">the original</a>{% endif %}
+  {% set file = post.include or (post.source if not post.hackaday else '') %}
+  {% if file %} · from <a href="{{ GITHUB }}/blob/{{ BRANCH }}/{{ file }}"><code>{{ file }}</code></a>{% endif %}
+</div>
+{% if post.note %}<p class="fine">{{ post.note }}</p>{% endif %}
+<article class="prose">{{ content | safe }}</article>
+{% if post.videos %}
+<section class="videos">
+  <h2>Video{% if post.videos | length > 1 %}s{% endif %}</h2>
+  <div class="yts">{% for v in post.videos %}{{ video(v) }}{% endfor %}</div>
+</section>
+{% endif %}
+<nav class="log-nav">
+  {% if prev %}<a href="{{ root }}{{ prev.url }}">← {{ prev.title }}</a>{% else %}<span></span>{% endif %}
+  {% if next %}<a href="{{ root }}{{ next.url }}">{{ next.title }} →</a>{% endif %}
+</nav>
+{% endblock %}

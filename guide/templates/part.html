@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{% from 'macros.html' import badge, card, row, video %}
+{% block title %}{{ page.name }}{% endblock %}
+{% block main %}
+{% set trail = [] %}
+{% set p = namespace(cur=page) %}
+{% for _ in range(12) %}{% if p.cur.parents %}{% set p.cur = (p.cur.parents.values() | list)[0] %}{% set _ = trail.insert(0, p.cur) %}{% endif %}{% endfor %}
+<nav class="crumbs">
+  <a href="{{ root }}machine.html">Machine</a>
+  {% for t in trail %}<span>›</span><a href="{{ root }}parts/{{ t.slug }}.html">{{ t.name }}</a>{% endfor %}
+</nav>
+
+<div class="part-head">
+  <div>
+    <h1>{{ page.name }}</h1>
+    <div class="meta">
+      {{ badge(page.kind) }}
+      {% if page.qty > 1 %}<span class="pill">×{{ page.qty }} in Limn</span>{% endif %}
+      {% if page.mirrored %}<span class="pill">{{ page.mirrored }} mirrored</span>{% endif %}
+      {% if page.shop %}<a class="pill mono" href="{{ page.shop.url }}">ref {{ page.code }}</a>{% elif page.code %}<span class="pill mono">ref {{ page.code }}</span>{% endif %}
+      {% if page.meta.difficulty %}<span class="pill">{{ page.meta.difficulty }}</span>{% endif %}
+      {% if page.meta.time %}<span class="pill">⏱ {{ page.meta.time }}</span>{% endif %}
+    </div>
+    {% if page.meta.summary %}<p class="lede">{{ page.meta.summary }}</p>{% endif %}
+    {% if page.hardware %}<p class="lede">{{ page.hardware.name }}{% if page.hardware.use %}: {{ page.hardware.use }}{% endif %}.{% if page.hardware.note %} <em>{{ page.hardware.note }}</em>{% endif %}</p>{% endif %}
+  </div>
+</div>
+
+<div class="part-grid">
+  <section class="hero">
+    <div class="viewer" {% if page.model %}data-model="{{ root }}{{ page.model }}" data-bytes="{{ page.model_bytes }}"{% if page is sameas catalog.top %} data-dir="-1,0.75,-1.25"{% endif %}{% if page.motion %} data-motion="{{ root }}{{ page.motion }}"{% endif %}{% endif %}>
+      {% if page.image %}<img class="poster" src="{{ root }}{{ page.image }}" alt="{{ page.name }}">{% else %}<div class="noimg big">{{ page.name[:1] }}</div>{% endif %}
+      {% if page.model and page.model_bytes >= 2e6 %}<button type="button" class="load3d" title="Load the 3D model to turn it around">Turn it in 3D · {{ '%.0f' % (page.model_bytes / 1e6) }} MB</button>
+      {% elif page.model %}<span class="hint3d">Drag to turn</span>{% endif %}
+      <div class="pick" hidden></div>
+    </div>
+    {% if page.motion %}<div class="motion" data-for-viewer><button type="button" class="btn ghost" data-move>Move it</button>
+      <span class="fine">Its joints, as they move in the CAD</span></div>{% endif %}
+    <div class="downloads">
+      {% if page.shop %}<a class="btn" href="{{ page.shop.url }}">Buy at Bambu Lab</a><span class="fine">{{ page.shop.name }}, {{ page.shop.pack }} a pack{% if page.qty > page.shop.pack %}: {{ (page.qty / page.shop.pack) | round(0, 'ceil') | int }} packs for Limn{% endif %}</span>{% endif %}
+      {% if page.step %}<a class="btn" href="{{ root }}{{ page.step }}" download>STEP</a>{% endif %}
+      {% if page.stl %}<a class="btn" href="{{ root }}{{ page.stl }}" download>STL</a>{% endif %}
+      <span class="fine">Fusion: {{ page.designs | join(', ') }}</span>
+    </div>
+  </section>
+
+  <aside class="side">
+    {% if page.locator %}
+    <div class="box locator">
+      <h3>Where it is{% if page.qty > 1 %}: all {{ page.qty }}{% endif %}</h3>
+      <a href="{{ root }}machine.html"><img src="{{ root }}{{ page.locator }}" alt="Where {{ page.name }} is in Limn"></a>
+    </div>
+    {% endif %}
+    {% if bom %}
+    <div class="box">
+      <h3>For one {{ page.name }}</h3>
+      {% for kind, items in bom | groupby('0.kind') %}
+      <h4>{{ KINDS[kind] }}</h4>
+      <ul class="rows">{% for c, n in items %}{{ row(c, root, n) }}{% endfor %}</ul>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if page.meta.tools %}
+    <div class="box"><h3>Tools</h3><ul class="plain">{% for t in page.meta.tools %}<li>{{ t }}</li>{% endfor %}</ul></div>
+    {% endif %}
+    {% if page.parents %}
+    <div class="box"><h3>Used in</h3><ul class="rows">{% for p in page.parents.values() %}{{ row(p, root, 1) }}{% endfor %}</ul></div>
+    {% endif %}
+  </aside>
+</div>
+
+{% if page.videos %}
+<section class="videos">
+  <h2>Video{% if page.videos | length > 1 %}s{% endif %}</h2>
+  <div class="yts">{% for v in page.videos %}{{ video(v) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+{% if page.meta.print %}
+<section class="print">
+  <h2>Print settings</h2>
+  <table class="kv">
+    {% for k, v in page.meta.print.items() %}<tr><th>{{ k | replace('_', ' ') }}</th><td>{{ v }}</td></tr>{% endfor %}
+  </table>
+</section>
+{% elif page.kind == 'printed' %}
+<section class="print todo">
+  <h2>Print settings</h2>
+  <p>Not written yet: add a <code>[print]</code> table to <code>guide/content/parts/{{ page.slug }}.md</code>.</p>
+</section>
+{% endif %}
+
+{% if page.children %}
+<section>
+  <h2>Inside</h2>
+  {% if page.slug != catalog.top.slug %}<p class="fine"><a href="{{ root }}parts/index.html#in={{ page.slug }}">Everything in it, all the way down</a></p>{% endif %}
+  <div class="cards">{% for c, n in page.children %}{{ card(c, root, n) }}{% endfor %}</div>
+</section>
+{% endif %}
+
+{% if content %}<article class="prose">{{ content | safe }}</article>{% endif %}
+{% endblock %}
