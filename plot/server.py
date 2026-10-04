@@ -15,6 +15,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import numpy as np
 import requests
@@ -525,6 +526,20 @@ def create_app(data=None):
             p = Path(profile.PROFILES) / 'toolhead.svg'
         return FileResponse(p, media_type='image/svg+xml', headers={'Cache-Control': 'no-cache'})
 
+    def endoscope_urls():
+        '''(snapshot, stream) of the endoscope, or ('', ''): its server's address alone gets /snapshot.jpg?flip=1;
+        the stream is the snapshot's twin, /stream.mjpg with the same query (flip).'''
+        url = ws.settings()['endoscope_url']
+        if not url:
+            return '', ''
+        u = urlsplit(url)
+        if u.path in ('', '/'):
+            url = url.rstrip('/') + '/snapshot.jpg?flip=1'
+            u = urlsplit(url)
+        base = url[:url.index(u.path)] if u.path else url
+        stream = base + u.path.rsplit('/', 1)[0] + '/stream.mjpg' + (f'?{u.query}' if u.query else '')
+        return url, stream
+
     @app.get('/api/webcams')
     def webcams():
         '''Klipper's cameras (Moonraker's list) and where Fluidd is, for the browser.
@@ -550,6 +565,11 @@ def create_app(data=None):
             error = None
         except Exception as e:
             cams, error = [], f'Moonraker at {machine.moonraker}: {e}'
+        snap, live = endoscope_urls()
+        if snap:                                # not Klipper's: limn_endoscope's own server
+            cams.append({'name': 'endoscope', 'stream_url': live, 'snapshot_url': snap, 'flip_horizontal': False,
+                         'flip_vertical': False, 'rotation': 0, 'service': 'mjpegstreamer', 'enabled': True})
+            error = None if cams else error
         return {'fluidd': fluidd.rstrip('/'), 'guessed': guessed, 'set': bool(set_url), 'webcams': cams, 'error': error}
 
     @app.get('/api/settings')
@@ -681,7 +701,7 @@ def create_app(data=None):
         with ws.lock:
             machine, tools = load(ws.job, ws.tags)
         cams = {k: t for k, t in tools.items() if t.kind == 'camera'}
-        url = ws.settings()['endoscope_url']
+        url = endoscope_urls()[0]
         if url:
             from .tools import REGISTRY
             spec = {k: v for k, v in load_pens().get('endo', {}).items() if k not in ('name', 'short', 'kind', 'colors')}

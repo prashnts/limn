@@ -65,10 +65,22 @@ function footprint(fov, turn) {
   const [w, h] = fov, c = Math.abs(Math.cos(turn * Math.PI / 180)), s = Math.abs(Math.sin(turn * Math.PI / 180));
   return [w * c + h * s, w * s + h * c];
 }
+function coverage(fov, turn) {
+  // mm along X and Y a shot surely covers: the largest upright rectangle inside the turned shot (limn_cam/scan.py)
+  const [w, h] = fov, c = Math.abs(Math.cos(turn * Math.PI / 180)), s = Math.abs(Math.sin(turn * Math.PI / 180));
+  if (s < 1e-9 || c < 1e-9) return s < 1e-9 ? [w, h] : [h, w];
+  const long = Math.max(w, h), short = Math.min(w, h);
+  if (short <= 2 * s * c * long || Math.abs(s - c) < 1e-10) {
+    const x = short / 2;
+    return w >= h ? [x / s, x / c] : [x / c, x / s];
+  }
+  const c2 = c * c - s * s;
+  return [(w * c - h * s) / c2, (h * c - w * s) / c2];
+}
 function scanTiles() {
   const c = cam(), r = C && C.settings.region;
   if (!c || !r) return [];
-  const [fx, fy] = footprint(c.fov, c.turn || 0), ov = C.settings.overlap;
+  const [fx, fy] = coverage(c.fov, c.turn || 0), ov = C.settings.overlap;
   const centres = (a, b, f) => {
     const span = b - a;
     if (span <= f) return [(a + b) / 2];

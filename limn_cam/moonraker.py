@@ -113,6 +113,9 @@ class Moonraker:
             try:
                 r = requests.get(url, timeout=20)
                 r.raise_for_status()
+                kind = r.headers.get('content-type', '')
+                if not kind.startswith('image/'):
+                    raise ValueError(f'{url}: not a picture ({kind or "no type"}): the snapshot URL?')
                 return r.content
             except requests.RequestException:
                 if attempt == 2:

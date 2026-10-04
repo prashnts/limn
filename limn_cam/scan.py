@@ -124,17 +124,33 @@ def calibrate(size, moved_x, moved_y, step):
 
 
 def footprint(fov, turn):
-    '''mm the shot covers along X and Y, the image turned `turn` degrees.'''
+    '''mm the shot spans along X and Y, the image turned `turn` degrees (its bounding box).'''
     w, h = fov
     c, s = abs(math.cos(math.radians(turn))), abs(math.sin(math.radians(turn)))
     return w * c + h * s, w * s + h * c
+
+
+def coverage(fov, turn):
+    '''mm along X and Y the shot surely covers: the largest upright rectangle inside the turned shot. Tiles go by
+    it (by the bounding box, a square turned 45 degrees left gaps between tiles: seen 2026-10-04 with the
+    endoscope). 0 or 180 degrees: the whole shot.'''
+    w, h = fov
+    c, s = abs(math.cos(math.radians(turn))), abs(math.sin(math.radians(turn)))
+    if s < 1e-9 or c < 1e-9:
+        return (w, h) if s < 1e-9 else (h, w)
+    long_, short = max(w, h), min(w, h)
+    if short <= 2 * s * c * long_ or abs(s - c) < 1e-10:
+        x = short / 2
+        return (x / s, x / c) if w >= h else (x / c, x / s)
+    c2 = c * c - s * s
+    return (w * c - h * s) / c2, (h * c - w * s) / c2
 
 
 def tiles(region, fov, overlap=0.2, turn=0.0):
     '''Shot centres covering `region` (x0, y0, x1, y1 mm), `overlap` of a shot shared
     with the next, rows along X that snake -> [(row, col, x, y)].'''
     x0, y0, x1, y1 = region
-    fx, fy = footprint(fov, turn)
+    fx, fy = coverage(fov, turn)
 
     def centres(a, b, f):
         span = b - a
