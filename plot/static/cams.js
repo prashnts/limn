@@ -18,6 +18,7 @@ function camUrl(u) {
 }
 async function loadWebcams() {
   try { W = await api('GET', '/api/webcams'); } catch { W = { fluidd: '', webcams: [], error: 'no answer' }; }
+  try { W.settings = await api('GET', '/api/settings'); } catch { W.settings = {}; }
   $('#fluidd-link').href = fluiddBase();
   renderPrinterUrl();
   return W;
@@ -30,7 +31,11 @@ function renderPrinterUrl() {
       title="Where Fluidd is, as this browser gets to it: the cameras' addresses are taken from it. Empty: ${esc(W.guessed ? 'this page\'s host' : 'the profile, or Moonraker\'s host')}">
       <button data-act="save-url">Set</button></div>
     <p class="note">${W.set ? 'Set here; empty it to go back to the default.' : W.guessed
-      ? 'Guessed from this page’s address: if the cameras don’t show, give Fluidd’s (eg. https://limn.local).' : 'From the profile, or Moonraker’s host.'}</p>`);
+      ? 'Guessed from this page’s address: if the cameras don’t show, give Fluidd’s (eg. https://limn.local).' : 'From the profile, or Moonraker’s host.'}</p>
+    <label for="endoscope-url-in">Endoscope at</label>
+    <div class="row nowrap"><input id="endoscope-url-in" type="url" inputmode="url" placeholder="http://laptop:4240/snapshot.jpg?flip=1" value="${esc((W.settings || {}).endoscope_url || '')}"
+      title="The endoscope's snapshot URL (limn_endoscope's web server, as the plot server reaches it): it becomes a camera on the Scan tab, fixed on the carriage (no holder, Z never moved). Empty: none">
+      <button data-act="save-endoscope">Set</button></div>`);
 }
 async function savePrinterUrl() {
   const v = $('#printer-url-in').value.trim();
@@ -39,8 +44,21 @@ async function savePrinterUrl() {
   toast(v ? `Fluidd and its cameras at ${v}` : 'Fluidd: back to the default');
   if (!$('#cams').hidden) showCams();
 }
-$('#printer-url').addEventListener('click', (e) => { if (e.target.dataset.act === 'save-url') savePrinterUrl(); });
-$('#printer-url').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'printer-url-in') savePrinterUrl(); });
+async function saveEndoscopeUrl() {
+  const v = $('#endoscope-url-in').value.trim();
+  try { await api('PUT', '/api/settings', { endoscope_url: v }); } catch (e) { return toast(String(e.message || e), true); }
+  await loadWebcams();
+  if (typeof loadCamera === 'function') loadCamera();
+  toast(v ? `Endoscope: ${v}` : 'No endoscope');
+}
+$('#printer-url').addEventListener('click', (e) => {
+  if (e.target.dataset.act === 'save-url') savePrinterUrl();
+  if (e.target.dataset.act === 'save-endoscope') saveEndoscopeUrl();
+});
+$('#printer-url').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.id === 'printer-url-in') savePrinterUrl();
+  if (e.key === 'Enter' && e.target.id === 'endoscope-url-in') saveEndoscopeUrl();
+});
 
 async function showCams(name) {
   const P = $('#cams');

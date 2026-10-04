@@ -36,6 +36,7 @@ function cameraCarried() {
   // On the Scan tab: the camera tool's holder is empty, so the camera is on the carriage
   if (typeof cam !== 'function' || !document.body.classList.contains('tab-scan')) return null;
   const c = cam();
+  if (c && c.fixed) return c;                 // the endoscope: always there
   if (!c || !printer || !printer.ok || !Array.isArray(printer.occupied)) return null;
   return printer.occupied.map(String).includes(String(c.holder)) ? null : c;
 }

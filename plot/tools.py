@@ -276,6 +276,8 @@ class Camera(Tool):
     center: tuple[float, float] = (0.0, 0.0)    # mm from the tool point to the image's middle: a pen
                                                 # draws where the camera sees at x, y by going to x, y
     settle: float = 0.4                 # s still before a shot (the tether, the frame the stream has queued)
+    fixed: bool = False                 # on the carriage for good (the endoscope, its URL in the settings): never
+                                        # picked up, its Z never moved: the plot tool takes the position as it is
     touches: ClassVar[bool] = False
     draws: ClassVar[bool] = False
     Z_TOP: ClassVar[float] = 9.8        # the Z axis's position_max 10, less a little
