@@ -35,7 +35,8 @@ from .tools import DRAW, Tool
 STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
 OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'text', 'texts', 'surface', 'masks'}
-SETTINGS = {'printer_url': ''}      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are
+SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
+            'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
 
 
 def _d(p, closed):
@@ -564,8 +565,8 @@ def create_app(data=None):
             if k not in SETTINGS:
                 raise HTTPException(400, f'no setting {k}')
             v = (v or '').strip().rstrip('/')
-            if k == 'printer_url' and v and not re.match(r'^https?://[^\s/]+', v):
-                raise HTTPException(400, f'printer_url {v!r}: http(s)://host[:port][/path]')
+            if k in ('printer_url', 'endoscope_url') and v and not re.match(r'^https?://[^\s/]+', v):
+                raise HTTPException(400, f'{k} {v!r}: http(s)://host[:port][/path]')
             cur[k] = v
         ws.settings_path.write_text(json.dumps(cur, indent=2) + '\n')
         return cur
@@ -675,9 +676,19 @@ def create_app(data=None):
         return ScanStore(capture_root(ws.data))
 
     def cameras():
+        '''The camera tools (from the tags), and the endoscope when its URL is set: fixed on the carriage, its
+        geometry from the library's `endo` (pens.toml).'''
         with ws.lock:
             machine, tools = load(ws.job, ws.tags)
-        return machine, {k: t for k, t in tools.items() if t.kind == 'camera'}
+        cams = {k: t for k, t in tools.items() if t.kind == 'camera'}
+        url = ws.settings()['endoscope_url']
+        if url:
+            from .tools import REGISTRY
+            spec = {k: v for k, v in load_pens().get('endo', {}).items() if k not in ('name', 'short', 'kind', 'colors')}
+            cams['endoscope'] = REGISTRY['camera'](id='endoscope', kind='camera', **{**spec, 'fixed': True}, webcam=url,
+                                                   name=load_pens().get('endo', {}).get('short', 'Endoscope'),
+                                                   pen='endo', source='settings')
+        return machine, cams
 
     @app.get('/api/camera')
     def camera_state():
@@ -720,7 +731,7 @@ def create_app(data=None):
         cam = cams.get(settings.tool) or next(iter(cams.values()), None)
         if cam is None:
             raise HTTPException(400, 'no camera tool: write a camera type (eg. cam-u20) onto a tool\'s tag first')
-        if cam.holder is None:
+        if cam.holder is None and not cam.fixed:
             raise HTTPException(400, f'{cam.id}: which holder it is in is not known (its tag)')
         mr = Moonraker(machine.moonraker)
         try:

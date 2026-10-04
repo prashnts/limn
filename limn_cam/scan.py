@@ -354,7 +354,11 @@ class Job:
     # On the plotter
     def carry(self):
         '''The camera on the carriage, in the machine's own Z (no offsets, no mesh),
-        at clear_z.'''
+        at clear_z. A fixed camera (the endoscope) is there already: homed, nothing else.'''
+        if self.camera.fixed:
+            self.mr.gcode('LAZY_HOME', timeout=300)
+            self.z = None               # unknown until it goes down over the paper
+            return
         holder = self.camera.holder
         carried = int(self.mr.query(save_variables='variables')['save_variables']['variables']
                       .get('currently_docked_tool', 0) or 0)
@@ -385,10 +389,41 @@ class Job:
         a, b = max(min(a, b), lo), min(max(a, b), hi)
         return sorted(np.arange(a, b + step / 2, step), reverse=True)
 
+    def over_paper(self, x, y):
+        '''Is the camera's spot over the paper (the machine's draw_area): where a fixed camera may change Z.'''
+        x0, y0, x1, y1 = self.machine.draw_area
+        cx, cy = self.camera.center
+        return x0 <= x - cx <= x1 and y0 <= y - cy <= y1
+
     def goto(self, x, y, z, lift=True):
         '''There, still. Sideways only at clear_z or higher (or, not `lift`, at the
         height it is at: stepping down in place, or `low` between tiles); down
-        onto z from above (the play); then settle.'''
+        onto z from above (the play); then settle. A fixed camera (the endoscope) changes Z only over the
+        paper (the user: never outside it), and only when a z is asked for; elsewhere X, Y at the height it is
+        (lifted back to clear_z first if it was down).'''
+        if self.camera.fixed:
+            settle = self.s.settle if self.s.settle is not None else self.camera.settle
+            cx, cy = self.camera.center
+            down = z is not None and self.over_paper(x, y)
+            there = self.xy is not None and abs(self.xy[0] - x) < 1e-6 and abs(self.xy[1] - y) < 1e-6
+            lines = ['G90']
+            if self.z is not None and not there and (lift or not down):
+                lines.append(f'G1 Z{self.clear():.3f} F300')
+                self.z = None
+            if not there:
+                lines.append(f'G1 X{x - cx:.3f} Y{y - cy:.3f} F4000')
+            if down:
+                lo, hi = self.z_limits()
+                z = min(max(z, lo), hi)
+                if self.z is not None and z > self.z:
+                    lines.append(f'G1 Z{z + 0.3:.3f} F300')     # up: overshoot, then down onto it (the play)
+                lines.append(f'G1 Z{z:.3f} F300')
+                self.z = z
+            lines += ['M400', f'G4 P{int(settle * 1000)}']
+            self.mr.gcode('\n'.join(lines), timeout=120)
+            self.xy = (x, y)
+            return z if down else None
+
         lo, hi = self.z_limits()
         z = min(max(z, lo), hi)
         settle = self.s.settle if self.s.settle is not None else self.camera.settle
@@ -449,6 +484,8 @@ class Job:
     # What it does
     def focus(self, x, y):
         '''Sweep z over (x, y), keep the sharpest.'''
+        if self.camera.fixed and not self.over_paper(x, y):
+            raise RuntimeError(f'{self.camera.name}: focus only over the paper (Z is not moved elsewhere)')
         zs = self.sweep()
         self.state['n'] = len(zs)
         self.carry()
@@ -472,7 +509,7 @@ class Job:
         '''A shot centred on each corner of the region: where the region's edges
         lie on what is there (a film frame's edges), to set them by.'''
         x0, y0, x1, y1 = self.s.region
-        z = self.s.z if self.s.z is not None else self.camera.focus_z
+        z = self.s.z if self.s.z is not None or self.camera.fixed else self.camera.focus_z
         spots = [('tl', x0, y1), ('tr', x1, y1), ('br', x1, y0), ('bl', x0, y0)]     # around, the shortest way
         self.state['n'] = len(spots)
         self.carry()
@@ -482,12 +519,13 @@ class Job:
             self._check()
             z = self.goto(x, y, z, lift=i == 0 or not self.s.low)
             jpeg = self.shot()
-            self.store.add(sid, f'{name}.jpg', jpeg, {'corner': name, 'x': x, 'y': y, 'z': round(z, 3), 'flicker': self.flicker})
+            self.store.add(sid, f'{name}.jpg', jpeg, {'corner': name, 'x': x, 'y': y, 'z': z if z is None else round(z, 3),
+                                                      'flicker': self.flicker})
             self.state['i'] = i + 1
 
     def scan(self):
         region = self.s.region
-        z0 = self.s.z if self.s.z is not None else self.camera.focus_z
+        z0 = self.s.z if self.s.z is not None or self.camera.fixed else self.camera.focus_z     # fixed: no z, no Z
         plan = tiles(region, self.camera.fov, self.s.overlap, self.camera.turn)
         self.state['n'] = len(plan)
         self.carry()
@@ -496,7 +534,7 @@ class Job:
         for i, (r, c, x, y) in enumerate(plan):
             self._check()
             lift = i == 0 or not self.s.low
-            if self.s.refocus > 0:
+            if self.s.refocus > 0 and z0 is not None and (not self.camera.fixed or self.over_paper(x, y)):
                 step = self.s.refocus_step
                 zs = list(np.arange(z0 - self.s.refocus, z0 + self.s.refocus + step / 2, step))
                 z, jpeg, curve = self.best_of(x, y, zs, lift=lift)
@@ -504,7 +542,8 @@ class Job:
                 z = self.goto(x, y, z0, lift=lift)
                 jpeg, curve = self.shot(), None
             self.store.add(sid, f'r{r:02d}c{c:02d}.jpg', jpeg,
-                           {'row': r, 'col': c, 'x': x, 'y': y, 'z': round(z, 3), 'curve': curve, 'flicker': self.flicker})
+                           {'row': r, 'col': c, 'x': x, 'y': y, 'z': z if z is None else round(z, 3), 'curve': curve,
+                            'flicker': self.flicker})
             self.state['i'] = i + 1
 
     def _meta(self, kind, region, z=None):

@@ -274,3 +274,61 @@ def test_corners_are_shot_on_the_region_corners(tmp_path):
     assert meta['kind'] == 'corners'
     assert [(t['corner'], t['x'], t['y']) for t in meta['tiles']] == [('tl', 20, 84), ('tr', 56, 84), ('br', 56, 60), ('bl', 20, 60)]
     assert all(t['z'] == pytest.approx(5.0) for t in meta['tiles'])
+
+
+def fixed_camera():
+    from plot.tools import REGISTRY
+    return REGISTRY['camera'](id='endoscope', name='Endoscope', webcam='http://laptop:4240/snapshot.jpg?flip=1',
+                              fov=(35.5, 35.1), turn=44.6, settle=0.0, fixed=True)
+
+
+def test_a_fixed_camera_moves_z_only_over_the_paper(tmp_path):
+    '''The endoscope: on the carriage for good, no tool picked up. No z asked: Z never moved. A z: only over the
+    paper (draw_area), lifted to clear_z before leaving it; never down elsewhere.'''
+    m = machine()
+    px0, py0, px1, py1 = m.draw_area
+    mr, store = FakeMoonraker(), sc.ScanStore(tmp_path)
+    st = run(sc.Job('scan', mr, fixed_camera(), m, store, sc.Settings(region=(20, 60, 80, 100), refocus=0.4)), 'scan')
+    assert st['error'] is None and st['i'] == st['n'] > 1
+    lines = [l for s in mr.scripts for l in s.splitlines()]
+    assert not any('Z' in l for l in lines if l.startswith('G1')) and not any(l.startswith('T0') for l in lines)
+    assert all(t['z'] is None and t['curve'] is None for t in store.meta(st['scan'])['tiles'])
+    # with a z, across the paper's edge: down only over it
+    mr = FakeMoonraker()
+    region = (px1 - 30, py0 + 10, px1 + 30, py0 + 40)
+    st = run(sc.Job('scan', mr, fixed_camera(), m, store, sc.Settings(region=region, z=6.0)), 'scan')
+    assert st['error'] is None
+    tiles = store.meta(st['scan'])['tiles']
+    assert all((t['z'] is not None) == (px0 <= t['x'] <= px1 and py0 <= t['y'] <= py1) for t in tiles)
+    assert any(t['z'] is None for t in tiles) and any(t['z'] == 6.0 for t in tiles)
+    z, low = None, []
+    for l in (l for s in mr.scripts for l in s.splitlines() if l.startswith('G1')):
+        vals = {v[0]: float(v[1:]) for v in l.split()[1:] if v[0] in 'XYZ'}
+        z = vals.get('Z', z)
+        if 'X' in vals and z is not None and z < 7.5 and not (px0 <= vals['X'] <= px1 and py0 <= vals['Y'] <= py1):
+            low.append(l)
+    assert low == []                                                            # never low off the paper
+    st = run(sc.Job('focus', mr, fixed_camera(), m, store, sc.Settings()), 'focus', px1 + 20, py0 + 10)
+    assert 'only over the paper' in st['error']
+
+
+def test_the_app_has_the_endoscope_once_its_url_is_set(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from plot import server
+    import limn_cam.moonraker as mrmod
+    fake = FakeMoonraker()
+    monkeypatch.setattr(mrmod, 'Moonraker', lambda url: fake)
+    client = TestClient(server.create_app(tmp_path / 'ws'))
+    assert 'endoscope' not in client.get('/api/camera').json()['cameras']
+    assert client.put('/api/settings', json={'endoscope_url': 'not a url'}).status_code == 400
+    client.put('/api/settings', json={'endoscope_url': 'http://laptop:4240/snapshot.jpg?flip=1'})
+    cam = client.get('/api/camera').json()['cameras']['endoscope']
+    assert cam['fixed'] and cam['webcam'] == 'http://laptop:4240/snapshot.jpg?flip=1' and cam['fov'] == [35.5, 35.1]
+    client.patch('/api/camera', json={'tool': 'endoscope', 'region': [20, 60, 60, 90], 'settle': 0})
+    assert client.post('/api/camera/scan').status_code == 200                   # no holder needed
+    for _ in range(500):
+        job = client.get('/api/camera').json()['job']
+        if job['done']:
+            break
+        time.sleep(0.01)
+    assert job['error'] is None and job['i'] == job['n'] > 0

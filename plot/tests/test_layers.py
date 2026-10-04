@@ -194,7 +194,7 @@ def test_printer_url_for_the_cameras(client, monkeypatch):
     w = client.get('/api/webcams').json()
     assert w['guessed'] and not w['set']            # Moonraker on localhost: the page's host, perhaps
     assert client.put('/api/settings', json={'printer_url': 'limn.local'}).status_code == 400
-    assert client.put('/api/settings', json={'printer_url': 'https://limn.example/'}).json() == {'printer_url': 'https://limn.example'}
+    assert client.put('/api/settings', json={'printer_url': 'https://limn.example/'}).json()['printer_url'] == 'https://limn.example'
     w = client.get('/api/webcams').json()
     assert w['fluidd'] == 'https://limn.example' and w['set'] and not w['guessed']
     assert client.put('/api/settings', json={'other': 1}).status_code == 400
