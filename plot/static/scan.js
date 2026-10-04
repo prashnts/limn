@@ -208,7 +208,7 @@ $('#camera').addEventListener('change', async (e) => {
 $('#camera').addEventListener('click', async (e) => {
   if (e.target.dataset.act !== 'write-cam') return;
   const holder = $('#c-holder').value, pen = $('#c-type').value, name = $('#c-name').value.trim();
-  if (!confirm(`Dock holder ${holder}'s tool, write ${pen} "${name}" onto its tag, and put it back?`)) return;
+  if (!twice(`write-cam-${holder}`, e.target, `Dock holder ${holder}'s tool, write ${pen} "${name}" onto its tag, and put it back`)) return;
   const r = await api('POST', `/api/holders/${holder}/tag`, { pen, name });
   printer = { ...(printer || {}), job: r.job };
   toast('Writing the tag…');
@@ -264,7 +264,7 @@ $('#camera-job').addEventListener('click', async (e) => {
   if (act === 'use-z') return patchScan({ z: +t.dataset.z });
   if (act === 'stop') { await api('POST', '/api/camera/stop'); return loadCamera(); }
   if (act === 'park') {
-    if (!confirm('Put the camera back in its holder?')) return;
+    if (!twice('park', t, 'Put the camera back in its holder')) return;
     const res = await api('POST', '/api/camera/park');
     printer = { ...(printer || {}), job: res.job };
     toast('Putting the camera away…');
@@ -275,7 +275,7 @@ $('#camera-job').addEventListener('click', async (e) => {
   if (act === 'corners') { await api('POST', '/api/camera/corners'); openWhenDone = true; }
   if (act === 'scan') {
     const n = scanTiles().length;
-    if (!confirm(`Scan the region: ${n} shot${n > 1 ? 's' : ''} at z ${num(focusZ(), 2)}?`)) return;
+    if (!twice('scan', t, `Scan the region: ${n} shot${n > 1 ? 's' : ''} at z ${num(focusZ(), 2)}`)) return;
     await api('POST', '/api/camera/scan');
   }
   loadCamera();
@@ -354,7 +354,7 @@ $('#captures').addEventListener('click', async (e) => {
   if (up) { await api('POST', `/api/captures/${encodeURIComponent(up)}/upload`); return loadCamera(); }
   const del = e.target.dataset.del;
   if (del) {
-    if (!confirm(`Delete ${del} from the server?`)) return;
+    if (!twice(`del-capture-${del}`, e.target, `Delete ${del} from the server`)) return;
     await api('DELETE', `/api/captures/${encodeURIComponent(del)}`);
     if (viewing && viewing.meta.id === del) closeViewer();
     return loadCamera();

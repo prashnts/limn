@@ -47,6 +47,26 @@ async function api(method, url, body) {
   return type.includes('json') ? r.json() : r.text();
 }
 
+// Instead of confirm(): a button acts only when pressed twice within 2 s. The first press turns it yellow
+// (.armed) and says what the second will do; nothing happens on one stray click, and no dialog is in the way.
+// Remembered by `key`, not by the element: a panel the printer poll redraws keeps the second press working.
+const armedAt = {};
+function twice(key, btn, what) {
+  const now = Date.now();
+  if (armedAt[key] && now - armedAt[key] < 2000) {
+    delete armedAt[key];
+    for (const b of $$('.armed')) b.classList.remove('armed');
+    return true;
+  }
+  armedAt[key] = now;
+  if (btn) {
+    btn.classList.add('armed');
+    setTimeout(() => { if (!armedAt[key] || Date.now() - armedAt[key] >= 2000) btn.classList.remove('armed'); }, 2050);
+  }
+  toast(`${what}: press again to do it`);
+  return false;
+}
+
 let toastTimer = null;
 function toast(msg, bad = false) {
   const t = $('#toast');
@@ -878,6 +898,15 @@ function renderObjectList() {
         <span class="note">${k === 0 ? 'on top' : k === n - 1 ? 'at the bottom' : `${k + 1} of ${n}`}</span></div>` : ''}
     </li>`).join('') + (hidden ? `<li class="note">${hidden} hidden from view: ${hidden > 1 ? 'they still plot' : 'it still plots'} (Skip its colours not to)</li>` : ''));
 }
+$('#clear-objects').addEventListener('click', async (e) => {
+  const n = S.job.objects.length;
+  if (!n) return toast('Nothing on the bed');
+  if (twice('clear-objects', e.currentTarget, `Remove all ${n} drawing${n > 1 ? 's' : ''} from the bed`)) {
+    setState(await api('DELETE', '/api/objects'));
+    sel = null;
+    toast('Bed cleared (Undo brings it back)');
+  }
+});
 async function reorder(id, to) {
   setState(await api('POST', `/api/objects/${id}/order`, { to }));
 }
@@ -888,7 +917,7 @@ $('#objects').addEventListener('click', async (e) => {
   if (e.target.dataset.order) return reorder(id, e.target.dataset.order);
   if (act === 'eye') return setHidden(id, !hiddenObjs.has(id));
   if (act === 'del') {
-    if (confirm(`Remove ${id} from the bed?`)) setState(await api('DELETE', `/api/objects/${id}`));
+    if (twice(`del-${id}`, e.target, `Remove ${id} from the bed`)) setState(await api('DELETE', `/api/objects/${id}`));
   } else if (act === 'dup') {
     const r = await api('POST', `/api/objects/${id}/duplicate`); sel = r.id; setState(r.state);
   } else { sel = id; store.set('sel', sel); render(); }
@@ -1294,7 +1323,7 @@ $('#tools').addEventListener('change', async (e) => {
 $('#tools').addEventListener('click', async (e) => {
   const el = e.target;
   if (el.dataset.act === 'scan') {
-    if (!confirm('Scan: take each tool to the tag reader in turn and read its tag?')) return;
+    if (!twice('scan-tags', el, 'Take each tool to the tag reader in turn and read its tag')) return;
     printer = { ...(printer || {}), job: (await api('POST', '/api/scan', {})).job };
     renderTools(); watchJob();
     return;
@@ -1305,7 +1334,7 @@ $('#tools').addEventListener('click', async (e) => {
   if (el.dataset.act === 'write') {
     const d = drafts[t], holder = card.dataset.holder;
     const what = [d.pen && penName(d.pen), colourName(d.pen, d.color) || d.color, d.name && `"${d.name}"`].filter(Boolean).join(', ');
-    if (!confirm(`Dock ${t} (holder ${holder}), write ${what} onto its tag, and put it back?`)) return;
+    if (!twice(`write-${holder}`, el, `Dock ${t} (holder ${holder}), write ${what} onto its tag, and put it back`)) return;
     const r = await api('POST', `/api/holders/${holder}/tag`, { pen: d.pen, color: d.color, name: d.name || suggestName(d.pen, d.color) });
     printer = { ...(printer || {}), job: r.job };
     renderTools(); watchJob();
@@ -1335,7 +1364,7 @@ function renderFonts() {
 }
 $('#fonts').addEventListener('click', async (e) => {
   const f = e.target.dataset.del;
-  if (f && confirm(`Remove the font ${f}?`)) setState(await api('DELETE', `/api/fonts/${encodeURIComponent(f)}`));
+  if (f && twice(`font-${f}`, e.target, `Remove the font ${f}`)) setState(await api('DELETE', `/api/fonts/${encodeURIComponent(f)}`));
 });
 async function uploadFonts(files) {
   for (const f of files) {
@@ -1446,7 +1475,7 @@ $('#pens').addEventListener('click', async (e) => {
   } else if (act === 'delete-pen') {
     const key = penEdit.key;
     const on = S.holders.filter((h) => h.tag && h.tag.pen === key).map((h) => h.holder);
-    if (!confirm(`Delete the pen ${key} from the library?${on.length ? ` Holders ${on.join(', ')} have it on their tags: they fall back to tools.toml.` : ''}`)) return;
+    if (!twice(`pen-${key}`, e.target, `Delete the pen ${key} from the library${on.length ? ` (holders ${on.join(', ')} have it on their tags: they fall back to tools.toml)` : ''}`)) return;
     const st = await api('DELETE', `/api/pens/${encodeURIComponent(key)}`);
     penEdit = null;
     setState(st);
@@ -1587,7 +1616,7 @@ $('#macros').addEventListener('click', async (e) => {
   const b = e.target.closest('button[data-gcode]');
   if (!b) return;
   const m = macros.macros.find((x) => x.gcode === b.dataset.gcode);
-  if (m.confirm && !confirm(`${m.label}: send ${m.gcode} to Klipper? (the machine moves)`)) return;
+  if (m.confirm && !twice(`macro-${m.gcode}`, b, `${m.label}: send ${m.gcode} to Klipper (the machine moves)`)) return;
   const r = await api('POST', '/api/printer/macro', { gcode: m.gcode });
   printer = { ...(printer || {}), job: r.job };
   toast(`${m.gcode} sent`);
@@ -1595,7 +1624,7 @@ $('#macros').addEventListener('click', async (e) => {
 });
 
 async function send(start) {
-  if (start && !confirm('Send this plot to Klipper and start it?')) return;
+  if (start && !twice('print', $('#print'), 'Send this plot to Klipper and start it')) return;
   const r = await api('POST', '/api/printer/upload', { start });
   toast(`${r.file} ${start ? 'sent, plotting' : 'uploaded'}`);
   pollPrinter();
