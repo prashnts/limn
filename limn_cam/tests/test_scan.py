@@ -1,4 +1,5 @@
 # Scanning with the camera tool: tiles, focus by height, the store, the jobs, the app
+import math
 import io
 import json
 import time
@@ -322,6 +323,9 @@ def test_the_app_has_the_endoscope_once_its_url_is_set(tmp_path, monkeypatch):
     assert 'endoscope' not in client.get('/api/camera').json()['cameras']
     assert client.put('/api/settings', json={'endoscope_url': 'not a url'}).status_code == 400
     client.put('/api/settings', json={'endoscope_url': 'http://laptop:4240/snapshot.jpg?flip=1'})
+    w = client.get('/api/webcams').json()['webcams']
+    assert {'name': 'endoscope', 'snapshot_url': 'http://laptop:4240/snapshot.jpg?flip=1',
+            'stream_url': 'http://laptop:4240/stream.mjpg?flip=1'}.items() <= next(c for c in w if c['name'] == 'endoscope').items()
     cam = client.get('/api/camera').json()['cameras']['endoscope']
     assert cam['fixed'] and cam['webcam'] == 'http://laptop:4240/snapshot.jpg?flip=1' and cam['fov'] == [35.5, 35.1]
     client.patch('/api/camera', json={'tool': 'endoscope', 'region': [20, 60, 60, 90], 'settle': 0})
@@ -332,3 +336,16 @@ def test_the_app_has_the_endoscope_once_its_url_is_set(tmp_path, monkeypatch):
             break
         time.sleep(0.01)
     assert job['error'] is None and job['i'] == job['n'] > 0
+
+
+def test_coverage_is_inside_the_turned_shot():
+    '''A turned shot's tiles leave no gaps: its footprint is the largest upright rectangle inside it.'''
+    assert sc.coverage((16, 9), 0) == (16, 9) and sc.coverage((16, 9), 90) == (9, 16)
+    w, h = sc.coverage((35.5, 35.5), 45)
+    assert w == pytest.approx(35.5 / 2 ** 0.5) and h == pytest.approx(35.5 / 2 ** 0.5)
+    for turn in (10, 30, 44.6, 60, -179.2):
+        fx, fy = sc.coverage((16, 9), turn)
+        c, s = math.cos(math.radians(turn)), math.sin(math.radians(turn))
+        for cx, cy in ((fx / 2, fy / 2), (-fx / 2, fy / 2)):        # its corners lie within the turned shot
+            u, v = cx * c + cy * s, -cx * s + cy * c
+            assert abs(u) <= 8 + 1e-6 and abs(v) <= 4.5 + 1e-6
