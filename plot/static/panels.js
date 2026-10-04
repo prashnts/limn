@@ -236,7 +236,7 @@ $('#layout-button').addEventListener('click', (e) => {
 });
 $('#layout-button').addEventListener('contextmenu', (e) => { e.preventDefault(); resetLayout(); });
 function resetLayout() {
-  if (!confirm('Put every panel and window back where it started?')) return;
+  if (!twice('layout-reset', $('#layout-button'), 'Put every panel and window back where it started')) return;
   layout.panels = {};
   layout.windows = {};
   saveLayout();

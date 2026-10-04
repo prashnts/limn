@@ -362,3 +362,10 @@ def test_unsafe_gcode_is_not_sent(client, monkeypatch):
     r = client.post('/api/printer/upload', json={'start': True})
     assert r.status_code == 409 and 'too low off the paper' in r.text
     assert client.post('/api/slice').json()['unsafe'] is False
+
+
+def test_clear_all_and_undo(client):
+    add(client), add(client, name='two.svg')
+    assert len(client.get('/api/state').json()['job']['objects']) == 2
+    assert client.delete('/api/objects').json()['job']['objects'] == []
+    assert len(client.post('/api/undo').json()['state']['job']['objects']) == 2   # one step back: both again

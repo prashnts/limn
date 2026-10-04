@@ -434,8 +434,8 @@ def test_panels_fold_float_dock_and_reset(page, base, drawing):
     drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
     assert page.locator('#left section[data-panel="drawings"]').count() == 1
     # Panels, shift-clicked: everything back
-    page.once('dialog', lambda d: d.accept())
-    page.click('#layout-button', modifiers=['Shift'])
+    page.click('#layout-button', modifiers=['Shift'])            # twice(): armed (yellow) ..
+    page.click('#layout-button', modifiers=['Shift'])            # .. and done
     assert page.locator('#right section[data-panel="paint"]').count() == 1
     # Panels: all hidden, the canvas's tools move out to the edges
     left_rail = page.locator('#rail').bounding_box()['x']
@@ -674,7 +674,8 @@ def test_macro_buttons_run_on_klipper(page, served, monkeypatch):
         page.wait_for_selector('#macros button[data-gcode="G28"]')
         assert page.locator('#macros button[data-gcode="LIMN_CALIBRATE_ALL"]').count() == 0     # Klipper hasn't it
         assert page.locator('#macros button[data-gcode="T0"] .swatch').count() == 1
-        page.once('dialog', lambda d: d.accept())
+        page.click('#macros button[data-gcode="G28"]')
+        assert page.locator('#macros button[data-gcode="G28"].armed').count() == 1 and not sent    # armed, not sent
         page.click('#macros button[data-gcode="G28"]')
         page.wait_for_function('() => document.querySelector("#toast").textContent.includes("G28 sent")')
         for _ in range(50):
@@ -717,3 +718,24 @@ def test_where_fluidd_is_for_the_cameras(page, served, monkeypatch):
         assert page.get_attribute('#cams a.button:has-text("open")', 'href') == 'https://limn.example/webcam4/?action=stream'
     finally:
         requests.put(url + '/api/settings', json={'printer_url': ''})
+
+
+def test_clear_all_takes_two_presses(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('#objects li[data-id]')
+    page.click('#clear-objects')
+    assert page.locator('#clear-objects.armed').count() == 1                  # yellow: nothing done yet
+    assert len(requests.get(base + '/api/state').json()['job']['objects']) == 1
+    page.click('#clear-objects')
+    page.wait_for_function('() => !document.querySelector("#objects li[data-id]")')
+    assert requests.get(base + '/api/state').json()['job']['objects'] == []
+    # one press, then too late: it disarms
+    drawing()
+    page.reload()
+    page.wait_for_selector('#objects li[data-id]')
+    page.click('#clear-objects')
+    time.sleep(2.2)
+    assert page.locator('#clear-objects.armed').count() == 0
+    page.click('#clear-objects')
+    assert len(requests.get(base + '/api/state').json()['job']['objects']) == 1    # armed again, not cleared

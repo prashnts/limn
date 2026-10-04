@@ -290,6 +290,15 @@ def create_app(data=None):
             ws.save()
             return {'id': nid, 'state': ws.state()}
 
+    @app.delete('/api/objects')
+    def clear_objects():
+        '''Every drawing off the bed, as one step for undo.'''
+        with ws.lock:
+            ws.remember()
+            ws.job.objects.clear()
+            ws.save()
+            return ws.state()
+
     @app.delete('/api/objects/{oid}')
     def delete_object(oid: str):
         with ws.lock:
