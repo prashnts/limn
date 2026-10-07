@@ -21,6 +21,9 @@
 # top doesn't cut it: it is drawn whole, first, and the dark ink over it keeps
 # its edges crisp (a light fill under a black outline).
 #
+# A page's background (svg: a fill over the whole page, painted first) is the
+# paper: not drawn by its colour's layer, only when painted on purpose.
+#
 # How a shape's stroke or fill is drawn (part_group): its own paint, else the set
 # (shapes grouped by hand) it is in, else its colour's. A shape closed but not filled
 # in the SVG takes a fill from its own paint or its set's. A fill with `inset` keeps
@@ -41,7 +44,7 @@ from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
 from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
 from .job import Group, Obj
-from .raster import drawn, key as raster_key, raster_shapes
+from .raster import drawn, keys as raster_keys, raster_shapes
 from .surface import make
 
 WIDE = 1.5      # auto: strokes this many tool widths wide or more fill their area
@@ -147,21 +150,20 @@ def nearest_tool(colour, tools):
     return min(tools.values(), key=lambda t: colour_distance(colour, t.color)).id
 
 
-def colour_keys(drawing, obj=None):
-    '''The drawing's colour keys, and its images' when the object makes them into lines.'''
-    keys = list(drawing.groups())
-    if obj is not None and drawn(obj, drawing) and raster_key(obj.raster) not in keys:
-        keys.append(raster_key(obj.raster))
-    return keys
+def image_keys(drawing, obj, tools):
+    '''The colour keys of the inks its images are made into (none when it leaves them out).'''
+    return raster_keys(obj.raster, tools) if obj is not None and drawn(obj, drawing) else []
 
 
 def default_groups(drawing, tools, obj=None):
-    '''Each colour to the tool of the nearest colour; near white is the paper: a mask.
-    Fill and stroke settings left None: as the tool draws.'''
+    '''Each colour to the tool of the nearest colour; near white is the paper: a mask (not
+    an image's ink: yellow is light, but it is ink). Fill and stroke settings left None:
+    as the tool draws.'''
     out = {}
-    for key in colour_keys(drawing, obj):
+    inks = image_keys(drawing, obj, tools)
+    for key in [*drawing.groups(), *(k for k in inks if k not in drawing.groups())]:
         colour = key.split(' ', 1)[1]
-        if (_rgb(colour) @ (0.2126, 0.7152, 0.0722)) / 255 > 0.92:
+        if key not in inks and (_rgb(colour) @ (0.2126, 0.7152, 0.0722)) / 255 > 0.92:
             out[key] = Group(mask=True)
         else:
             out[key] = Group(tool=nearest_tool(colour, tools))
@@ -194,14 +196,26 @@ def part_group(obj, sh, part, groups, sets=None):
         return None
     own = obj.shapes.get(str(sh.index))
     st = (sets if sets is not None else sets_of(obj)).get(sh.index)
-    g = next((getattr(p, part) for p in (own, st) if p is not None and getattr(p, part) is not None),
-             groups.get(f'{part} {colour}') if colour else None)
+    layer = groups.get(f'{part} {colour}') if colour and not sh.background else None      # the paper: only on purpose
+    g = next((getattr(p, part) for p in (own, st) if p is not None and getattr(p, part) is not None), layer)
     if part == 'fill' and g is not None and not sh.line:
         tweak = {k: v for p in (st, own) if p is not None             # the shape's own over its set's
                  for k in ('inset', 'border') if (v := getattr(p, k)) is not None}
         if tweak:
             g = g.model_copy(update=tweak)
     return g
+
+
+def image_shapes(d, obj, tools, problems=None):
+    '''The images' lines, one shape for each ink, its pitch from the pen of its layer.'''
+    if not drawn(obj, d):
+        return []
+    groups = groups_for(obj, d, tools)
+
+    def pen_of(colour):
+        g = groups.get(f'stroke {colour}')
+        return tools.get(g.tool) if g is not None and g.tool else None
+    return raster_shapes(d, obj, tools, pen_of, problems)
 
 
 def text_font(run, spec, fonts):
@@ -261,7 +275,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     groups = groups_for(obj, d, tools)
     height, s = d.size[1], obj.scale
     problems = []
-    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems, tools) + raster_shapes(d, obj),
+    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems, tools) + image_shapes(d, obj, tools, problems),
                     key=lambda sh: sh.index)
 
     def local(p):

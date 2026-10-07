@@ -370,3 +370,86 @@ def test_api_shapes_fillable_groups_of_drawings_and_batch(client):
     assert client.patch('/api/objects', json={'a': {'id': 'x'}}).status_code == 400
     r = client.patch('/api/objects/a', json={'sets': [{'name': 'G', 'shapes': [0, 1], 'inset': True}]})
     assert r.status_code == 200 and r.json()['job']['objects'][0]['sets'][0]['inset'] is True
+
+
+def colour_svg():
+    '''A 50 mm page, a 40 x 20 mm picture: red on the left half, blue on the right.'''
+    import base64
+    import io
+    from PIL import Image
+    a = np.zeros((20, 40, 3), np.uint8)
+    a[:, :20] = (230, 20, 20)
+    a[:, 20:] = (20, 40, 220)
+    buf = io.BytesIO()
+    Image.fromarray(a).save(buf, 'PNG')
+    href = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+    return ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="50mm" '
+            f'height="50mm" viewBox="0 0 50 50"><image xlink:href="{href}" x="5" y="5" width="40" height="20" '
+            'preserveAspectRatio="none"/></svg>')
+
+
+def test_colour_separation_cmyk_and_onto_the_pens(client):
+    add(client, colour_svg())
+    st = client.patch('/api/objects/d', json={'raster': {'mode': 'lines', 'separate': 'cmyk'}}).json()
+    inks = {g['key']: g for g in st['objects']['d']['groups'] if g['images'] is not None}
+    assert set(inks) == {'stroke #00ffff', 'stroke #ff00ff', 'stroke #ffff00', 'stroke #000000'}
+    assert all(g['default']['tool'] for g in inks.values())        # yellow is ink, not the paper (a mask)
+    # Red is magenta and yellow, blue is cyan and magenta: no cyan on the red half, no yellow on the blue
+    ws = client.app.state.ws
+    _, tools = load(ws.job)
+    o = Obj(**st['job']['objects'][0]).model_copy(update={'svg': str(ws.data / 'uploads' / 'd.svg')})
+    from plot import raster
+    from plot.svg import load as load_svg
+    d = load_svg(ws.data / 'uploads' / 'd.svg')
+    p = raster.planes(d.images[0], o.raster)
+    assert p['#00ffff'][:, :20].mean() < 0.1 and p['#ffff00'][:, 20:].mean() < 0.1
+    assert p['#ff00ff'].mean() > 0.6 and p['#000000'].mean() < 0.15
+    # Onto the pens: the red half goes to the red pen, the blue to the blue
+    st = client.patch('/api/objects/d', json={'raster': {'mode': 'lines', 'separate': 'pens', 'pens': ['T0', 'T3']}}).json()
+    inks = [g['key'] for g in st['objects']['d']['groups'] if g['images'] is not None]
+    assert set(inks) == {f'stroke {tools[t].color.lower()}' for t in ('T0', 'T3')}
+    o = o.model_copy(update={'raster': o.raster.model_copy(update={'separate': 'pens', 'pens': ['T0', 'T3']})})
+    p = raster.planes(d.images[0], o.raster, tools)
+    red, blue = p[tools['T3'].color.lower()], p[tools['T0'].color.lower()]
+    assert red[:, :20].mean() > 0.5 > red[:, 20:].mean() and blue[:, 20:].mean() > 0.5 > blue[:, :20].mean()
+    s = slice_object(o, tools)
+    assert {'T0', 'T3'} <= set(s.paths)
+
+
+def test_raster_pitch_follows_the_pen_and_a_fine_pen_is_coarsened(tmp_path, tools):
+    from plot import raster
+    from plot.job import RasterSpec
+    from plot.svg import load as load_svg
+    p = tmp_path / 'g.svg'
+    p.write_text(gradient_svg())
+    img = load_svg(p).images[0]
+    ys = lambda ls: np.unique(np.round([l[0, 1] for l in ls], 4))
+    pen = tools['T0']
+    rows = raster.lines(img, RasterSpec(mode='lines'), 1.0, pen=pen)
+    assert np.diff(ys(rows)).min() == pytest.approx(pen.spacing, abs=1e-3)
+    # A 0.05 fineliner: its own spacing where the grid stays small, coarser (and said so) where not
+    fine = pen.model_copy(update={'width': 0.05})
+    problems = []
+    raster.lines(img, RasterSpec(mode='dither'), 1.0, pen=fine, problems=problems)
+    assert problems and 'instead of' in problems[0]
+    dots = raster.lines(img, RasterSpec(mode='halftone'), 1.0, pen=fine)
+    assert dots and max(np.ptp(d[:, 0]) for d in dots) <= 0.5 * 1.2 + 1e-6      # cell 0.5 mm for a 0.05 pen
+
+
+def test_a_page_background_and_paints_we_cant_read_arent_drawn_black(write_svg, tools):
+    from plot.svg import load as load_svg
+    # A drawing app's export: the page's colour as a rectangle over it all, painted first
+    p = write_svg('''<rect x="0" y="0" width="100" height="100" style="fill: var(--paper)"/>
+        <rect x="0" y="0" width="100" height="100" fill="#222222"/>
+        <rect x="10" y="10" width="20" height="20" style="fill: var(--ink, #ff0000)"/>
+        <rect x="40" y="10" width="20" height="20" fill="url(#hatch)"/>
+        <path d="M10 60 H90" stroke="#ff0000" stroke-width="0.5"/>''')
+    d = load_svg(p)
+    # var() with no fallback: no paint (it was black); with one: the fallback; url(): left out, said so
+    assert [(s.fill, s.background) for s in d.shapes] == [('#222222', True), ('#ff0000', False), ('#000000', False)]
+    assert d.skipped['pattern paint'] == 1 and d.skipped['background'] == 1
+    g = {'fill #222222': Group(tool='T0'), 'fill #ff0000': Group(tool='T3'), 'stroke #ff0000': Group(tool='T3')}
+    s = slice_object(Obj(id='d', svg=str(p), groups=g), tools)
+    assert 'T0' not in s.paths                              # the background is the paper
+    painted = Obj(id='d', svg=str(p), groups=g, shapes={str(d.shapes[0].index): ShapePaint(fill=Group(tool='T0'))})
+    assert 'T0' in slice_object(painted, tools).paths       # unless painted on purpose

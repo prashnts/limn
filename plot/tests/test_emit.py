@@ -371,3 +371,17 @@ def test_a_laser_never_touches():
     from plot.tools import REGISTRY
     laser = REGISTRY['laser'](id='T9', focus=5)
     assert not laser.touches and laser.lift(None, (10, 10)) == 5
+
+
+def test_many_paths_are_ordered_through_a_grid_as_through_all_of_them():
+    from plot import order
+    rng = np.random.default_rng(1)
+    paths = [np.array([a, a + rng.normal(0, 0.3, 2)]) for a in rng.uniform(0, 100, (3000, 2))]
+    order.GRID, old = 10 ** 9, order.GRID
+    try:
+        exact = order.order(paths)
+    finally:
+        order.GRID = old
+    fast = order.order(paths)
+    assert order.GRID < len(paths)
+    assert all(np.array_equal(a, b) for a, b in zip(exact, fast))

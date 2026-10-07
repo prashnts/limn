@@ -36,11 +36,15 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 - **The shapes tool** (`A`): pick shapes by click, Shift-click or a box, and set their outline's pen, their fill's (a closed shape without a fill in its SVG can take one; lines get no fill option), a *bleed margin* and a *border*. These are checkboxes per shape.
 - **Bleed margin** (`inset`): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks on top stays as it was.
 - **Groups**: shapes of a drawing (`Obj.sets`, painted together; the shapes never move), and drawings on the bed (`Obj.group`, they move, nudge and hide together, one undo step via `PATCH /api/objects`). Ctrl+G and Ctrl+Shift+G.
+- **Colour separation** for pictures: CMYK, or unmixed onto the pens there are, each ink its own layer on its own screen angle. Pitch and dot grid follow each ink's pen; a 0.05 fineliner stays plottable (dither and halftone are capped, and say so).
+- The shapes tool's *Pen*: the whole shape to one pen, its outline and its fill (it was only the outline, so a filled shape kept its old colour).
 - Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`, the one being taken stays).
 - **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`): on upload the UI asks whether to leave them out or make them into lines. There are three ways: *dither* (Floyd–Steinberg, a row's dots joined into lines), *lines* (rows, denser where darker) and *halftone* (spiral dots). Each has a pitch as plotted, a paper threshold so light backgrounds stay clean, gamma, invert and a colour; that colour's layer picks the pen. On a 70 mm test picture at 0.5 mm: lines ≈ 2.4 m of ink in 66 strokes, halftone ≈ 3.6 m in 670, dither ≈ 1.5 m in 3000 short ones (the most travel).
 
 ### Changed
 - `<image>`s stay in an uploaded SVG (they were taken out): left out unless made into lines. One linked rather than embedded is still left out, and the upload says so.
+- A page's background (a full-page rectangle under the rest) is the paper, left out unless painted; fills written as CSS `var()` take their fallback and `url()` patterns are left out. Concepts exports came out as a solid black block, 90 m of hatching.
+- Ordering many strokes uses a grid of buckets: a dithered picture's 60 000 dashes are ordered in about 1 s instead of 54 s (same order).
 - A *look* is temporary: the next capture (look, focus, corners or scan) deletes it (`ScanStore.new`).
 
 ## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display
