@@ -7,9 +7,15 @@
 # drawn from that end. Then 2-opt (improve): reversing a run of paths, each
 # drawn the other way round, while that shortens the travels, for as long as
 # the time budget allows. Closed paths start at their vertex nearest the tool.
+# Many paths (a dithered picture: tens of thousands of dashes) look for the
+# nearest end in a grid of buckets around the tool instead of all of them.
+import math
 import time
+from collections import defaultdict
 
 import numpy as np
+
+GRID = 2000         # more paths than this: the nearest end from a grid of buckets
 
 
 def _closed(p):
@@ -32,7 +38,17 @@ def order(paths, start=(0, 0)):
     alive = np.ones(n, bool)
     pos = np.asarray(start[:2], float)
     out = []
+    nearest = _grid(starts, ends, alive) if n > GRID else None
     for _ in range(n):
+        if nearest is not None:
+            i, rev = nearest(pos)
+            p = paths[i][::-1] if rev else paths[i]
+            if closed[i]:
+                p = _rotate(p, pos)
+            alive[i] = False
+            out.append(p)
+            pos = p[-1, :2]
+            continue
         ds = np.hypot(*(starts - pos).T)
         de = np.hypot(*(ends - pos).T)
         ds[~alive] = np.inf
@@ -45,6 +61,53 @@ def order(paths, start=(0, 0)):
         out.append(p)
         pos = p[-1, :2]
     return out
+
+
+def _grid(starts, ends, alive):
+    '''nearest(pos) -> (path, from its end): the nearest end of a path still alive, from
+    buckets about one path apart, looking in rings around pos until no ring can be nearer.'''
+    n = len(starts)
+    pts = np.vstack([starts, ends])
+    lo = pts.min(axis=0)
+    span = max(float(np.ptp(pts, axis=0).max()), 1e-6)
+    h = span / math.sqrt(n)
+    cells = np.floor((pts - lo) / h).astype(int)
+    hi = cells.max(axis=0)
+    grid = defaultdict(list)
+    for k, (cx, cy) in enumerate(cells.tolist()):
+        grid[(cx, cy)].append(k)
+
+    def ring(cx, cy, r):
+        if r == 0:
+            yield cx, cy
+            return
+        for x in range(cx - r, cx + r + 1):
+            yield x, cy - r
+            yield x, cy + r
+        for y in range(cy - r + 1, cy + r):
+            yield cx - r, y
+            yield cx + r, y
+
+    def nearest(pos):
+        cx, cy = (int(math.floor(v)) for v in (pos - lo) / h)
+        far = max(abs(cx), abs(cy), abs(cx - hi[0]), abs(cy - hi[1])) + 1
+        best, bk = math.inf, -1
+        for r in range(far + 1):
+            for c in ring(cx, cy, r):
+                ks = grid.get(c)
+                if not ks:
+                    continue
+                live = [k for k in ks if alive[k % n]]
+                if len(live) < len(ks):
+                    grid[c] = live              # the dead go as they are met
+                for k in live:
+                    d = math.hypot(pts[k, 0] - pos[0], pts[k, 1] - pos[1])
+                    if d < best:
+                        best, bk = d, k
+            if bk >= 0 and best <= r * h:       # nothing in a further ring can be nearer
+                break
+        return bk % n, bk >= n
+    return nearest
 
 
 def improve(paths, start=(0, 0), budget=1.0):

@@ -65,9 +65,11 @@ class RasterSpec(BaseModel):
     '''What becomes of a drawing's <image>s (raster.py): left out, or made into lines.'''
     model_config = ConfigDict(extra='forbid')
     mode: Literal['skip', 'dither', 'lines', 'halftone'] = 'skip'
-    pitch: float = Field(0.5, gt=0.05)      # mm as plotted: between lines, dither cells, a dot's turns
-    cell: float = Field(2.0, gt=0.2)        # halftone: mm between dots
-    colour: str = Field('#000000', pattern=r'^#[0-9a-fA-F]{6}$')    # its colour's layer draws it
+    separate: Literal['one', 'cmyk', 'pens'] = 'one'    # one colour; cyan, magenta, yellow and black; the pens'
+    pens: list[str] = []            # separate onto these tools; empty: every one that draws
+    pitch: float | None = Field(None, gt=0.02)  # mm as plotted between lines, dither cells, a dot's turns; None: its pen's
+    cell: float | None = Field(None, gt=0.1)    # halftone: mm between dots; None: from its pen's width
+    colour: str = Field('#000000', pattern=r'^#[0-9a-fA-F]{6}$')    # 'one': its colour's layer draws it
     gamma: float = Field(1.0, gt=0.1, lt=5)  # over 1: lighter, more paper
     paper: float = Field(0.1, ge=0, lt=1)   # darkness up to this is the paper: no ink (a light background)
     invert: bool = False

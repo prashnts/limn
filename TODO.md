@@ -14,7 +14,10 @@
 - Done 2026-10-07: pictures in an SVG made plottable (`plot/raster.py`): dither, lines, halftone; the upload asks.
   - [ ] Plot each on paper with a fineliner: which pitch matches its line (0.5 is a guess), whether halftone spirals blot at the middle, how long dither takes for real (many short strokes: Z hops dominate).
   - [ ] Dither is a Python loop: an A4 picture at 0.3 mm (~700k cells) takes a few seconds per change of its settings. numba or a C pass if it gets in the way.
-  - [ ] Colour pictures: one colour only for now. CMY(K) separations onto several pens, each its own angle, would be next.
+  - Done: colour separation (CMYK, or onto the pens), pitch from each ink's pen, caps for fine pens.
+  - [ ] Tomorrow's plot: lines and halftone onto the pens with the Stabilos, and a 0.05 fineliner in lines and dither (stipple). Check: is black solid at the pen's own spacing; do halftone spirals blot in the middle; does the unmixing look right with pens that aren't C, M, Y.
+  - [ ] The Pi is several times slower: dither and halftone slice in 3-6 s here.
+  - [ ] The page-background guess (full-page rect, painted first, something over it): watch for drawings whose first shape is a real full-page fill.
   - [ ] Ordering: emit's travel order for thousands of dashes (dither); a serpentine order per row might beat it.
 - [ ] Too small: the thresholds (2.5 widths, 70% of the inside painted over, text caps 8 widths) come from one drawing (the Feb–Apr 2025 sketch on the Pi, at 22/39/49%). Check on a plot what really blurs, then tune `SMALL`, `LOST`, `TEXT_MIN` in slicer.py. Letters that run into each other (each fine on its own) aren't seen yet.
 - [ ] Drawings over drawings is new: the ferry and magnet icons on the Pi overlap each other and the Feb drawing; whichever is on top now cuts the others. Turn *what is on top hides* off on one that should draw over.

@@ -742,7 +742,7 @@ function effGroup(o, sh, part) {
   if (part === 'stroke' && !colour) return null;
   if (part === 'fill' && !sh.line && !sh.fillable) return null;
   const own = o.shapes[String(sh.i)], st = setOf(o, sh.i);
-  let g = [own, st].map((p) => p && p[part]).find(Boolean) || (colour ? layerGroup(o, `${part} ${colour}`) : null);
+  let g = [own, st].map((p) => p && p[part]).find(Boolean) || (colour && !sh.bg ? layerGroup(o, `${part} ${colour}`) : null);
   if (g && part === 'fill' && !sh.line) {
     for (const p of [st, own]) for (const k of ['inset', 'border']) if (p && p[k] != null) g = { ...g, [k]: p[k] };
   }
@@ -1170,6 +1170,26 @@ const toPen = (g, v) => ({ ...g, tool: ['mask', 'skip'].includes(v) ? null : v, 
 
 // The shapes picked with the shapes tool: their pen, their fill (only shapes that can take
 // one: not lines), its margin and border. Exactly a group's shapes: the group's settings.
+// Filled as it is drawn now: by its SVG, its own paint or its group's (not a line)
+const filled = (o, sh) => sh.fillable && !sh.line && !!(sh.fill || (o.shapes[String(sh.i)] || {}).fill || (setOf(o, sh.i) || {}).fill);
+// The picked shapes, whole, to one pen (or back to their layers): outline, and fill where filled.
+// Always on the shapes themselves; a group they are exactly loses its own pens too
+async function penPicked(o, v) {
+  const data = geo[o.id].data, st = exactSet(o), shapes = { ...o.shapes };
+  for (const sh of data.shapes.filter((x) => shapeSel.idx.has(x.i))) {
+    const p = { ...(shapes[sh.i] || {}) }, line = sh.line ? 'fill' : 'stroke';
+    for (const part of [line, ...(filled(o, sh) ? ['fill'] : [])]) {
+      if (part === 'stroke' && !sh.stroke) continue;
+      const colour = part === 'stroke' ? sh.stroke : sh.fill;
+      p[part] = v === '' ? null : toPen(colour ? layerGroup(o, `${part} ${colour}`) : {}, v);
+    }
+    const kept = Object.fromEntries(Object.entries(p).filter(([, x]) => x != null));
+    if (Object.keys(kept).length) shapes[sh.i] = kept; else delete shapes[sh.i];
+  }
+  const body = { shapes };
+  if (st) body.sets = o.sets.map((x) => (x === st ? { ...x, stroke: null, fill: null } : x));
+  return patchObj(o.id, body);
+}
 function exactSet(o) {
   if (shapeSel.id !== o.id || !shapeSel.idx.size) return null;
   const idx = shapeSel.idx;
@@ -1185,6 +1205,8 @@ function pickedHtml(o) {
   const lineV = same(lines.map((sh) => { const p = own(sh)[sh.line ? 'fill' : 'stroke']; return p ? target(p) : ''; }));
   const fillV = same(fills.map((sh) => (own(sh).fill ? target(own(sh).fill) : '')));
   const fgs = fills.map((sh) => effGroup(o, sh, 'fill')).filter(Boolean);
+  // The whole shape's pen: its outline's (a line's), and its fill's when it is filled; mixed when they differ
+  const penV = same(shs.flatMap((sh) => [effGroup(o, sh, sh.line ? 'fill' : 'stroke'), filled(o, sh) && effGroup(o, sh, 'fill')]).filter(Boolean).map(target));
   const flag = (k) => same(fgs.map((g) => !!(g[k] ?? (k === 'border' ? drawOf(g.tool).border : false))));
   const bleeds = [...new Set(fgs.filter((g) => g.tool).map((g) => drawOf(g.tool).bleed))];
   const pick = (f, v, title) => `<select data-pf="${f}" title="${title}">${v === undefined ? '<option value="~" selected>mixed</option>' : ''}${opt('', v ?? '', st ? 'by their colours' : 'as its layer')}${pens(v)}</select>`;
@@ -1193,7 +1215,8 @@ function pickedHtml(o) {
   const inSets = new Set(shs.map((sh) => setOf(o, sh.i)).filter(Boolean));
   return `<h3>${st ? `Group “${esc(st.name)}”` : 'Picked shapes'} (${shs.length})</h3>
     <div class="form picked">
-      ${lines.length ? `<label>Outline</label>${pick('line', lineV, 'The pen their outlines are drawn with, apart from their colour')}` : ''}
+      <label>Pen</label>${pick('pen', penV, 'The whole shape with this pen: its outline and, if it is filled, its fill (a line: only its line). Too thin for the pen: left out all the same (outlined in red)')}
+      ${lines.length ? `<label>Outline</label>${pick('line', lineV, 'Only the outlines, apart from their colour')}` : ''}
       ${fills.length ? `<label>Fill</label>${pick('fill', fillV, 'The pen their insides are filled with, apart from their colour: a shape closed but not filled in the SVG can take one too')}
         <label></label><div class="row wrap">${check('inset', `bleed margin${bleeds.length === 1 ? ` ${num(bleeds[0])} mm` : ''}`, 'Keep the fill its pen\'s bleed (Tools tuning) inside its own edge, the corners round (sharp where the shape is too thin for round ones)')}
           ${check('border', 'border', 'Outline the fill (with the margin: along its inner edge)')}</div>
@@ -1297,19 +1320,28 @@ function imagesHtml(o, I) {
   const ims = I.images || [];
   if (!ims.length) return '';
   const r = o.raster, on = r.mode !== 'skip';
-  const g = on && I.groups.find((x) => x.key === `stroke ${r.colour.toLowerCase()}`);
+  const inks = I.groups.filter((x) => x.images != null);       // a layer for each ink (raster.inks)
+  const pensUsed = inks.map((x) => S.tools[target(layerGroup(o, x.key))]).filter(Boolean);
+  const auto = (f) => [...new Set(pensUsed.map(f))].map((v) => num(v)).join(' / ') || '—';     // as raster.auto
+  const pitch = auto((t) => t.spacing), cell = auto((t) => Math.min(3, Math.max(0.5, 6 * t.width)));
+  const draws = Object.values(S.tools).filter((t) => t.draws !== false);
   return `<h3 title="The SVG's pictures: a pen can't draw them as they are">Images (${ims.length})</h3>
     <div class="form raster">
       <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
       ${on ? `<label for="r-pitch">${r.mode === 'halftone' ? 'Line gap' : 'Pitch'}</label><div class="row"><input id="r-pitch" data-r="pitch" type="number" step="0.05" min="0.1" value="${num(r.pitch)}"
-          title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. About the pen's line: finer is darker and slower"> <span class="note">mm</span></div>
-        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.5" value="${num(r.cell)}" title="mm between dots, as plotted"> <span class="note">mm</span></div>` : ''}
+          placeholder="${pitch}" title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. Empty: each ink's pen's own line spacing (${pitch}), so black is solid"> <span class="note">mm${r.pitch == null ? ', the pen\'s' : ''}</span></div>
+        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.2" value="${num(r.cell)}" placeholder="${cell}" title="mm between dots, as plotted. Empty: from each ink's pen, 6 of its lines (0.5 to 3 mm): ${cell}"> <span class="note">mm${r.cell == null ? ', the pen\'s' : ''}</span></div>` : ''}
+        <label for="r-sep">Inks</label><select id="r-sep" data-r="separate" title="One colour; cyan, magenta, yellow and black (give each a pen in Layers); or unmixed onto the pens there are: each ink on its own screen angle">
+          ${[['one', 'One colour'], ['cmyk', 'CMYK'], ['pens', 'Onto the pens']].map(([v, l]) => opt(v, r.separate, l)).join('')}</select>
+        ${r.separate === 'pens' ? `<label>Pens</label><div class="row wrap pens-pick">${draws.map((t) => `<label class="check" title="${esc(t.name)}"><input type="checkbox" data-rpen="${esc(t.id)}"${!r.pens.length || r.pens.includes(t.id) ? ' checked' : ''}>
+          <span class="swatch" style="background:${esc(t.color)}"></span>${esc(t.id)}</label>`).join('')}</div>` : ''}
         <label for="r-gamma">Gamma</label><div class="row"><input id="r-gamma" data-r="gamma" type="number" step="0.1" min="0.2" max="4" value="${num(r.gamma)}" title="Over 1: lighter, more paper; under 1: darker"></div>
         <label for="r-paper">Paper up to</label><div class="row"><input id="r-paper" data-r="paper" type="number" step="5" min="0" max="95" value="${num(r.paper * 100, 0)}"
           title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span></div>
-        <label for="r-colour">Colour</label><div class="row"><input id="r-colour" data-r="colour" type="color" value="${esc(r.colour)}" title="Its lines are this colour: the layer of this colour draws them (drag its chip to another pen)">
+        <label for="r-colour">${r.separate === 'one' ? 'Colour' : ''}</label><div class="row">${r.separate === 'one' ? `<input id="r-colour" data-r="colour" type="color" value="${esc(r.colour)}" title="Its lines are this colour: the layer of this colour draws them (drag its chip to another pen)">` : ''}
           <label class="check"><input type="checkbox" data-r="invert"${r.invert ? ' checked' : ''}> invert</label></div>
-        <label></label><p class="note">${g ? `${num(g.length / 1000, 1)} m of line, drawn by ${esc(target(layerGroup(o, g.key)))}` : 'Nothing dark enough to draw'} · ${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</p>` : ''}
+        <label></label><div class="note inks">${inks.map((x) => `<div>${swatchOf('stroke', x.key.split(' ')[1])} ${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'} by ${esc(target(layerGroup(o, x.key)))}</div>`).join('')}
+          <div>${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</div></div>` : ''}
     </div>`;
 }
 
@@ -1323,8 +1355,16 @@ $('#object-panel').addEventListener('change', async (e) => {
   if (t.id === 'f-occ') return patchObj(o.id, { occlude: t.checked });
   const rk = t.dataset.r;
   if (rk) {
-    const v = rk === 'invert' ? t.checked : ['mode', 'colour'].includes(rk) ? t.value : rk === 'paper' ? +t.value / 100 : +t.value;
+    const v = rk === 'invert' ? t.checked : ['mode', 'colour', 'separate'].includes(rk) ? t.value : rk === 'paper' ? +t.value / 100
+      : t.value === '' ? null : +t.value;
     return patchObj(o.id, { raster: { ...o.raster, [rk]: v } });
+  }
+  if (t.dataset.rpen) {
+    const all = Object.values(S.tools).filter((x) => x.draws !== false).map((x) => x.id);
+    const cur = o.raster.pens.length ? o.raster.pens : all;
+    const pens = t.checked ? [...cur, t.dataset.rpen] : cur.filter((x) => x !== t.dataset.rpen);
+    if (!pens.length) { t.checked = true; return flash('At least one pen'); }
+    return patchObj(o.id, { raster: { ...o.raster, pens: pens.length === all.length ? [] : all.filter((x) => pens.includes(x)) } });
   }
   const cf = t.dataset.cf;
   if (cf) {
@@ -1340,6 +1380,7 @@ $('#object-panel').addEventListener('change', async (e) => {
   }
   if (t.dataset.ck) return setChip(o, [t.dataset.ck], (g) => toPen(g, t.value));
   const pf = t.dataset.pf;
+  if (pf === 'pen' && t.value !== '~') return penPicked(o, t.value);
   if (pf && t.value !== '~') {
     return editPicked(o, (p, sh) => {
       if (pf === 'inset' || pf === 'border') return { ...p, [pf]: t.checked };

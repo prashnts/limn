@@ -38,6 +38,7 @@ class Shape:
     closed: list[bool] = field(default_factory=list)
     line: bool = False          # drawn on its lines with its fill's tool (text in a line font)
     raster: bool = False        # an <image> made into lines (raster.py): never too small for its tool
+    background: bool = False    # a fill over the whole page, painted first: the paper, not drawn unless painted
 
     def keys(self):
         return [k for k in (self.stroke and f'stroke {self.stroke}', self.fill and f'fill {self.fill}') if k]
@@ -65,12 +66,19 @@ class RasterImage:
     '''An <image> of the drawing, kept to be made into lines (raster.py).'''
     index: int                  # paint order, as the shapes'
     id: str | None
-    dark: np.ndarray            # (h, w) 0 white (or transparent) .. 1 black, at most MAX_PX across
+    rgb: np.ndarray             # (h, w, 3) uint8, on white where it is transparent, at most MAX_PX across
     matrix: tuple               # its pixel (u, v) -> mm: x = a u + c v + e, y = b u + d v + f
-    cache: dict = field(default_factory=dict, compare=False, repr=False)    # raster.py's lines
+    cache: dict = field(default_factory=dict, compare=False, repr=False)    # raster.py's planes and lines
+
+    @property
+    def dark(self):
+        '''(h, w) 0 white .. 1 black.'''
+        if 'dark' not in self.cache:
+            self.cache['dark'] = 1 - (self.rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)) / 255
+        return self.cache['dark']
 
     def corners(self):
-        h, w = self.dark.shape
+        h, w = self.rgb.shape[:2]
         a, b, c, d, e, f = self.matrix
         return np.array([(a * u + c * v + e, b * u + d * v + f) for u, v in ((0, 0), (w, 0), (w, h), (0, h))])
 
@@ -122,6 +130,32 @@ def paint(color, alpha):
     return color.hexrgb.lower(), a > 0.98
 
 
+VAR = re.compile(r'^\s*var\(\s*--[\w-]+\s*(?:,\s*(.+?))?\s*\)\s*$')
+
+
+def _paint_of(e, name):
+    '''(paint, why it was left out): a CSS var() takes its fallback (svgelements reads any var()
+    as black); a url() (a gradient, a pattern) can't be drawn: None, 'pattern'.'''
+    raw = e.values.get(name)
+    if isinstance(raw, str):
+        m = VAR.match(raw)
+        if m:
+            return (S.Color(m.group(1)) if m.group(1) and not m.group(1).startswith(('var(', 'url(')) else None), 'var'
+        if raw.strip().startswith('url('):
+            return None, 'pattern'
+    return getattr(e, name), None
+
+
+def _background(shape, size):
+    '''Is it the page's background: a fill, no stroke, one closed outline over nearly the whole page.'''
+    if not shape.fill or shape.stroke or len(shape.paths) != 1 or not shape.closed[0] or len(shape.paths[0]) > 6:
+        return False
+    p = shape.paths[0]
+    (x0, y0), (x1, y1) = p.min(axis=0), p.max(axis=0)
+    w, h = size
+    return w > 0 and h > 0 and (min(x1, w) - max(x0, 0)) * (min(y1, h) - max(y0, 0)) >= 0.97 * w * h
+
+
 def _flatten(sub, tolerance):
     pts, closed = [], False
     for seg in sub:
@@ -152,11 +186,11 @@ def _flatten(sub, tolerance):
     return (s if len(s) >= 2 else a), closed
 
 
-MAX_PX = 2000      # an image's pixels kept, across: finer than any pen's line at plotter sizes
+MAX_PX = 1600      # an image's pixels kept, across: about a 0.05 mm pen's line over an A5 page
 
 
 def raster(e):
-    '''An <image> -> (darkness, matrix), None when it can't be read (not embedded, not a picture).'''
+    '''An <image> -> (rgb, matrix), None when it can't be read (not embedded, not a picture).'''
     try:
         e.load()
     except Exception:
@@ -171,11 +205,10 @@ def raster(e):
     if k > 1:
         im = im.resize((max(1, round(w / k)), max(1, round(h / k))), PILImage.BOX)
     white = PILImage.new('RGBA', im.size, (255, 255, 255, 255))
-    grey = PILImage.alpha_composite(white, im).convert('L')
-    dark = 1 - np.asarray(grey, np.float32) / 255
-    sx, sy = w / grey.width, h / grey.height                # its pixels -> the image's own (load() puts its
+    rgb = PILImage.alpha_composite(white, im).convert('RGB')
+    sx, sy = w / rgb.width, h / rgb.height                  # its pixels -> the image's own (load() puts its
     m = e.transform                                          # viewbox and placement in its transform)
-    return dark, (m.a * sx * MM, m.b * sx * MM, m.c * sy * MM, m.d * sy * MM, m.e * MM, m.f * MM)
+    return np.asarray(rgb, np.uint8), (m.a * sx * MM, m.b * sx * MM, m.c * sy * MM, m.d * sy * MM, m.e * MM, m.f * MM)
 
 
 IMAGE = re.compile(rb'<(?:[\w-]+:)?image\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*?(?:/>|>.*?</(?:[\w-]+:)?image\s*>)', re.S)
@@ -226,8 +259,11 @@ def load(src, tolerance=0.02) -> Drawing:
             continue
         if e.values.get('visibility') == 'hidden' or e.values.get('display') == 'none':
             continue
-        stroke, stroke_opaque = paint(e.stroke, _opacity(e.values, 'opacity', 'stroke-opacity'))
-        fill, fill_opaque = paint(e.fill, _opacity(e.values, 'opacity', 'fill-opacity'))
+        (sp, swhy), (fp, fwhy) = _paint_of(e, 'stroke'), _paint_of(e, 'fill')
+        for why in {swhy, fwhy} - {None, 'var'}:
+            skipped[f'{why} paint'] += 1
+        stroke, stroke_opaque = paint(sp, _opacity(e.values, 'opacity', 'stroke-opacity'))
+        fill, fill_opaque = paint(fp, _opacity(e.values, 'opacity', 'fill-opacity'))
         width = (e.stroke_width or 0) * MM
         if width <= 0:
             stroke = None
@@ -249,4 +285,10 @@ def load(src, tolerance=0.02) -> Drawing:
     if not w or not h:
         pts = np.vstack([p for s in shapes for p in s.paths]) if shapes else np.zeros((1, 2))
         w, h = pts[:, 0].max() / MM, pts[:, 1].max() / MM
+    # Only with something drawn over it: a lone square that fills its page is the drawing
+    over = len(shapes) + len(texts) + len(images) > 1
+    if over and _background(shapes[0], (w * MM, h * MM)) and not (texts and texts[0].index < shapes[0].index) \
+            and not (images and images[0].index < shapes[0].index):
+        shapes[0].background = True
+        skipped['background'] += 1
     return Drawing((w * MM, h * MM), shapes, texts, dict(skipped), images)
