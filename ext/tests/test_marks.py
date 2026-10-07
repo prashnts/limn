@@ -530,7 +530,7 @@ def test_a_saved_survey_is_gone_by_until_cleared():
     assert fsr.cfg['early'] == 35 and fsr.arrays[1]['aim'] == (1.77, 6.28)
     assert [tuple(c) for c in fsr.arrays[1]['faulty_cells']] == [(0, 3), (1, 3), (2, 3)]
     assert p.said('going by the survey of 2026-10-07 21:00')
-    assert BEDS['BED_5']['fsr']['arrays'][0]['aim'] == (1.5, 6.3)          # the config stays as it is
+    assert BEDS['BED_5']['fsr']['arrays'][0]['aim'] == (1.5, 5.5)          # the config stays as it is
     fsr = Fsr(None, None, None, BEDS['BED_5']['fsr'])
     p.ext._apply_survey(FakeGcmd(p.gcode, {'SURVEY': 0}), fsr)
     assert fsr.cfg.get('early') == BEDS['BED_5']['fsr']['early'] and 'faulty_cells' not in fsr.arrays[1]

@@ -21,6 +21,14 @@ def bed_cfg():
     return copy.deepcopy(BEDS['BED_5']['fsr'])
 
 
+def old_cfg():
+    '''BED_5's config for the sheet it had until 2026-10-07 (a glue void: cols 3 and 4 faulty,
+    the aim moved off them), the one the bed5 model (FsrBed.frame_bed5) is measured from.'''
+    cfg = bed_cfg()
+    cfg['arrays'][0].update(faulty_cols=(3, 4), aim=(1.5, 6.3))
+    return cfg
+
+
 class FsrBed:
     '''The plotter over BED_5: a docked tool whose tip sits `tip` off the
     toolhead, pressing on an FSR array with a dead zone between cells.'''
@@ -28,7 +36,7 @@ class FsrBed:
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
-                 dead_lifts=0.0, bed5=False):
+                 dead_lifts=0.0, bed5=False, fresh=False):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -52,6 +60,7 @@ class FsrBed:
         self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
         self.dead_lifts = dead_lifts            # a press on row 3 (no series resistor) lifts its column's rows by this share
         self.bed5 = bed5                        # BED_5 with a Stabilo as measured on the plotter, 2026-10-07: see frame_bed5
+        self.fresh = fresh                      # bed5's physics, but a sheet without the old one's faults
         self.max_press = 0.0                    # the deepest press past first touch seen
         self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
         self.ghost = ghost                      # (from, to mm over contact, cell, strength): a reading in the air
@@ -139,13 +148,14 @@ class FsrBed:
         curve = 600 * (1 - np.exp(-p / 0.05)) if p > 0 else 0.0
         first = 1 / (1 + (max(p, 0) / 0.035) ** 4)                 # 1 at first touch, ~0 from 0.07mm
         ripple = 1 + 0.07 * np.cos(2 * np.pi * self.tip_xy()[0] / 0.4)
-        pressed = {c: curve * s * self.WEAK.get(c, 1.0) * ripple for c, s in shares.items()}
+        weak = {} if self.fresh else self.WEAK
+        pressed = {c: curve * s * weak.get(c, 1.0) * ripple for c, s in shares.items()}
         values = []
         for row in range(array.rows):
             for col in range(array.cols):
                 # Its baseline drifts by tens, slowly and cell by cell, as the real one does
                 drift = 15 * (1 + np.sin(self.t / 40 + 1.7 * row + 2.9 * col))
-                s = abs(self.rng.normal(0, 4)) + drift + (75 if col == 3 else 0)
+                s = abs(self.rng.normal(0, 4)) + drift + (75 if col == 3 and not self.fresh else 0)
                 if (row, col) in pressed:
                     s += pressed[(row, col)]
                 else:
@@ -211,7 +221,7 @@ class FsrBed:
 
 
 def setup(cfg=None, **kw):
-    cfg = cfg or bed_cfg()
+    cfg = cfg or (old_cfg() if kw.get('bed5') else bed_cfg())
     samples, dock = Samples(), FakeDock()
     bed = FsrBed(samples, dock, cfg, **kw)
     return Fsr(bed, dock, samples, cfg), bed, dock
@@ -470,9 +480,9 @@ def test_dock_disconnect_lifts():
 
 def test_tools_far_off():
     '''A few mm off in X (rows 0-2) and more in Y (8 cols, -4.25..+15.75 from the aim): found, and
-    measured. Not where the tip lands on the faulty column 3 (~+8 in Y): it is never read.'''
+    measured. Not where the tip lands on the faulty columns 3 and 4 (~+3.3..+8.3 in Y): never read.'''
     profile = calibrated()
-    for tip in ((3.4, -3.5), (-2.0, 4.5), (3.0, 1.9), (-1.6, -0.9)):
+    for tip in ((3.4, -3.5), (-2.0, 1.0), (3.0, 1.9), (-1.6, -0.9)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
         dx, dy, _ = fsr.probe_tool(profile)
@@ -568,15 +578,15 @@ def test_locate_doesnt_measure_towards_the_dead_row():
     assert abs(shift[0] - 1.85) < 0.3 and abs(shift[1] - 2.2) < 0.3, shift
 
 def test_a_faulty_column_is_never_read():
-    '''BED_5's column 3 lights up while the rest of its row is pressed: it read 469 with
+    '''The old BED_5 sheet's column 3 lit up while the rest of its row was pressed: it read 469 with
     the pen on (1,1) and stopped LRT_CALIBRATE ("responds instead of", 2026-10-07).'''
-    cfg = copy.deepcopy(bed_cfg())
+    cfg = old_cfg()
     fsr, bed, _ = setup(cfg=cfg, row_crosstalk=0.9)
     bed.tool = 'T1'
     fsr.matrix(True)
     s = fsr.read(1)
     assert all(c[1] != 3 for c in s) and all(c[0] != 3 for c in s)
-    assert cfg['arrays'][0]['faulty_cols'] == (3,)
+    assert 3 in cfg['arrays'][0]['faulty_cols']
 
 def test_a_tip_a_cell_off_from_locate_is_aimed_again():
     '''locate put the Stabilo's tip at Y 3.87 for 2.13 (2026-10-07): it came down on (1, 2)
@@ -618,7 +628,7 @@ def test_a_survey_finds_this_sheets_faults_and_a_healthy_one_none():
     high at rest and a weak (2, 4); a healthy sheet nothing. Never 0.1mm past first touch.'''
     from limn.fsr import judge_survey
     for kw, faulty, weak in ((dict(bed5=True), [(0, 3), (1, 3), (2, 3)], [(2, 4)]), (dict(gain=9000), [], [])):
-        cfg = copy.deepcopy(bed_cfg())
+        cfg = old_cfg() if kw.get('bed5') else bed_cfg()
         fsr, bed, _ = setup(cfg=cfg, tip=(2.0, 2.13), **kw)
         bed.tool = 'T4'
         result = fsr.survey(1, {c: bed_z(*fsr.array(1).center(*c[1:])) for c in fsr.z_cells()})
@@ -654,3 +664,29 @@ def test_after_a_swap_the_survey_takes_the_place_of_the_config():
         assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
         assert bed.max_press <= 0.1, bed.max_press
         assert all(c[1] != 3 for c in fsr.read(1))
+
+def test_a_fresh_sheet_with_the_config_as_it_is():
+    '''After the swap (2026-10-07): BED_5's config knows no faulty column, its aim mid array.
+    A fresh sheet with the measured physics (crosstalk, drift, ripple) but no faults: the
+    survey finds none, and the reference and the pens are measured right, never pressed
+    past 0.1mm.'''
+    from limn.fsr import judge_survey
+    cfg = bed_cfg()
+    assert not cfg['arrays'][0]['faulty_cols'] and cfg['arrays'][0]['aim'] == (1.5, 5.5)
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), bed5=True, fresh=True)
+    bed.tool = 'T4'
+    judged = judge_survey(fsr.survey(1, {c: bed_z(*fsr.array(1).center(*c[1:])) for c in fsr.z_cells()}), cfg, 1)
+    assert judged['faulty'] == [] and judged['weak'] == [] and not judged['warnings'], judged
+    assert bed.max_press <= 0.105
+    ref, bed, _ = setup(cfg=copy.deepcopy(cfg), bed5=True, fresh=True)
+    ref.apply_survey(1, judged)
+    profile = ref.calibrate()
+    assert bed.max_press <= 0.1
+    for tip in ((2.0, 2.13), (2.4, 0.3), (1.0, -1.5), (-1.0, 3.0)):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, bed5=True, fresh=True)
+        fsr.apply_survey(1, judged)
+        bed.tool = 'T1'
+        fsr.press_cap = 0.1
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
+        assert bed.max_press <= 0.1, (tip, bed.max_press)
