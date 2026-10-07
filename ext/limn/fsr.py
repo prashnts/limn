@@ -34,6 +34,13 @@ class FsrError(RuntimeError):
     pass
 
 
+class WrongCell(FsrError):
+    '''The tip came down on another cell than the one aimed at, surely (twice over `sure`).'''
+    def __init__(self, msg, hop, cell, found):
+        super().__init__(msg)
+        self.hop, self.cell, self.found = hop, tuple(cell), tuple(found)
+
+
 class Fsr:
 
     def __init__(self, machine, dock, samples, cfg):
@@ -191,8 +198,8 @@ class Fsr:
                 if touched and tuple(cell) in touched:
                     return z, touched
                 if touched and strengths[touched[0]] >= cfg['sure']:
-                    raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
-                                   f"({self.top(strengths)}): check the array origin")
+                    raise WrongCell(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
+                                    f"({self.top(strengths)}): check the array origin", hop, cell, touched[0])
             if touched:
                 elsewhere = z if elsewhere is None else elsewhere
                 if elsewhere - z >= cfg.get('wrong_depth', 0.2) - 1e-9:
@@ -393,7 +400,20 @@ class Fsr:
                 # top is just above contact at the aim: where the sheet is higher, higher
                 array = self.array(hop)
                 top += max(self.follow(array.center(row, col), array.point(*self.arrays[hop]['aim'])), 0.0)
-                contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
+                # locate's tip is a few tenths, now and then a mm or two off (2026-10-07: Y 3.87
+                # for 2.13): came down on a neighbour instead, the tip is that much further
+                # over. Aim again, twice at most.
+                for tries in range(3):
+                    try:
+                        contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
+                        break
+                    except WrongCell as e:
+                        if tries == 2:
+                            raise
+                        moved = array.center(*e.found) - array.center(row, col)
+                        shift[hop] = np.asarray(shift[hop], float) + moved
+                        self.machine.say(f"[LRT] came down on {e.found}, not {(row, col)}: the tip is about "
+                                         f"{shift[hop].round(2).tolist()} from the toolhead, aiming again")
             return contact[hop]
 
         if self.before_measure:

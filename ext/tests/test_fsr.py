@@ -538,3 +538,20 @@ def test_a_faulty_column_is_never_read():
     s = fsr.read(1)
     assert all(c[1] != 3 for c in s) and all(c[0] != 3 for c in s)
     assert cfg['arrays'][0]['faulty_cols'] == (3,)
+
+def test_a_tip_a_cell_off_from_locate_is_aimed_again():
+    '''locate put the Stabilo's tip at Y 3.87 for 2.13 (2026-10-07): it came down on (1, 2)
+    instead of (1, 1) and LRT_CALIBRATE stopped. It aims again by the cell it landed on.'''
+    profile = calibrated()
+    fsr, bed, _ = setup(tip=(0.35, -0.2))
+    bed.tool = 'T1'
+    locate = fsr.locate
+    def off(*a, **k):
+        shift, top = locate(*a, **k)
+        return shift + np.array([0.0, 2.0]), top          # 2mm off in Y: lands a column over
+    fsr.locate = off
+    said = []
+    fsr.machine.say = said.append
+    dx, dy, _ = fsr.probe_tool(profile)
+    assert abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03, (dx, dy)
+    assert any('aiming again' in s for s in said), said
