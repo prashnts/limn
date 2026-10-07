@@ -1,5 +1,16 @@
 # Next
 
+## BED_5's new FSR sheet: to calibrated pens (2026-10-07, in progress)
+- [ ] `LRT_FSR_MAP TIP=2.0,2.13`: the origin (refined by edge searches) and pitch, which cells answer. The first run (2026-10-07 23:27) 'touched' 4 mm up on (3, 0)'s preload and mapped nothing: fixed (descents go by their rise over the air), to run again. Set `origin` in ext/limn/beds.py from it; `faulty_cols` if whole columns stay silent.
+- [ ] Columns 4-7 answered as (3, 0) on the first hand map, and (3, 0) has a resting preload of 80-130 since the sheet was handled (was <=16): the ribbon and the (3, 0) corner, before trusting those columns.
+- [ ] `LRT_FSR_SURVEY` (the reference Stabilo in holder 45): faulty/weak cells, `early`, the aim. Its warnings say whether `z_cell` (1, 1) and the edges (1, 1)|(2, 1), (1, 1)|(1, 2) suit this sheet.
+- [ ] `LRT_FSR_MEASURE CLEAN=0` x3: X, Y and z repeat to ~0.05?
+- [ ] `LRT_CALIBRATE` with paper on the bed (the test mark at Y 120-150): is z right? Then `LIMN_TOOL_CALIBRATE T=41..44`, each pen's tag named first (`TOOL_TAG_SET PEN=`).
+- [ ] Fit the tests' fresh model (`FsrBed(fresh=True)`) to the new sheet's survey: its response curve (304 at 0.02mm, 469 at 0.04 on (1, 0)), crosstalk (~0.15, row 3 ~0.35).
+- [ ] The survey takes ~8 min and presses only the cells' centres: faults near a border (the old sheet's col 4) slip through; LRT_FSR_MAP covers those.
+- [ ] Fine pens on the new sheet: a ladder with a working fineliner (the test one is bent); `respond` for fine tips.
+- [ ] Notes of the old sheet below (col 3/4 faults, weak (2, 4), Y-edge spread) are history: check each against the new sheet before acting on it.
+
 ## plot/
 
 - Fixes in the G-code generation (details to come, 2026-09-30).

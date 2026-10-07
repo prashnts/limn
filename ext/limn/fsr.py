@@ -133,12 +133,13 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(*(spots[0] - tip))
             self.machine.move(z=z)
-            self.air = self.read(hop, limit=False, raw=True)
+            self.baseline(hop, z)
             # half the coarse step: a spot on a dead cell is pressed until another answers
             z, at = self._descend_spots(hop, [s - tip for s in spots], z, cfg['step'] / 2, floor)
             aim = at + tip
             z = self._back_off(hop, z + cfg['back_off'])
-            z0, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
+            # its first touch (a clear rise), not where a cell responds: the spots start from it
+            z0, _ = self._descend(hop, None, z, cfg['fine_step'], floor, early=True)
             self.machine.say(f"[LRT][Map] the sheet at X{aim[0]:.3f} Y{aim[1]:.3f}: z={z0:.3f}")
             ys = np.arange(hi[1], lo[1] - 1e-9, -step)
             xs = np.arange(lo[0], hi[0] + 1e-9, step)
@@ -173,6 +174,57 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         return points
+
+    def refine_origin(self, hop, points, coarse, tip=(0.0, 0.0), respond=None):
+        '''The array's origin to a few hundredths: the coarse map's (`coarse`, tip coordinates)
+        is only good to about half its step, its spots fixed against the cells. Edge searches
+        (find_edge, the calibration's) across two row borders and two column borders between
+        cells that answered, near the middle -> (origin, [edges found]), None if too few.'''
+        from .fsr_map import strongest
+        respond = respond or self.cfg['respond']
+        array = self.array(hop)
+        spec = self.arrays[hop]
+        row_dir, col_dir = np.asarray(spec['row_dir'], float), np.asarray(spec['col_dir'], float)
+        delta = np.asarray(coarse, float) - array.origin    # where the sheet is against the config
+        shift = np.asarray(tip, float) - delta              # aims the config's cells at the sheet's
+        answered = {}
+        for p in points:
+            s = strongest(p['cells'], respond)
+            if s and p['touch'] is not None:
+                answered.setdefault(s[0], []).append(p['touch'])
+        good = {c for c, v in answered.items() if len(v) >= 2}
+        mid = ((array.rows - 1) / 2, (array.cols - 1) / 2)
+        near = lambda c: abs(c[0] - mid[0]) + abs(c[1] - mid[1])
+        pairs = {'x': [], 'y': []}
+        for (r, c) in sorted(good, key=near):
+            if (r + 1, c) in good and len(pairs['x']) < 2 and all(e[1][1] != c for e in pairs['x']):
+                pairs['x'].append((hop, (r, c), (r + 1, c)))
+            if (r, c + 1) in good and len(pairs['y']) < 2 and all(e[1][0] != r for e in pairs['y']):
+                pairs['y'].append((hop, (r, c), (r, c + 1)))
+        if not pairs['x'] or not pairs['y']:
+            return None, []
+        ox, oy, found = [], [], []
+        self.depth.pop(hop, None)
+        for axis, edges in pairs.items():
+            for edge in edges:
+                _, a, b = edge
+                z = float(np.median(answered[a]))
+                point, gap = self.find_edge(edge, z, shift)
+                tip_point = point + np.asarray(tip, float)
+                found.append((edge, tip_point.round(3).tolist(), round(gap, 3)))
+                # the border between a and b: origin + pitch * ((col + 0.5) col_dir + (row + 0.5) row_dir) +- pitch/2
+                k = (b[0] if axis == 'x' else b[1])
+                border = (np.asarray(row_dir) if axis == 'x' else np.asarray(col_dir)) * k * array.pitch
+                o = tip_point - border
+                (ox if axis == 'x' else oy).append(o)
+                self.machine.say(f"[LRT][Map] {axis} border {a}|{b}: X{tip_point[0]:.3f} Y{tip_point[1]:.3f} (gap {gap:.2f})")
+        # each border pins the origin along its own axis only
+        ax = int(np.argmax(np.abs(row_dir)))
+        ay = int(np.argmax(np.abs(col_dir)))
+        origin = np.asarray(coarse, float).copy()
+        origin[ax] = float(np.mean([o[ax] for o in ox]))
+        origin[ay] = float(np.mean([o[ay] for o in oy]))
+        return origin.round(3).tolist(), found
 
     def _roomier(self, hop, axis, at):
         '''+1 or -1: the way along rows (axis 0) or cols (1) from `at` (in cells) with more
@@ -240,6 +292,11 @@ class Fsr:
         hardest = max(strengths.values(), default=0)
         if limit and hardest >= self.cfg['press_limit']:
             raise FsrError(f"[LRT] pressing too hard on the FSR at hop {hop} ({hardest:.0f})")
+        if not raw and self.air is not None:
+            # Over the descent's baseline in the air: a cell's own level (a preload, the
+            # toolhead over the sheet) isn't a press (the new sheet's (3, 0) rests at 80-130
+            # and row 3 reads 30-50 with the pen above it: a 'touch' 4mm up, 2026-10-07)
+            strengths = {c: max(0.0, v - self.air.get(c, 0.0)) for c, v in strengths.items()}
         return strengths
 
     def heard(self, until, window=5.0):
@@ -253,10 +310,18 @@ class Fsr:
                 f"the node's firmware may be from before matrix mode (mcu.py update)")
 
     def rise(self, strengths):
-        '''The most any cell reads over the baseline taken in the air before this descent
-        (self.air): the sheet's own level drifts by tens, cell by cell (2026-10-07).'''
-        air = self.air or {}
-        return max((v - air.get(c, 0.0) for c, v in strengths.items()), default=0.0)
+        '''The most any cell reads over the baseline taken in the air before this descent:
+        read() gives them so (self.air). The sheet's own level drifts by tens, cell by cell.'''
+        return max(strengths.values(), default=0.0)
+
+    def baseline(self, hop, z):
+        '''The readings in the air here, before a descent: what the cells rise from (self.air).
+        Already pressing firmly (`sure`): not in the air, stop.'''
+        self.air = None
+        here = self.read(hop)
+        if max(here.values(), default=0) >= self.cfg['sure']:
+            raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window ({self.top(here)})")
+        self.air = here
 
     def responds(self, strengths, cell):
         '''Over `respond`, and close to the strongest cell: a press also lifts
@@ -294,10 +359,7 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(x), float(y))
             self.machine.move(z=z)
-            here = self.read(hop)
-            if (row, col) in self.touched(here, hop):               # other cells: a reading in the air
-                raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
-            self.air = here                         # the baseline the coarse steps rise from
+            self.baseline(hop, z)                   # what the cells rise from
             # Coarse steps only while nothing is known of the contact (no `top` from
             # locate): a coarse step goes up to `step` past it before it is seen. Then
             # fine steps from just above it (eyed on the plotter, 2026-10-07: the
@@ -393,10 +455,7 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(aim[0]), float(aim[1]))
             self.machine.move(z=z)
-            here = self.read(hop)
-            if self.touched(here, hop):
-                raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
-            self.air = here                         # the baseline the coarse steps rise from
+            self.baseline(hop, z)                   # what the cells rise from
             # Coarse, at three spots by turns: a tip in the dead zone between cells reads
             # nothing however deep it goes (to the floor: a fineliner, 2026-10-07). Offset
             # by (0, 0), (1/2, 1/4), (1/4, 1/2) of a cell: whatever border lines a tip is on,

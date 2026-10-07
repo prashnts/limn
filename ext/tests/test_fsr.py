@@ -36,13 +36,15 @@ class FsrBed:
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
-                 dead_lifts=0.0, bed5=False, fresh=False, shift=(0.0, 0.0), dead_cols=()):
+                 dead_lifts=0.0, bed5=False, fresh=False, shift=(0.0, 0.0), dead_cols=(), preload=None, hover=None):
         self.samples = samples
         self.dock = dock
         # shift: the sheet sits that far from where the config has it (a swap)
         self.arrays = [FsrArray(a['hop'], np.asarray(a['origin'], float) + np.asarray(shift, float),
                                 a['col_dir'], a['row_dir'], cfg['pitch']) for a in cfg['arrays']]
         self.dead_cols = set(dead_cols)         # columns whose line doesn't answer (a ribbon off)
+        self.preload = preload or {}            # {cell: level} at rest, nothing on it (the new sheet's (3, 0): 80-130)
+        self.hover = hover or {}                # {row: level} with the tool over the sheet (its row 3: 30-50)
         self.pos = [0.0, 0.0, cfg['z_park']]
         self.t = 0.0
         self.tool = None
@@ -161,6 +163,8 @@ class FsrBed:
                 # Its baseline drifts by tens, slowly and cell by cell, as the real one does
                 drift = 15 * (1 + np.sin(self.t / 40 + 1.7 * row + 2.9 * col))
                 s = abs(self.rng.normal(0, 4)) + drift + (75 if col == 3 and not self.fresh else 0)
+                s += self.preload.get((row, col), 0) * (1 + 0.25 * np.sin(self.t / 7))
+                s += self.hover.get(row, 0) if self.tool is not None else 0
                 if (row, col) in pressed:
                     s += pressed[(row, col)]
                 else:
@@ -713,7 +717,9 @@ def test_a_map_finds_where_the_sheet_sits_and_what_doesnt_answer():
     points = fsr.map_sheet(1, bed_z(*fsr.array(1).center(1, 1)), step=1.25, margin=1.0, tip=(2.0, 2.13))
     result = fsr_map.analyse(points, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
     origin = np.array(cfg['arrays'][0]['origin']) + (1.0, 0.15)
-    assert np.allclose(result['origin'], origin, atol=0.35), (result['origin'], origin)
+    assert np.allclose(result['origin'], origin, atol=0.45), (result['origin'], origin)       # the coarse fit
+    refined, borders = fsr.refine_origin(1, points, result['origin'], tip=(2.0, 2.13))
+    assert np.allclose(refined, origin, atol=0.1) and len(borders) >= 2, (refined, origin, borders)
     assert abs(result['pitch'] - 2.5) < 0.1 and result['far'] == []
     assert {(r, c) for r in range(4) for c in (4, 5, 6, 7)} <= set(result['silent'])
     assert not {(r, c) for r in range(4) for c in range(4)} & set(result['silent']), result['silent']
@@ -722,3 +728,27 @@ def test_a_map_finds_where_the_sheet_sits_and_what_doesnt_answer():
     assert bed.max_press <= 0.125 and not bed.dragged, bed.max_press
     picture = fsr_map.svg(points, result, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
     assert picture.startswith('<svg') and picture.count('<rect') > len(points)
+
+def test_a_preloaded_cell_and_a_row_that_hears_the_head_arent_a_touch():
+    '''The new sheet (2026-10-07): (3, 0) rests at 80-130, row 3 reads 30-50 with the pen
+    over the sheet. Absolute, LRT_FSR_MAP 'touched' 4mm up. Every descent rises from its own
+    baseline in the air: the map and a measurement come out right, never pressed in.'''
+    from limn import fsr_map
+    cfg = bed_cfg()
+    kw = dict(bed5=True, fresh=True, preload={(3, 0): 100}, hover={3: 40})
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(2.0, 2.13), **kw)
+    bed.tool = 'T4'
+    fsr.matrix(True)
+    points = fsr.map_sheet(1, bed_z(*fsr.array(1).center(1, 1)), tip=(2.0, 2.13))
+    result = fsr_map.analyse(points, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
+    assert np.allclose(result['origin'], cfg['arrays'][0]['origin'], atol=0.45) and result['answered'] > 100, result
+    refined, _ = fsr.refine_origin(1, points, result['origin'], tip=(2.0, 2.13))
+    assert np.allclose(refined, cfg['arrays'][0]['origin'], atol=0.1), refined
+    assert bed.max_press <= 0.125
+    ref, bed, _ = setup(cfg=copy.deepcopy(cfg), **kw)
+    profile = ref.calibrate()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(2.0, 2.13), **kw)
+    bed.tool = 'T1'
+    fsr.press_cap = 0.1
+    dx, dy, _ = fsr.probe_tool(profile)
+    assert abs(dx + 2.0) < 0.02 and abs(dy + 2.13) < 0.02 and bed.max_press <= 0.1, (dx, dy, bed.max_press)
