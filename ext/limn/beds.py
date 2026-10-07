@@ -93,6 +93,8 @@ BEDS = {
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
             'respond': 150,         # strength (0..1000) that counts as touched
+            'early': 60,            # coarse descents stop at this, then fine steps to `respond`: the sheet
+                                    # reads <=6 at rest, col 4 ~24 (LRT_FSR_MATRIX, 2026-10-07)
             # A press lifts the other rows of its column too, row 3 (no series
             # resistor on its ADC line) to ~530 while the pressed cell is ~880:
             # A press also lifts the rest of its row: with a fine tip pressing weakly
