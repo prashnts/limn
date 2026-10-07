@@ -1,5 +1,6 @@
 # uv run python ext/tests/test_marks.py
 # The bed's placement, its meshes and the test marks, over Klipper restarts.
+import collections
 from fakes import run_tests
 from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
@@ -164,7 +165,9 @@ class Plotter:
                 self.svv['currently_docked_tool'] = 0
             x0, y0 = map(float, params.get('mesh_min', '0,35').split(','))
             x1, y1 = map(float, params.get('mesh_max', '110,174').split(','))
-            self.bed_mesh.profiles[params['PROFILE']] = profile(x0, y0, x1, y1, z=-2 - len(self.meshed) / 100)
+            p = profile(x0, y0, x1, y1, z=-2 - len(self.meshed) / 100)
+            p['mesh_params'] = collections.OrderedDict(p['mesh_params'])      # as bed_mesh keeps them
+            self.bed_mesh.profiles[params['PROFILE']] = p
             self.meshed.append(params['PROFILE'])
         elif name == 'DOCK':
             tool = int(params['T'])

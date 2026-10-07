@@ -24,41 +24,58 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 | 2026-09-29 | Limn's own SVG → G-code generator and web UI replace PrusaSlicer (`llm-v2`) |
 | 2026-09-30 | Cameras measure where each pen touches the paper (`limn_cam`) |
 | 2026-10-01 | Scanning for film (Hugin, flicker, NAS); the plot UI over the canvas; the LED display, live |
+| 2026-10-07 | Pen layers and groups; pictures as dither and halftone, colour separation onto the pens; the FSR calibration measured on the plotter |
 
 ---
 
 ## [Unreleased] - `llm-v2`
 
-Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its two milestones follow.
+Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its milestones follow.
+
+## [2026.10.07] - Pen layers, pictures as halftone, the FSR calibration measured
+
+<img src="docs/plot-ui-shapes.png" alt="The plot UI: a drawing's layers by pen, a picked shape (the shapes tool) with its pen, fill, bleed margin and border, and its group" width="800">
+
+<img src="docs/plot-ui-halftone.png" alt="A colour picture separated into CMYK halftone dots, each ink in its own layer and on its own screen angle, as the Paths view draws them" width="800">
 
 ### Added
-- **Layers by pen** (2026-10-07, the selected drawing's *Layers*): one per pen, with the colours it draws as chips. Colours alike that go to one pen share a chip, and long layers fold behind *+n*, so a drawing of many shades stays readable. Drag a chip onto another pen, or click it for its settings. This replaces the table of colours, which had a row for each colour's stroke and another for its fill.
-- **The shapes tool** (`A`): pick shapes by click, Shift-click or a box, and set their outline's pen, their fill's (a closed shape without a fill in its SVG can take one; lines get no fill option), a *bleed margin* and a *border*. These are checkboxes per shape.
-- **Bleed margin** (`inset`): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks on top stays as it was.
-- **Groups**: shapes of a drawing (`Obj.sets`, painted together; the shapes never move), and drawings on the bed (`Obj.group`, they move, nudge and hide together, one undo step via `PATCH /api/objects`). Ctrl+G and Ctrl+Shift+G.
-- **Colour separation** for pictures: CMYK, or unmixed onto the pens there are, each ink its own layer on its own screen angle. Pitch and dot grid follow each ink's pen; a 0.05 fineliner stays plottable (dither and halftone are capped, and say so).
-- The shapes tool's *Pen*: the whole shape to one pen, its outline and its fill (it was only the outline, so a filled shape kept its old colour).
-- 🔧 The FSR calibration taps 0.1 mm past contact at most (was 0.3), less for a pen that presses less plotting (its `press` in pens.toml), with no parameters. Measured on the plotter with the Stabilo: at 0.15 mm its tip estimate went a cell off in Y, an edge search failed and the contact came out 0.14 mm low; at 0.1 three runs agreed. `PRESS=` on `LRT_CALIBRATE` / `LRT_PROBE_TOOL` (and the `LIMN_*_CALIBRATE` macros) sets it by hand. Each measured tool says how deep its taps go. Simulated, a fine tip went 0.53 mm past first touch and now 0.33, offsets as accurate.
-- 🔧 FSR measurements no longer press deeper than the edge taps: once the contact is roughly known, every descent is in fine (0.02 mm) steps (the three repeated touches came down in 0.1 mm steps each time), and the one coarse descent from above stops at the first clear reading (60; the sheet reads ≤6 at rest) instead of at `respond` (150). A jog that lands on the wrong cell stops 0.2 mm past its first touch instead of going on to the floor. `locate()` no longer measures towards the dead row 3, which put the tip 1.3 mm too far in X (3.16 for ~2.0; the edges now give 2.00, 2.13 for the Stabilo, the 29 Sep taps 1.85, 2.2).
-- 🔧 BED_5's faulty column 3 is never read (`faulty_cols`): pressed rows lift it past `sure`, and it stopped `LRT_CALIBRATE` with "responds instead of (1, 1)". That stop now also needs a second reading to agree, and when the pen surely lands on a neighbouring cell the measurement aims again by that cell (twice at most) instead of stopping: `locate()`'s tip was once 1.7 mm out in Y (3.87 for 2.13).
-- 🔧 FSR measurements checked against the plotter by hand (depth ladders, scans, contact maps: `~/limn-shot/fsr-2026-10-07-manual.jsonl`), and the tests' simulated sheet made to match (`bed5=True`). Fixed from it:
-  - the first descent alternates between two spots half a cell apart: a tip in the dead zone between cells read nothing and went on down to the floor (simulated 1.45 mm past touch; a fineliner on the plotter);
-  - `locate()`'s taps aim for 180, not 450: its first cell for this machine's pens, (2, 4), tops out at ~220, so its taps went the whole press (0.16 mm past touch);
-  - the edge taps' depth is measured again on the measuring cell (1, 1), which reaches 450 ~0.07 mm in;
-  - `locate()`'s search avoids dead rows and faulty columns two cells over, not just the next one;
-  - the `lrt_fsr` mesh stops at y 57: its row at 59 is the sheet's edge, 0.2 mm low, and the taps following it were 0.07 mm off around column 1 (the Y edge repeated to 0.23 mm, X to 0.05);
-  - the simulated column crosstalk is proportional, as measured (row 0 0.94 of the pressed cell at first touch, 0.4 from 0.07 mm), not a constant 220.
-- 🔧 `LRT_CALIBRATE` uses the meshes when they are of the bed as it sits (`MESH=1`: new ones anyway), and the meshes are kept in the saved variables (`lrt_mesh_data`), put back at startup: a restart without `SAVE_CONFIG` no longer means meshing again.
-- 🔧 A calibration (`LRT_CALIBRATE`, its bed z again) is kept in the saved variables too (`lrt_profile`) and read back at startup: no `SAVE_CONFIG` (and its restart) needed. The pens' offsets go onto their tags as before (`LRT_PROBE_TOOL`, `LIMN_TOOL_CALIBRATE`).
-- Pens touch the paper lightly: fineliners press 0.1 mm (were 0.15), the Stabilo 0.15 (was 0.3, at most 0.3). A new `ball` pen (ballpoint) presses 0.35.
-- Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`, the one being taken stays).
-- **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`): on upload the UI asks whether to leave them out or make them into lines. There are three ways: *dither* (Floyd–Steinberg, a row's dots joined into lines), *lines* (rows, denser where darker) and *halftone* (spiral dots). Each has a pitch as plotted, a paper threshold so light backgrounds stay clean, gamma, invert and a colour; that colour's layer picks the pen. On a 70 mm test picture at 0.5 mm: lines ≈ 2.4 m of ink in 66 strokes, halftone ≈ 3.6 m in 670, dither ≈ 1.5 m in 3000 short ones (the most travel).
+- **Layers by pen** ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add), [`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12), the selected drawing's *Layers*): one per pen, with the colours it draws as chips (outlines a ring, fills a dot). Colours alike that go to one pen share a chip, and long layers fold behind *+n*, so a drawing of many shades stays readable. Drag a chip onto another pen, or click it for its settings. It replaces the table of colours, which had a row for each colour's stroke and another for its fill.
+- **The shapes tool** (`A`; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add), [`700c902`](https://github.com/prashnts/limn/commit/700c902)): pick shapes by click, Shift-click or a box. *Pen* puts the whole shape on one pen (its outline, and its fill where it is filled); *Outline* and *Fill* set them apart. A closed shape without a fill in its SVG can take one; lines get no fill option.
+- **Bleed margin** (`inset`, a checkbox per shape, a group or a colour; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks drawn on top stays.
+- **Groups** ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)): shapes of a drawing (`Obj.sets`: painted together, the shapes never move), and drawings on the bed (`Obj.group`: they move, nudge and hide together, one undo step through `PATCH /api/objects`). Ctrl+G, Ctrl+Shift+G.
+- **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`; [`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12), [`700c902`](https://github.com/prashnts/limn/commit/700c902)): on upload the UI asks whether to leave them out or make them into lines, the drawing's *Images* changes it after.
+  - *Dither* (Floyd–Steinberg, a row's dots joined into lines), *lines* (rows, denser where darker), *halftone* (dots, each a spiral).
+  - Inks: one colour, CMYK, or unmixed onto the pens there are; each ink is a colour layer on its own screen angle.
+  - Pitch and dot grid follow each ink's pen; a paper threshold keeps light backgrounds clean; gamma and invert.
+  - A 0.05 fineliner stays plottable: dither and halftone are capped (and say so), lines run at the pen's own pitch. On a 120 × 90 mm picture: lines ~1 h, halftone ~4 h, dither (stippling) many hours.
+- Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)).
+- A new `ball` pen (ballpoint) that presses 0.35 mm ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065)).
+- 🔧 **The FSR calibration checked against the plotter** ([`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): depth ladders, scans and contact maps by hand with the Stabilo (`~/limn-shot/fsr-2026-10-07-manual.*`), and the tests' simulated sheet fitted to them (`bed5=True`). BED_5's (1, 1) reads 112 → 523 over 0.01 → 0.10 mm past first touch and no more past ~0.13; its column's rows read nearly as much at first touch; (2, 4) and (1, 4) are weak cells; column 3 reads 360 while its row is pressed.
+- 🔧 The FSR measurements say on the console what they do, like `bed_mesh`: each contact with its X Y and z, the median and spread, and where each edge search lost its cell; `VERBOSE=1` every tap too.
+- 🔧 A calibration is saved without `SAVE_CONFIG` ([`5716335`](https://github.com/prashnts/limn/commit/5716335), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): `LRT_CALIBRATE` and the meshes are kept in the saved variables too (`lrt_profile`, `lrt_mesh_data`) and put back at startup. `LRT_CALIBRATE` uses the meshes when they are of the bed as it sits (`MESH=1`: new ones anyway).
 
 ### Changed
-- `<image>`s stay in an uploaded SVG (they were taken out): left out unless made into lines. One linked rather than embedded is still left out, and the upload says so.
-- A page's background (a full-page rectangle under the rest) is the paper, left out unless painted; fills written as CSS `var()` take their fallback and `url()` patterns are left out. Concepts exports came out as a solid black block, 90 m of hatching.
-- Ordering many strokes uses a grid of buckets: a dithered picture's 60 000 dashes are ordered in about 1 s instead of 54 s (same order).
-- A *look* is temporary: the next capture (look, focus, corners or scan) deletes it (`ScanStore.new`).
+- 🔧 The FSR taps press 0.1 mm past contact at most (were 0.3), less for a pen that presses less plotting (its `press`, pens.toml), with no parameters; `PRESS=` on `LRT_CALIBRATE`, `LRT_PROBE_TOOL` and the `LIMN_*_CALIBRATE` macros by hand ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065), [`30fb357`](https://github.com/prashnts/limn/commit/30fb357), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)). At 0.15 the Stabilo's tip estimate went a cell off in Y and its contact came out 0.14 mm low; at 0.1 three runs agreed.
+- 🔧 No FSR descent goes deeper than the taps ([`4d80ccc`](https://github.com/prashnts/limn/commit/4d80ccc), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): once contact is roughly known, every descent is in fine (0.02 mm) steps; the first one, from above, stops at the first clear reading (60, the sheet reads ≤ 6 at rest), alternating between two spots half a cell apart. `locate()`'s taps aim for 180 (enough to tell the cell), the edge taps' depth is measured on the measuring cell. Simulated on the measured sheet: at most 0.1 mm past first touch, everywhere (was 0.17, and 1.45 in a dead zone).
+- 🔧 The `lrt_fsr` mesh ends at y 57 ([`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): its row at 59 was the sheet's edge, 0.2 mm low, and the taps that follow it were 0.07 mm off around column 1 (the Y edge repeated to 0.23 mm, X to 0.05).
+- 🔧 BED_5's faulty column 3 is never read (`faulty_cols`; [`2bed56a`](https://github.com/prashnts/limn/commit/2bed56a)).
+- Pens touch the paper lightly ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065)): fineliners press 0.1 mm (were 0.15), the Stabilo 0.15 (was 0.3, at most 0.3).
+- `<image>`s stay in an uploaded SVG (they were taken out): left out unless made into lines ([`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12)).
+- A page's background (a full-page rectangle under the rest) is the paper, left out unless painted ([`700c902`](https://github.com/prashnts/limn/commit/700c902)).
+- A *look* is temporary: the next capture deletes it ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)).
+
+### Fixed
+- 🔧 `locate()` measured towards the dead row 3 and put the tip 1.3 mm too far in X (3.16 for 2.0); it avoids dead rows and faulty columns now, two cells over ([`2366961`](https://github.com/prashnts/limn/commit/2366961), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)).
+- 🔧 A pen that lands on another cell than aimed at: aimed again by that cell, twice at most ([`06d3dc7`](https://github.com/prashnts/limn/commit/06d3dc7)); a stop needs two readings to agree ([`2bed56a`](https://github.com/prashnts/limn/commit/2bed56a)); a weak press on a wrong cell stops 0.2 mm on instead of going down to the floor ([`2366961`](https://github.com/prashnts/limn/commit/2366961)).
+- 🔧 The three repeated touches on the measuring cell came down in 0.1 mm steps each time, pressing the pen in for nothing ([`4d80ccc`](https://github.com/prashnts/limn/commit/4d80ccc)).
+- Fills written as CSS `var()` take their fallback, `url()` patterns are left out: both came out solid black (a Concepts export: one 90 m hatch over the page; [`700c902`](https://github.com/prashnts/limn/commit/700c902)).
+- Ordering many strokes was quadratic: a dithered picture's 60 000 dashes took 54 s, now ~1 s, same order (a grid of buckets; [`700c902`](https://github.com/prashnts/limn/commit/700c902)).
+- A picked shape's new outline pen left its fill on the old pen ([`700c902`](https://github.com/prashnts/limn/commit/700c902)).
+
+### Known issues
+- The `locate()` estimate still varies (Y 1.52 – 1.68 for 2.13 at 0.1 mm taps); the re-aim covers it. The Y edge to be checked again after the mesh change.
+- A fine pen's own response on the FSR isn't measured yet (the test fineliner is bent).
+- Halftone and dither on the plotter: pitch, blotting in the spirals' middles, real plot times, untried.
 
 ## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display
 
