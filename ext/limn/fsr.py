@@ -134,9 +134,14 @@ class Fsr:
             self.machine.move(z=z)
             if (row, col) in self.touched(self.read(hop), hop):     # other cells: a reading in the air
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
-            for _ in range(cfg['repeats']):
-                z, _ = self._descend(hop, (row, col), z, cfg['step'], floor)
-                z = self._back_off(hop, z + cfg['back_off'], (row, col))
+            # Coarse steps only while nothing is known of the contact (no `top` from
+            # locate): a coarse step goes up to `step` past it before it is seen. Then
+            # fine steps from just above it (eyed on the plotter, 2026-10-07: the
+            # repeats' coarse descents pressed the pen in for nothing).
+            for i in range(cfg['repeats']):
+                if i == 0 and top is None:
+                    z, _ = self._descend(hop, (row, col), z, cfg['step'], floor, early=True)
+                    z = self._back_off(hop, z + cfg['back_off'], (row, col))
                 z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
                 found.append(z)
                 z = self._back_off(hop, z + cfg['back_off'], (row, col))
@@ -154,8 +159,11 @@ class Fsr:
                  or not any(o[1] == c[1] and o[0] != c[0] for o in cells)]
         return sorted(cells, key=lambda c: -strengths[c])
 
-    def _descend(self, hop, cell, z, step, floor):
+    def _descend(self, hop, cell, z, step, floor, early=False):
         '''Down until `cell` responds (None: any cell) -> (z, the cells that do).
+        early (the coarse steps): back as soon as any cell reads `early`, well over the
+        sheet's noise and well before `respond`: a fine tip registers late, and a coarse
+        step on to `respond` pressed it in deeper than the taps ever do (2026-10-07).
         Another cell responding: on down only `wrong_depth` mm more (crosstalk can lead
         at first touch), then stop: the tip is pressing elsewhere, and going on down to
         the floor would dig it in (a fineliner off by a cell, LRT_FSR_Z, 2026-10-07).'''
@@ -170,6 +178,8 @@ class Fsr:
             touched = self.touched(strengths, hop)
             if touched and (cell is None or tuple(cell) in touched):
                 return z, touched
+            if early and max(strengths.values(), default=0) >= cfg.get('early', cfg['respond']):
+                return z, touched       # coarse: something presses, the fine steps find where
             # At first touch the crosstalk can lead the pressed cell: only a
             # real press elsewhere means the tip is not over `cell`.
             if touched and strengths[touched[0]] >= cfg['sure']:
@@ -212,7 +222,7 @@ class Fsr:
             if self.touched(self.read(hop), hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
             while True:
-                z, _ = self._descend(hop, None, z, cfg['step'], floor)
+                z, _ = self._descend(hop, None, z, cfg['step'], floor, early=True)
                 z = self._back_off(hop, z + cfg['back_off'])
                 z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
                 self.depth[hop] = self.press_depth(hop, None, z)
