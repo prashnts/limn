@@ -432,11 +432,15 @@ def test_the_sheet_is_wiped_between_pens():
     p.svv['currently_docked_tool'] = 43
     fsr.measure()                                   # another pen: wipe first
     assert fsr.wiped == 1 and p.said('last had tool 42, now 43')
-    assert p.said('taps press at most 0.30mm') and fsr.press_cap is None      # no pen on its tag: the bed's
-    p.ext._tags()['44'] = {'pen': 'mic-01'}
+    assert fsr.press_cap == 0.1 and p.said('at most 0.10mm past contact (its tag names no pen)')
+    p.ext._tags()['44'] = {'pen': 'stb-88'}
     p.svv['currently_docked_tool'] = 44
-    fsr.measure()                                   # a Micron: never deeper than its press_max
-    assert fsr.press_cap == 0.25 and p.said('taps press at most 0.25mm past contact (its press_max)')
+    fsr.measure()                                   # a Stabilo: as deep as it presses plotting
+    assert fsr.press_cap == 0.15 and p.said('at most 0.15mm past contact (as stb-88 presses plotting)')
+    p.ext._fsr_hooks(FakeGcmd(p.gcode, {'PRESS': '0.3'}), fsr)
+    fsr.measure()                                   # PRESS=: deeper, on purpose
+    assert fsr.press_cap == 0.3
+    p.ext._fsr_hooks(gcmd, fsr)
     fsr.wiped = 1
     p.svv['currently_docked_tool'] = 44
     p.ext._fsr_hooks(FakeGcmd(p.gcode, {'CLEAN': 0}), fsr)

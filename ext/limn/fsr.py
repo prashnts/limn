@@ -44,7 +44,7 @@ class Fsr:
         self.arrays = {a['hop']: a for a in cfg['arrays']}
         self.surface = None         # the array's bed mesh profile, see follow()
         self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
-        self.press_cap = None       # mm: the carried pen's press_max (pens.toml), the taps never deeper
+        self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
@@ -240,10 +240,10 @@ class Fsr:
         `cell` (None: the strongest): until it reads `press_strength`, `press`
         at most. A felt tip gets there in ~0.05mm, a fine one needs ~0.3;
         deeper only adds force: a Stabilo read ~460 at 0.05mm and ~670 at
-        0.3mm, and 0.3mm taps left marks on the sheet (2026-09-29). Never deeper
-        than the pen may press when plotting (press_cap, its press_max).'''
+        0.3mm, and 0.3mm taps left marks on the sheet (2026-09-29). press_cap,
+        when set, instead of `press`: no deeper than the pen presses plotting.'''
         cfg = self.cfg
-        most = min(cfg['press'], self.press_cap) if self.press_cap else cfg['press']
+        most = self.press_cap or cfg['press']
         target = cfg.get('press_strength')
         if not target:
             return most

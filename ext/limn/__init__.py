@@ -77,6 +77,7 @@ MANUAL_WINDOW = 20.0    # s from the scan until the key's switch triggers
 MANUAL_POLL = 0.2       # s between looks at the key's switch, in that window
 MANUAL_X_MAX = 110.0
 INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
+TAP_PRESS = 0.1     # mm the FSR taps press past contact at most, for a tool whose tag names no pen
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
@@ -140,7 +141,7 @@ class Limn:
         self._dry_beep_at = 0.0
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         self.dry_pens = PENS_FILE
-        # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press_max}) of the pen library
+        # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press}) of the pen library
         self._pens = (None, {}, set(), {})
         self.manual = None          # the tool docked by hand: its tool_tags entry, None: none
         self.manual_window, self.manual_x_max = MANUAL_WINDOW, MANUAL_X_MAX
@@ -307,9 +308,6 @@ class Limn:
         cls = Rtp if sensor == 'rtp' else Fsr
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
-            press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
-            if press is not None:           # PRESS=: the taps press at most this past contact
-                routine.cfg = {**routine.cfg, 'press': press}
             self._fsr_hooks(gcmd, routine)
         return routine
 
@@ -318,13 +316,18 @@ class Limn:
         be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
         def before():
             carried = self._carried()
-            # Never pressed deeper than it may press plotting: its pen's press_max (pens.toml)
+            # The taps press no deeper than the pen does plotting (its `press`, pens.toml),
+            # TAP_PRESS when its tag names no pen; PRESS= instead, when given (deeper too)
             self._pen_dry()
             pen = self._tags().get(str(carried), {}).get('pen')
-            fsr.press_cap = self._pens[3].get(pen)
-            most = min(fsr.cfg['press'], fsr.press_cap) if fsr.press_cap else fsr.cfg['press']
-            gcmd.respond_info(f"[LRT] Tool {carried} ({pen or 'pen not on its tag'}): taps press at most {most:.2f}mm "
-                              f"past contact{' (its press_max)' if fsr.press_cap and fsr.press_cap < fsr.cfg['press'] else ''}")
+            press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
+            if press is not None:
+                fsr.press_cap, why = press, 'PRESS'
+            elif pen in self._pens[3]:
+                fsr.press_cap, why = max(0.05, self._pens[3][pen]), f'as {pen} presses plotting'
+            else:
+                fsr.press_cap, why = TAP_PRESS, 'its tag names no pen'
+            gcmd.respond_info(f"[LRT] Tool {carried}: the taps press at most {fsr.press_cap:.2f}mm past contact ({why})")
             if self._fsr_last and carried != self._fsr_last and gcmd.get_int('CLEAN', 1):
                 gcmd.respond_info(f"[LRT] The sheet last had tool {self._fsr_last}, now {carried}: wipe it first")
                 fsr.wait_clean()
@@ -1304,7 +1307,7 @@ class Limn:
                 lib = {k: v for k, v in lib.items() if isinstance(v, dict)}
                 self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items() if v.get('dry')},
                               {k for k, v in lib.items() if v.get('kind', 'pen') not in INKY},
-                              {k: float(v['press_max']) for k, v in lib.items() if v.get('press_max')})
+                              {k: float(v['press']) for k, v in lib.items() if v.get('press')})
         except (OSError, ImportError, ValueError) as e:
             if self._pens[0] != 'missing':
                 logging.info("[Tool holder] no pen library for drying times (%s): %s", self.dry_pens, e)
