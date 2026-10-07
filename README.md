@@ -35,9 +35,20 @@ Scans (the Scan tab) are kept in the Pi's memory (`/dev/shm/limn-captures`, at m
 
 `LRT_MESH_CALIBRATE` takes the meshes of the bed on the plotter (`meshes` in `ext/limn/beds.py`); with no bed on the plotter, the whole bed as `[bed_mesh]` in `printer.cfg` has it. A bed it doesn't know, it doesn't probe. `IF_STALE=1` only meshes when the meshes aren't of the bed as it sits now.
 
-The meshes and the test marks belong to one placement of the bed. The Dock counts the beds placed and removed since it booted (`read_bed_id()`, see `micropython/STRATEGY.md`), so this holds over Klipper restarts. Once the bed has been off, or the Dock restarted, `LRT_PROBE_TOOL` meshes the bed again before probing the tool (and takes the tool back after), and the marks start over at the first one. The tools' tags stay as they are. The meshes are only in memory until `SAVE_CONFIG`; a restart without it meshes again too. Dock firmware without the count: the meshes are trusted until Klipper restarts.
+The meshes and the test marks belong to one placement of the bed. The Dock counts the beds placed and removed since it booted (`read_bed_id()`, see `micropython/STRATEGY.md`), so this holds over Klipper restarts. Once the bed has been off, or the Dock restarted, `LRT_PROBE_TOOL` meshes the bed again before probing the tool (and takes the tool back after), and the marks start over at the first one. The tools' tags stay as they are. `LRT_CALIBRATE` uses the meshes when they are of the bed as it sits (`MESH=1`: new ones anyway). The meshes and the calibration are kept in the saved variables too (`lrt_mesh_data`, `lrt_profile`) and put back at startup, so a restart without `SAVE_CONFIG` loses neither. Dock firmware without the count: the meshes are trusted until Klipper restarts.
 
 Meshing a calibrated bed again also probes the calibration's bed z again (BLTouch, nothing on the carriage), which the tools' dz are measured against. Then, when holder 45 has the reference tool, tagged `REFERENCE=1` (`LRT_CALIBRATE` tags it), it is docked and the reference points are taken again too: a full calibration. Otherwise the old reference points stay, and tools probed after the move are off in XY by about as much as the bed moved. That's fine as long as the pens only have to agree with each other.
+
+### Calibrating the pens on the FSR bed (BED_5)
+
+```
+LRT_CALIBRATE              ; the reference pen, in holder 45: a felt tip (a Stabilo). Its tag gets REFERENCE=1
+LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe the sheet when it beeps
+```
+
+Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 1), then an edge in X and one in Y. The taps press 0.1 mm past contact at most, less for a pen that presses less plotting (its `press` in `plot/profiles/pens.toml`); each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
+
+What the sheet does, measured on 2026-10-07 (`ext/tests/test_fsr.py` simulates it, `bed5=True`): column 3 is faulty and never read (`faulty_cols`), row 3 has no series resistor (`dead_rows`); a press lifts its whole column, almost as much as the pressed cell at first touch; (2, 4) and (1, 4) are weak cells; the response stops rising ~0.13 mm in. A pen that comes down on another cell than aimed at is aimed again by that cell.
 
 After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
 

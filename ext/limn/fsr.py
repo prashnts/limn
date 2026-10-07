@@ -52,6 +52,7 @@ class Fsr:
         self.surface = None         # the array's bed mesh profile, see follow()
         self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
         self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
+        self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
@@ -153,10 +154,14 @@ class Fsr:
                     z = self._back_off(hop, z + cfg['back_off'], (row, col))
                 z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
                 found.append(z)
+                self.machine.say(f"[LRT] contact {i + 1}/{cfg['repeats']} on {(row, col)} at X{x:.3f} Y{y:.3f}: "
+                                 f"z={z:.3f}")
                 z = self._back_off(hop, z + cfg['back_off'], (row, col))
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
-        return float(np.median(found))
+        z = float(np.median(found))
+        self.machine.say(f"[LRT] contact on {(row, col)}: z={z:.3f} (median, spread {max(found) - min(found):.3f})")
+        return z
 
     def touched(self, strengths, hop):
         '''The cells that respond, strongest first. A cell in one of the array's
@@ -242,7 +247,8 @@ class Fsr:
             z, aim = self._descend_two(hop, (aim, alt), z, cfg['step'], floor)
             while True:
                 z = self._back_off(hop, z + cfg['back_off'])
-                z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
+                z, first = self._descend(hop, None, z, cfg['fine_step'], floor)
+                self.machine.say(f"[LRT] first contact at X{aim[0]:.3f} Y{aim[1]:.3f}: z={z:.3f} on {first[:3]}")
                 # Only enough to tell which cell: a weak one (BED_5's (2, 4) tops out at ~220)
                 # went the whole press for press_strength, 0.16mm past first touch (simulated)
                 self.depth[hop] = self.press_depth(hop, None, z, cfg.get('locate_strength'))
@@ -373,13 +379,23 @@ class Fsr:
                            f"({self.top(s)}): check the array origin")
         lo, hi = 0.0, 1.0
         length = float(np.linalg.norm(end - start))
+        taps = 2
         while (hi - lo) * length > resolution:
             mid = (lo + hi) / 2
-            if self.responds(self.tap(hop, start + mid * (end - start), z_press, z_lift, at), cell):
+            p = start + mid * (end - start)
+            s = self.tap(hop, p, z_press, z_lift, at)
+            taps += 1
+            if self.verbose:
+                self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: {self.top(s)}"
+                                 f"{' (in)' if self.responds(s, cell) else ''}")
+            if self.responds(s, cell):
                 lo = mid
             else:
                 hi = mid
-        return start + (lo + hi) / 2 * (end - start)
+        last = start + (lo + hi) / 2 * (end - start)
+        self.machine.say(f"[LRT] {cell} from X{start[0]:.3f} Y{start[1]:.3f} towards X{end[0]:.3f} Y{end[1]:.3f}: "
+                         f"responds to X{last[0]:.3f} Y{last[1]:.3f} ({taps} taps at z={z_press:.3f})")
+        return last
 
     def find_edge(self, edge, z_contact, shift=(0, 0)):
         '''edge: (hop, (row, col) of cell a, (row, col) of its neighbour b)

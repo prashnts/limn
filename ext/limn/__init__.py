@@ -335,6 +335,7 @@ class Limn:
         cls = Rtp if sensor == 'rtp' else Fsr
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
+            routine.verbose = bool(gcmd.get_int('VERBOSE', 0))
             self._fsr_hooks(gcmd, routine)
         return routine
 
@@ -463,9 +464,16 @@ class Limn:
             raise gcmd.error("[LRT][Mesh] the bed moved while it was meshed, LRT_MESH_CALIBRATE again")
         profiles = self._mesh_profiles()
         self._save_vars({'lrt_meshes': {'placement': key, 'profiles': {
-            m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}},
-            # the meshes themselves: put back after a restart without SAVE_CONFIG (_restore_meshes)
-            'lrt_mesh_data': {m['profile']: profiles[m['profile']] for m in meshes if m['profile'] in profiles}})
+            m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}}})
+        # The meshes themselves, put back after a restart without SAVE_CONFIG (_restore_meshes).
+        # As plain dicts and lists: SAVE_VARIABLE reads its value back as a Python literal, and
+        # bed_mesh's mesh_params is an OrderedDict ("Unable to parse", 2026-10-07)
+        try:
+            self._save_vars({'lrt_mesh_data': json.loads(json.dumps(
+                {m['profile']: profiles[m['profile']] for m in meshes if m['profile'] in profiles}))})
+        except Exception as e:                  # only a convenience: never stop the meshing for it
+            logging.warning("[LRT][Mesh] the meshes weren't saved in the variables: %s", e)
+            gcmd.respond_info(f"[LRT][Mesh] the meshes weren't kept over a restart ({e}): SAVE_CONFIG keeps them")
         gcmd.respond_info("[LRT][Mesh] Done (kept over a restart, the saved variables)")
         return carried
 
