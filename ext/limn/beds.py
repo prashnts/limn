@@ -73,9 +73,14 @@ BEDS = {
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
             # off than the array reaches from there is not found: here -3.75..
-            # +3.75mm in X (rows 0-2), -6.25..+13.75mm in Y (8 cols): mid col 5, clear of col 3.
+            # +3.75mm in X (rows 0-2), -4.25..+15.75mm in Y (8 cols). Col 6.3: this machine's
+            # pens (tips ~2mm off in X and Y) come down on (2, 5), strong, and search away from
+            # cols 3 and 4. At 5.5 they came down on (2, 4), weak, and pressing parts of col 5
+            # lit cols 3 and 4 up (the glue void): (2, 4) seemed to respond 2.5mm on, the tip
+            # estimate went 1.7mm out and LRT_CALIBRATE failed (2026-10-07). A tip that comes
+            # down on col 3 (~+8mm in Y) isn't found at all: it is never read.
             'arrays': [
-                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
+                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 6.3),
                  'dead_rows': (3,), 'faulty_cols': (3,), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,

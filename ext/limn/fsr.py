@@ -241,10 +241,14 @@ class Fsr:
             self.machine.move(z=z)
             if self.touched(self.read(hop), hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
-            # Coarse, at the aim and half a cell over by turns: a tip in the dead zone between
-            # cells reads nothing however deep it goes (to the floor: a fineliner, 2026-10-07)
-            alt = aim + array.pitch * (0.5 * np.asarray(array.row_dir) + 0.25 * np.asarray(array.col_dir))
-            z, aim = self._descend_two(hop, (aim, alt), z, cfg['step'], floor)
+            # Coarse, at three spots by turns: a tip in the dead zone between cells reads
+            # nothing however deep it goes (to the floor: a fineliner, 2026-10-07). Offset
+            # by (0, 0), (1/2, 1/4), (1/4, 1/2) of a cell: whatever border lines a tip is on,
+            # not all three are on one (two spots could be: a row border and a column border).
+            # Towards the array's middle (lower rows and cols from BED_5's aim): not off its end.
+            rd, cd = -np.asarray(array.row_dir, float), -np.asarray(array.col_dir, float)
+            spots = [aim, aim + array.pitch * (0.5 * rd + 0.25 * cd), aim + array.pitch * (0.25 * rd + 0.5 * cd)]
+            z, aim = self._descend_spots(hop, spots, z, cfg['step'], floor)
             while True:
                 z = self._back_off(hop, z + cfg['back_off'])
                 z, first = self._descend(hop, None, z, cfg['fine_step'], floor)
@@ -293,9 +297,9 @@ class Fsr:
                          f"taps press {self.depth[hop]:.2f}mm")
         return shift, z + cfg['back_off']
 
-    def _descend_two(self, hop, points, z, step, floor):
+    def _descend_spots(self, hop, points, z, step, floor):
         '''Coarse steps down, at each of `points` by turns, lifted between: -> (z, the point
-        where something presses). Like _descend(early=True), at two spots.'''
+        where something presses). Like _descend(early=True), at several spots.'''
         cfg = self.cfg
         lift = cfg['back_off']
         while True:

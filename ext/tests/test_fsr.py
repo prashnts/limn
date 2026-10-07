@@ -130,6 +130,7 @@ class FsrBed:
     # row 3 (dead) ~1; (2, 4) never over ~230; a 0.2mm step in X: 545 / 625; column 3 ~75 at rest.
     WEAK = {(2, 4): 0.38}
     COLUMN = {0: (0.40, 0.55), 2: (0.37, 0.45), 3: (0.95, 0.0)}     # share of the pressed cell: base + extra at first touch
+    ROW = (0.35, 0.6)                                               # along its row, the same way
 
     def frame_bed5(self, array):
         p = self.press()
@@ -148,7 +149,10 @@ class FsrBed:
                 else:
                     column = max((v for (r_, c), v in pressed.items() if c == col), default=0)
                     base, extra = self.COLUMN.get(row, (0.4, 0.5))
-                    s += column * (base + extra * first)
+                    # Along the row too (a Micron's press lifted its row by 0.73 of it, 2026-09-29):
+                    # strong at first touch, as up the column
+                    along = max((v for (r_, c), v in pressed.items() if r_ == row), default=0)
+                    s += max(column * (base + extra * first), along * (self.ROW[0] + self.ROW[1] * first))
                 values.append([row, col, int(min(s, 1000))])
         return values
 
@@ -249,7 +253,7 @@ def test_crosstalk_up_the_column():
     cell gets there. Measured all the same, far off too.'''
     fsr, bed, _ = setup(crosstalk=True)
     profile = fsr.calibrate()
-    for tip in ((0.35, -0.2), (3.4, -5.0), (-1.6, -0.9)):
+    for tip in ((0.35, -0.2), (3.4, -3.5), (-1.6, -0.9)):
         fsr, bed, _ = setup(tip=tip, crosstalk=True)
         bed.tool = 'T1'
         dx, dy, _ = fsr.probe_tool(profile)
@@ -463,9 +467,10 @@ def test_dock_disconnect_lifts():
     assert bed.pos[2] == fsr.cfg['z_park']
 
 def test_tools_far_off():
-    '''A few mm off in X (rows 0-2) and more in Y (8 cols): found, and measured.'''
+    '''A few mm off in X (rows 0-2) and more in Y (8 cols, -4.25..+15.75 from the aim): found, and
+    measured. Not where the tip lands on the faulty column 3 (~+8 in Y): it is never read.'''
     profile = calibrated()
-    for tip in ((3.4, -5.0), (-3.2, 8.0), (3.0, 1.9), (-1.6, -0.9)):
+    for tip in ((3.4, -3.5), (-2.0, 4.5), (3.0, 1.9), (-1.6, -0.9)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
         dx, dy, _ = fsr.probe_tool(profile)
