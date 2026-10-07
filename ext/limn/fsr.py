@@ -155,8 +155,12 @@ class Fsr:
         return sorted(cells, key=lambda c: -strengths[c])
 
     def _descend(self, hop, cell, z, step, floor):
-        '''Down until `cell` responds (None: any cell) -> (z, the cells that do).'''
+        '''Down until `cell` responds (None: any cell) -> (z, the cells that do).
+        Another cell responding: on down only `wrong_depth` mm more (crosstalk can lead
+        at first touch), then stop: the tip is pressing elsewhere, and going on down to
+        the floor would dig it in (a fineliner off by a cell, LRT_FSR_Z, 2026-10-07).'''
         cfg = self.cfg
+        elsewhere = None                # z where another cell first responded
         while True:
             z -= step
             if z < floor:
@@ -171,6 +175,12 @@ class Fsr:
             if touched and strengths[touched[0]] >= cfg['sure']:
                 raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
                                f"({self.top(strengths)}): check the array origin")
+            if touched:
+                elsewhere = z if elsewhere is None else elsewhere
+                if elsewhere - z >= cfg.get('wrong_depth', 0.2) - 1e-9:
+                    raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds, not {cell} ({self.top(strengths)}): "
+                                   f"the tip is over another cell, stopped {elsewhere - z:.2f}mm past its first "
+                                   f"touch. LRT_FSR_MEASURE finds where the tip is first")
 
     def _back_off(self, hop, z, cell=None):
         '''Up to z, where nothing may press any more: `cell`, or with none any cell
@@ -222,12 +232,20 @@ class Fsr:
             # the cell's far side, within two cells. On an edge, that is the edge.
             # (Two cells responding is no edge to go by: the column's crosstalk
             # can come close to a tip split between two cells, 2026-09-28.)
+            # Not towards a dead row: pressed, it lifts its column's other rows, so the
+            # cell seems to go on responding over it (BED_5's row 3: locate put the tip
+            # 1.3mm too far in X, 2026-09-29 and 10-07). Then towards the near side.
             cell = touched[0]
             shift = np.zeros(2)
+            dead = self.arrays[hop].get('dead_rows', ())
             for axis, direction in ((1, array.col_dir), (0, array.row_dir)):
-                last = self.last_response(hop, cell, aim, aim + 2 * array.pitch * direction,
+                n = array.rows if axis == 0 else array.cols
+                ahead = cell[axis] + 1
+                sign = -1 if (axis == 0 and ahead in dead) or ahead >= n else 1
+                last = self.last_response(hop, cell, aim, aim + sign * 2 * array.pitch * direction,
                                           z_press, z_lift, resolution=0.1, at=aim)
-                tip = (cell[axis] + 1) * array.pitch - np.dot(last - aim, direction)
+                edge = (cell[axis] + 1) * array.pitch if sign > 0 else cell[axis] * array.pitch
+                tip = edge - np.dot(last - aim, direction)
                 shift += (tip - np.dot(aim - array.origin, direction)) * direction
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
