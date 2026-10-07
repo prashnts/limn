@@ -25,7 +25,7 @@ def old_cfg():
     '''BED_5's config for the sheet it had until 2026-10-07 (a glue void: cols 3 and 4 faulty,
     the aim moved off them), the one the bed5 model (FsrBed.frame_bed5) is measured from.'''
     cfg = bed_cfg()
-    cfg['arrays'][0].update(faulty_cols=(3, 4), aim=(1.5, 6.3))
+    cfg['arrays'][0].update(faulty_cols=(3, 4), aim=(1.5, 6.3), dead_rows=(3,))
     return cfg
 
 
@@ -139,6 +139,9 @@ class FsrBed:
     # row 3 (dead) ~1; (2, 4) never over ~230; a 0.2mm step in X: 545 / 625; column 3 ~75 at rest.
     WEAK = {(2, 4): 0.38}
     COLUMN = {0: (0.40, 0.55), 2: (0.37, 0.45), 3: (0.95, 0.0)}     # share of the pressed cell: base + extra at first touch
+    # The new sheet (2026-10-07): rows 0-2 ~0.15 of the pressed cell up its column, row 3 ~0.35
+    FRESH_COLUMN = {3: (0.35, 0.1)}
+    FRESH_OTHER = (0.15, 0.1)
     ROW = (0.35, 0.6)                                               # along its row, the same way
 
     def frame_bed5(self, array):
@@ -160,7 +163,8 @@ class FsrBed:
                     s += pressed[(row, col)]
                 else:
                     column = max((v for (r_, c), v in pressed.items() if c == col), default=0)
-                    base, extra = self.COLUMN.get(row, (0.4, 0.5))
+                    base, extra = (self.FRESH_COLUMN.get(row, self.FRESH_OTHER) if self.fresh
+                                   else self.COLUMN.get(row, (0.4, 0.5)))
                     # Along the row too (a Micron's press lifted its row by 0.73 of it, 2026-09-29):
                     # strong at first touch, as up the column
                     along = max((v for (r_, c), v in pressed.items() if r_ == row), default=0)
@@ -643,11 +647,14 @@ def test_a_survey_finds_this_sheets_faults_and_a_healthy_one_none():
         assert cell not in faulty and cell not in weak and all(abs(v % 1 - 0.5) < 0.25 for v in lands), lands
 
 def test_after_a_swap_the_survey_takes_the_place_of_the_config():
-    '''A new sheet with a fault the config doesn't know (BED_5's column 3, but no faulty_cols):
-    surveyed, its faulty cells aren't read and a pen is measured right.'''
+    '''A new sheet with a fault the config doesn't know (the old sheet's column 3, but no
+    faulty_cols): surveyed, its faulty cells aren't read and a pen is measured right. Its row 3
+    stays dead (it rose with every press of its column, 0.95 of it: the survey's own first
+    measurement, on (1, 1), can't work with that row read).'''
     from limn.fsr import judge_survey
-    cfg = copy.deepcopy(bed_cfg())
-    cfg['arrays'][0].pop('faulty_cols')
+    cfg = old_cfg()
+    cfg['arrays'][0]['faulty_cols'] = ()
+    cfg['arrays'][0]['aim'] = (1.5, 5.5)
     fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.0, 0.0), bed5=True)
     bed.tool = 'T4'
     judged = judge_survey(fsr.survey(1, {c: bed_z(*fsr.array(1).center(*c[1:])) for c in fsr.z_cells()}), cfg, 1)

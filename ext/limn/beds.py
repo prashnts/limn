@@ -63,8 +63,13 @@ BEDS = {
             # plotter direction of increasing col / row. Check with LRT_FSR_Z
             # that the cell you aim at is the one that lights up. Mapped with
             # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
-            # dead_rows: row 3's ADC line has no series resistor: any press in
-            # a column lifts it to ~500, pressed or not. It tells nothing.
+            # dead_rows: rows never read. None: on the new sheet (2026-10-07) row 3 answers
+            # like the others (230-490 pressed), it only lifts more with presses up its column
+            # (~0.35 of them, rows 0-2 ~0.15) and reads 30-50 with the pen over the sheet. On
+            # the old sheet it lifted to ~500 with any press in its column: dead then.
+            # The new sheet sits ~1mm further +X and ~0.15mm +Y than `origin` (a light-tap map,
+            # ~/limn-shot/fsr-2026-10-07-new-sheet-map.png); its columns 4-7 didn't answer
+            # (presses there read as (3, 0)): its ribbon, to check before the origin is set.
             # faulty_cols: columns never read, like the dead rows. None on a fresh sheet:
             # after a swap LRT_FSR_SURVEY finds the faulty cells of this one (and the aim).
             # The sheet before (2026-09 to 10-07, a glue void from its transfer) had cols 3
@@ -80,7 +85,7 @@ BEDS = {
             # cell of the sheet there is (judge_survey).
             'arrays': [
                 {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
-                 'dead_rows': (3,), 'faulty_cols': (), 'crosstalk_rows': (0,)},
+                 'dead_rows': (), 'faulty_cols': (), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
             # z and the edges on cells 1-2: clear of the array's sides (a survey warns when
