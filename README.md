@@ -48,6 +48,14 @@ LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe 
 
 Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 1), then an edge in X and one in Y. The taps press 0.1 mm past contact at most, less for a pen that presses less plotting (its `press` in `plot/profiles/pens.toml`); each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
 
+After a sensor swap, survey the new sheet first, with the reference pen (a felt tip) on the carriage:
+
+```
+LRT_FSR_SURVEY             ; ~2 min: every cell pressed once, 0.08 mm at most
+```
+
+It reads the sheet at rest, finds the tip, and presses every cell (but the dead row) from just above contact to 0.08 mm past first touch, one console line a cell. Then it judges: faulty (high at rest, or another cell answers while it is pressed), weak (under half the median), the noise floor and from it the `early` threshold, and an aim that brings the reference tip down mid cell on a good one. All saved per bed (`lrt_fsr_survey`) and gone by from then on: faulty cells aren't read, the aim and `early` are the survey's. It warns when the measuring cell or an edge cell is faulty or weak, with the strongest cells to use instead (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`). `SURVEY=0` on a measurement ignores it, `LRT_FSR_SURVEY CLEAR=1` drops it.
+
 What the sheet does, measured on 2026-10-07 (`ext/tests/test_fsr.py` simulates it, `bed5=True`): column 3 is faulty and never read (`faulty_cols`), row 3 has no series resistor (`dead_rows`); a press lifts its whole column, almost as much as the pressed cell at first touch; (2, 4) and (1, 4) are weak cells; the response stops rising ~0.13 mm in. A pen that comes down on another cell than aimed at is aimed again by that cell.
 
 After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
