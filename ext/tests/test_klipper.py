@@ -237,7 +237,7 @@ def test_commands_registered():
     names = set(printer.objects['gcode'].commands)
     for name in ('LRT_CONNECT', 'LRT_DISCONNECT', 'LRT_READ_BED_ID', 'LRT_MESH_CALIBRATE',
                  'LRT_CALIBRATE', 'LRT_PROBE_TOOL', 'LRT_CHAIN', 'LRT_DEBUG', 'LRT_FSR_Z', 'LRT_FSR_EDGE',
-                 'LRT_FSR_MATRIX', 'LRT_FSR_MEASURE', 'LRT_FSR_SURVEY'):
+                 'LRT_FSR_MATRIX', 'LRT_FSR_MEASURE', 'LRT_FSR_SURVEY', 'LRT_FSR_MAP'):
         assert name in names, name
 
 def test_saved_profile_loads():

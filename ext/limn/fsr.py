@@ -109,6 +109,71 @@ class Fsr:
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
+    def map_sheet(self, hop, bed_z, step=1.25, margin=1.0, rise=40.0, depth=0.02, tip=(0.0, 0.0)):
+        '''The sheet spot by spot (LRT_FSR_MAP, fsr_map.py): a grid `step` apart over the array and
+        `margin` round it, in tip coordinates (`tip`: where the carried tool's tip is from the
+        toolhead; (0, 0): toolhead coordinates). The sheet is found once at the aim; at each spot
+        down from where the mesh puts it, in 0.01 steps, until a cell rises `rise` over its
+        reading in the air, then `depth` deeper: every cell's rise there. A spot where nothing
+        answers (the margin, a dead cell) goes 0.06 under where the last touch and the mesh put
+        the sheet, no further. -> [points].'''
+        cfg = self.cfg
+        array = self.array(hop)
+        tip = np.asarray(tip, float)
+        self.surface = self.machine.mesh_profile(cfg['surface_mesh']) if cfg.get('surface_mesh') else None
+        corners = np.array([array.point(r, c) for r in (0, array.rows) for c in (0, array.cols)])
+        lo, hi = corners.min(axis=0) - margin, corners.max(axis=0) + margin
+        aim = array.point(*self.arrays[hop]['aim'])
+        floor, z = self.window(bed_z)
+        points = []
+        with lifted_on_error(self.machine, cfg['z_park']):
+            # The sheet, once: coarse then fine, at whichever of a few spots across the array
+            # answers first (a dead column under the aim would be pressed in to the floor)
+            spots = [aim] + [array.center(r, c) for r, c in ((1, 1), (2, 2), (1, 6)) if r < array.rows and c < array.cols]
+            self.machine.move(z=cfg['z_park'])
+            self.machine.move(*(spots[0] - tip))
+            self.machine.move(z=z)
+            self.air = self.read(hop, limit=False, raw=True)
+            # half the coarse step: a spot on a dead cell is pressed until another answers
+            z, at = self._descend_spots(hop, [s - tip for s in spots], z, cfg['step'] / 2, floor)
+            aim = at + tip
+            z = self._back_off(hop, z + cfg['back_off'])
+            z0, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
+            self.machine.say(f"[LRT][Map] the sheet at X{aim[0]:.3f} Y{aim[1]:.3f}: z={z0:.3f}")
+            ys = np.arange(hi[1], lo[1] - 1e-9, -step)
+            xs = np.arange(lo[0], hi[0] + 1e-9, step)
+            ref = (z0, aim)             # the last spot touched: the next is predicted from it, the mesh's slope
+            for j, y in enumerate(ys):
+                line = []
+                for x in (xs if j % 2 == 0 else xs[::-1]):
+                    pred = ref[0] + self.follow((x, y), ref[1])
+                    z = pred + 0.05
+                    self.machine.move(z=z + 0.5, speed=JOG_SPEED * 5)
+                    self.machine.move(float(x - tip[0]), float(y - tip[1]))
+                    self.machine.move(z=z, speed=JOG_SPEED)
+                    air = self.read(hop, limit=False, raw=True)
+                    touch, cells = None, {}
+                    while z > pred - 0.06:      # a spot that never answers (a dead cell) isn't pressed in
+                        z = round(z - 0.01, 4)
+                        self.machine.move(z=z, speed=JOG_SPEED)
+                        s = self.read(hop, limit=False, raw=True)
+                        up = {c: v - air.get(c, 0.0) for c, v in s.items()}
+                        if max(s.values(), default=0) >= cfg['press_limit'] or max(up.values(), default=0) >= rise:
+                            touch = z
+                            ref = (z, np.array([x, y]))
+                            self.machine.move(z=z - depth, speed=JOG_SPEED)
+                            s = self.read(hop, limit=False, raw=True)
+                            cells = {c: round(v - air.get(c, 0.0), 1) for c, v in s.items() if v - air.get(c, 0.0) > 10}
+                            break
+                    self.machine.move(z=z + 0.5, speed=JOG_SPEED * 5)
+                    points.append({'xy': (round(float(x), 3), round(float(y), 3)), 'touch': touch, 'cells': cells})
+                    best = max(cells.items(), key=lambda kv: kv[1], default=None)
+                    line.append(f"{best[0][0]},{best[0][1]}" if best and best[1] >= cfg['respond'] else '-')
+                self.machine.say(f"[LRT][Map] Y{y:7.2f}: " + ' '.join(f'{v:>3}' for v in (line if j % 2 == 0 else line[::-1])))
+            self.machine.move(z=cfg['z_park'])
+            self.machine.wait_moves()
+        return points
+
     def _roomier(self, hop, axis, at):
         '''+1 or -1: the way along rows (axis 0) or cols (1) from `at` (in cells) with more
         room before the array's end, a dead row or a faulty column.'''

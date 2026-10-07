@@ -50,7 +50,7 @@ Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its
 
 After a sensor swap:
 
-1. If the new sheet sits elsewhere than the old one, set `origin` in `ext/limn/beds.py` (BED_5's `fsr`): the outer corner of cell (row 0, col 0), to a mm or so. `locate()` finds the pens' tips within a few mm of it.
+1. Map it, with the reference pen on the carriage: `LRT_FSR_MAP TIP=2.0,2.13` (the pen's tip from the toolhead, as the edges measured it; without TIP the map is in toolhead coordinates). It touches the sheet spot by spot on a 1.25 mm grid over the array and a 1 mm margin (`STEP=`, `MARGIN=`), each from a baseline in the air until a cell rises 40 (`RISE=`), then reads every cell 0.02 mm deeper (`DEPTH=`). It fits the array's origin and pitch to where each cell answers strongest, lists the cells that never answer and those answering far from their place (a ribbon off by a pin), and writes a picture and the data to `~/printer_data/logs/fsr-maps/` (Moonraker: `/server/files/logs/fsr-maps/…`; `fsr_map_dir` in `[limn]`). Set `origin` in `ext/limn/beds.py` from it. ~20-30 min. A spot where nothing answers (the margin, a dead cell) is pressed at most 0.06 mm under where the sheet is expected.
 2. `LRT_FSR_MATRIX` with nothing on the sheet: every cell low (under ~30), but row 3 (no series resistor).
 3. With the reference pen (a felt tip) on the carriage:
 
