@@ -62,6 +62,8 @@ BEDS = {
             # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
             # dead_rows: row 3's ADC line has no series resistor: any press in
             # a column lifts it to ~500, pressed or not. It tells nothing.
+            # faulty_cols: read like the dead rows, never (column 3: see below; it
+            # read 469 with the pen on (1,1) and stopped LRT_CALIBRATE, 2026-10-07).
             # crosstalk_rows: a press in a column lifts row 0 too, less; with a
             # fine tip split on an edge, as much as the pressed cells (fsr.py, touched).
             # aim: (row, col), in cells from the origin, where the tip first
@@ -71,7 +73,7 @@ BEDS = {
             # +3.75mm in X (rows 0-2), -6.25..+13.75mm in Y (8 cols): mid col 5, clear of col 3.
             'arrays': [
                 {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
-                 'dead_rows': (3,), 'crosstalk_rows': (0,)},
+                 'dead_rows': (3,), 'faulty_cols': (3,), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
             # Column 3 is faulty (a glue void from the transfer: preload, a dead
