@@ -147,15 +147,62 @@ def test_a_drawing_hides_the_ones_under_it(write_svg, tmp_path):
     assert not {50, 60} & {round(x, 3) for x in red_xs(r2.gcode, 'G')}
 
 
-def test_images_are_taken_out_on_upload(client):
-    body = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="50mm" '
-            'height="50mm" viewBox="0 0 50 50"><image xlink:href="data:image/png;base64,iVBOR" width="50" height="50"/>'
-            '<path d="M5 5 H45" stroke="#ff0000" stroke-width="0.5"/></svg>')
-    r = add(client, body)
-    assert r['images'] == 1
+def gradient_svg(w=40, h=20):
+    """A 50 mm page, an image at (10, 10) w x h mm: black on the left to white on the right."""
+    import base64
+    import io
+    from PIL import Image
+    im = Image.fromarray(np.tile(np.linspace(0, 255, 40).astype(np.uint8), (20, 1)))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    href = 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
+    return ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="50mm" '
+            f'height="50mm" viewBox="0 0 50 50"><image xlink:href="{href}" x="10" y="10" width="{w}" height="{h}" '
+            'preserveAspectRatio="none"/><image xlink:href="photo.jpg" width="5" height="5"/>'
+            '<path d="M5 45 H45" stroke="#ff0000" stroke-width="0.5"/></svg>')
+
+
+def test_images_are_left_out_or_made_into_lines(client):
+    r = add(client, gradient_svg())
+    assert r['images'] == 1 and r['unreadable'] == 1           # a linked file (not embedded) can't be read
     ws = client.app.state.ws
-    assert b'<image' not in (ws.data / 'uploads' / 'd.svg').read_bytes()
+    assert b'<image' in (ws.data / 'uploads' / 'd.svg').read_bytes()       # kept, to make into lines later
+    st = client.get('/api/state').json()
+    assert st['objects']['d']['images'][0]['size'] == [40.0, 20.0]
+    # Left out by default: nothing of it is drawn, its colour isn't a layer
+    assert all(g['key'] != 'stroke #000000' for g in st['objects']['d']['groups'])
+    assert client.post('/api/slice').json()['stats']['tools'].keys() == {'T3'}
+    for mode in ('dither', 'lines', 'halftone'):
+        st = client.patch('/api/objects/d', json={'raster': {'mode': mode, 'pitch': 0.5, 'cell': 2}}).json()
+        g = next(g for g in st['objects']['d']['groups'] if g['key'] == 'stroke #000000')
+        assert g['images'] == 1
+        tool = g['default']['tool']
+        o = Obj(**st['job']['objects'][0], ).model_copy(update={'svg': str(ws.data / 'uploads' / 'd.svg')})
+        _, tools = load(ws.job)
+        paths = slice_object(o, tools).paths[tool]
+        pts = np.vstack(paths)
+        # Inside the image (object mm, y up: 10..50 by 20..40), and more ink where it is dark (left)
+        assert pts[:, 0].min() > 9.4 and pts[:, 0].max() < 50.6 and pts[:, 1].min() > 19.4 and pts[:, 1].max() < 40.6, mode
+        ink = lambda keep: sum(np.hypot(*np.diff(p[:, :2], axis=0).T).sum() for p in paths if keep(p[:, 0].mean()))
+        assert ink(lambda x: x < 20) > 3 * ink(lambda x: x > 40), mode
+    shapes = client.get('/api/objects/d/shapes').json()['shapes']
+    assert [s['raster'] for s in shapes].count(True) == 1
+    bad = client.patch('/api/objects/d', json={'raster': {'mode': 'halftone', 'pitch': 0}})
+    assert bad.status_code in (400, 422)
     assert strip_images(b'<svg><path/></svg>') == (b'<svg><path/></svg>', 0)
+
+
+def test_raster_pitch_is_as_plotted(write_svg, tools, tmp_path):
+    from plot import raster
+    from plot.job import RasterSpec
+    p = tmp_path / 'g.svg'
+    p.write_text(gradient_svg())
+    from plot.svg import load as load_svg
+    img = load_svg(p).images[0]
+    one = raster.lines(img, RasterSpec(mode='lines', pitch=0.5), 1.0)
+    two = raster.lines(img, RasterSpec(mode='lines', pitch=0.5), 2.0)     # drawn twice the size: rows as far apart
+    ys = lambda ls: np.unique(np.round([l[0, 1] for l in ls], 3))
+    assert np.diff(ys(one)).min() == pytest.approx(0.5) and np.diff(ys(two)).min() == pytest.approx(0.25)
 
 
 def test_order_draw_and_masks_through_the_api(client):

@@ -754,3 +754,18 @@ def test_captures_hide_all_and_delete_all(page, scanning, tmp_path):
     page.click('#captures-clear')
     page.wait_for_function('() => !document.querySelector("#captures li[data-id]")')
     assert requests.get(scanning + '/api/captures').json() == []
+
+
+def test_an_svg_with_a_picture_asks_what_to_do_with_it(page, base, tmp_path):
+    from .test_layers import gradient_svg
+    p = tmp_path / 'pic.svg'
+    p.write_text(gradient_svg())
+    page.goto(base + '/')
+    page.wait_for_selector('#svg-input', state='attached')
+    page.set_input_files('#svg-input', str(p))
+    page.click('#image-ask [data-raster="lines"]')
+    page.wait_for_selector('#object-panel #r-pitch')
+    o = next(o for o in requests.get(base + '/api/state').json()['job']['objects'] if o['id'].startswith('pic'))
+    assert o['raster']['mode'] == 'lines'
+    page.select_option('#r-mode', 'skip')                       # left out after all
+    page.wait_for_selector('#object-panel #r-pitch', state='detached')

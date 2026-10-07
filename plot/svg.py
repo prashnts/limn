@@ -37,6 +37,7 @@ class Shape:
     paths: list[np.ndarray] = field(default_factory=list)     # (n, 2) mm
     closed: list[bool] = field(default_factory=list)
     line: bool = False          # drawn on its lines with its fill's tool (text in a line font)
+    raster: bool = False        # an <image> made into lines (raster.py): never too small for its tool
 
     def keys(self):
         return [k for k in (self.stroke and f'stroke {self.stroke}', self.fill and f'fill {self.fill}') if k]
@@ -60,11 +61,27 @@ class TextRun:
 
 
 @dataclass
+class RasterImage:
+    '''An <image> of the drawing, kept to be made into lines (raster.py).'''
+    index: int                  # paint order, as the shapes'
+    id: str | None
+    dark: np.ndarray            # (h, w) 0 white (or transparent) .. 1 black, at most MAX_PX across
+    matrix: tuple               # its pixel (u, v) -> mm: x = a u + c v + e, y = b u + d v + f
+    cache: dict = field(default_factory=dict, compare=False, repr=False)    # raster.py's lines
+
+    def corners(self):
+        h, w = self.dark.shape
+        a, b, c, d, e, f = self.matrix
+        return np.array([(a * u + c * v + e, b * u + d * v + f) for u, v in ((0, 0), (w, 0), (w, h), (0, h))])
+
+
+@dataclass
 class Drawing:
     size: tuple[float, float]   # the page, mm
     shapes: list[Shape]
     texts: list[TextRun]
     skipped: dict[str, int]
+    images: list[RasterImage] = field(default_factory=list)
 
     def groups(self):
         '''Stats per colour key ('stroke #rrggbb', 'fill #rrggbb').'''
@@ -135,6 +152,32 @@ def _flatten(sub, tolerance):
     return (s if len(s) >= 2 else a), closed
 
 
+MAX_PX = 2000      # an image's pixels kept, across: finer than any pen's line at plotter sizes
+
+
+def raster(e):
+    '''An <image> -> (darkness, matrix), None when it can't be read (not embedded, not a picture).'''
+    try:
+        e.load()
+    except Exception:
+        return None
+    im = e.image
+    if im is None:
+        return None
+    from PIL import Image as PILImage
+    im = im.convert('RGBA')
+    w, h = im.size
+    k = max(w, h) / MAX_PX
+    if k > 1:
+        im = im.resize((max(1, round(w / k)), max(1, round(h / k))), PILImage.BOX)
+    white = PILImage.new('RGBA', im.size, (255, 255, 255, 255))
+    grey = PILImage.alpha_composite(white, im).convert('L')
+    dark = 1 - np.asarray(grey, np.float32) / 255
+    sx, sy = w / grey.width, h / grey.height                # its pixels -> the image's own (load() puts its
+    m = e.transform                                          # viewbox and placement in its transform)
+    return dark, (m.a * sx * MM, m.b * sx * MM, m.c * sy * MM, m.d * sy * MM, m.e * MM, m.f * MM)
+
+
 IMAGE = re.compile(rb'<(?:[\w-]+:)?image\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*?(?:/>|>.*?</(?:[\w-]+:)?image\s*>)', re.S)
 
 
@@ -158,7 +201,7 @@ def load_cached(path, tolerance=0.02) -> Drawing:
 
 def load(src, tolerance=0.02) -> Drawing:
     svg = S.SVG.parse(src, reify=True, ppi=96)
-    shapes, texts, skipped = [], [], defaultdict(int)
+    shapes, texts, images, skipped = [], [], [], defaultdict(int)
     index = 0
     for e in svg.elements():
         if isinstance(e, S.Text):
@@ -171,9 +214,15 @@ def load(src, tolerance=0.02) -> Drawing:
                                  tuple(v * MM for v in (m.a, m.b, m.c, m.d, m.e, m.f)), fill, stroke))
             index += 1
             continue
+        if isinstance(e, S.Image):         # (S.SVGImage is the same class)
+            got = raster(e) if e.values.get('display') != 'none' else None
+            if got is None:
+                skipped['image (not embedded)'] += 1
+            else:
+                images.append(RasterImage(index, e.id, *got))
+                index += 1
+            continue
         if not isinstance(e, S.Shape):
-            if isinstance(e, (S.Image, S.SVGImage)):
-                skipped['image'] += 1
             continue
         if e.values.get('visibility') == 'hidden' or e.values.get('display') == 'none':
             continue
@@ -200,4 +249,4 @@ def load(src, tolerance=0.02) -> Drawing:
     if not w or not h:
         pts = np.vstack([p for s in shapes for p in s.paths]) if shapes else np.zeros((1, 2))
         w, h = pts[:, 0].max() / MM, pts[:, 1].max() / MM
-    return Drawing((w * MM, h * MM), shapes, texts, dict(skipped))
+    return Drawing((w * MM, h * MM), shapes, texts, dict(skipped), images)

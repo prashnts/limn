@@ -41,6 +41,7 @@ from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
 from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
 from .job import Group, Obj
+from .raster import drawn, key as raster_key, raster_shapes
 from .surface import make
 
 WIDE = 1.5      # auto: strokes this many tool widths wide or more fill their area
@@ -146,11 +147,19 @@ def nearest_tool(colour, tools):
     return min(tools.values(), key=lambda t: colour_distance(colour, t.color)).id
 
 
-def default_groups(drawing, tools):
+def colour_keys(drawing, obj=None):
+    '''The drawing's colour keys, and its images' when the object makes them into lines.'''
+    keys = list(drawing.groups())
+    if obj is not None and drawn(obj, drawing) and raster_key(obj.raster) not in keys:
+        keys.append(raster_key(obj.raster))
+    return keys
+
+
+def default_groups(drawing, tools, obj=None):
     '''Each colour to the tool of the nearest colour; near white is the paper: a mask.
     Fill and stroke settings left None: as the tool draws.'''
     out = {}
-    for key in drawing.groups():
+    for key in colour_keys(drawing, obj):
         colour = key.split(' ', 1)[1]
         if (_rgb(colour) @ (0.2126, 0.7152, 0.0722)) / 255 > 0.92:
             out[key] = Group(mask=True)
@@ -160,7 +169,7 @@ def default_groups(drawing, tools):
 
 
 def groups_for(obj, drawing, tools):
-    return {**default_groups(drawing, tools), **obj.groups}
+    return {**default_groups(drawing, tools, obj), **obj.groups}
 
 
 def fillable(sh):
@@ -252,7 +261,8 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     groups = groups_for(obj, d, tools)
     height, s = d.size[1], obj.scale
     problems = []
-    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems, tools), key=lambda sh: sh.index)
+    shapes = sorted(d.shapes + text_shapes(d, obj, fonts, problems, tools) + raster_shapes(d, obj),
+                    key=lambda sh: sh.index)
 
     def local(p):
         return np.column_stack([p[:, 0] * s, (height - p[:, 1]) * s])
@@ -274,7 +284,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
 
     def too_small(sh, t, paths, ink):
         '''Whether to leave this part out: too small or dense for the tool (its `small`).'''
-        if t is None or t.small == 'draw' or lost_detail(paths, t.width, ink) < LOST:
+        if t is None or t.small == 'draw' or sh.raster or lost_detail(paths, t.width, ink) < LOST:
             return False
         small.setdefault(t.id, set()).add(sh.index)
         return t.small == 'skip'
@@ -301,7 +311,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         st = tool_of(sg)
         wide = st is not None and (setting(sg, st, 'stroke') == 'width'
                                    or (setting(sg, st, 'stroke') == 'auto' and sh.width * s >= st.width * WIDE))
-        if st is not None and not wide and too_small(sh, st, paths,
+        if st is not None and not wide and not sh.raster and too_small(sh, st, paths,
                                                      stroke_area(paths, sh.closed, max(sh.width * s, 0.02))):
             sg, stroke_on, st = None, False, None
         stroke_covers = obj.occlude and stroke_on and sh.stroke_opaque

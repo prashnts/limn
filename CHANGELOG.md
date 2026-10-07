@@ -37,8 +37,10 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 - **Bleed margin** (`inset`): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks on top stays as it was.
 - **Groups**: shapes of a drawing (`Obj.sets`, painted together; the shapes never move), and drawings on the bed (`Obj.group`, they move, nudge and hide together, one undo step via `PATCH /api/objects`). Ctrl+G and Ctrl+Shift+G.
 - Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`, the one being taken stays).
+- **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`): on upload the UI asks whether to leave them out or make them into lines. There are three ways: *dither* (Floyd–Steinberg, a row's dots joined into lines), *lines* (rows, denser where darker) and *halftone* (spiral dots). Each has a pitch as plotted, a paper threshold so light backgrounds stay clean, gamma, invert and a colour; that colour's layer picks the pen. On a 70 mm test picture at 0.5 mm: lines ≈ 2.4 m of ink in 66 strokes, halftone ≈ 3.6 m in 670, dither ≈ 1.5 m in 3000 short ones (the most travel).
 
 ### Changed
+- `<image>`s stay in an uploaded SVG (they were taken out): left out unless made into lines. One linked rather than embedded is still left out, and the upload says so.
 - A *look* is temporary: the next capture (look, focus, corners or scan) deletes it (`ScanStore.new`).
 
 ## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display

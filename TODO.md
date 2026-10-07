@@ -11,6 +11,11 @@
   - [ ] Tune `NEAR` on real drawings (a gradient-heavy SVG): too low lists shades apart, too high merges colours meant for different pens. The chip's *Each of its colours* splits one by hand.
   - [ ] Bleed margin on a real plot: which `bleed` keeps the Stabilo's fill from running past a fineliner outline, and whether round corners read better than sharp at small sizes.
   - [ ] Groups of drawings move together, but scale and turn are still per drawing.
+- Done 2026-10-07: pictures in an SVG made plottable (`plot/raster.py`): dither, lines, halftone; the upload asks.
+  - [ ] Plot each on paper with a fineliner: which pitch matches its line (0.5 is a guess), whether halftone spirals blot at the middle, how long dither takes for real (many short strokes: Z hops dominate).
+  - [ ] Dither is a Python loop: an A4 picture at 0.3 mm (~700k cells) takes a few seconds per change of its settings. numba or a C pass if it gets in the way.
+  - [ ] Colour pictures: one colour only for now. CMY(K) separations onto several pens, each its own angle, would be next.
+  - [ ] Ordering: emit's travel order for thousands of dashes (dither); a serpentine order per row might beat it.
 - [ ] Too small: the thresholds (2.5 widths, 70% of the inside painted over, text caps 8 widths) come from one drawing (the Feb–Apr 2025 sketch on the Pi, at 22/39/49%). Check on a plot what really blurs, then tune `SMALL`, `LOST`, `TEXT_MIN` in slicer.py. Letters that run into each other (each fine on its own) aren't seen yet.
 - [ ] Drawings over drawings is new: the ferry and magnet icons on the Pi overlap each other and the Feb drawing; whichever is on top now cuts the others. Turn *what is on top hides* off on one that should draw over.
 - Pen-down: `z_touch - press` (1.2 less 0.15 for fineliners, 0.3 for the Stabilo 88), lifts by the press, `play.clear` and the play (`plot/profiles/play.toml`). The old "pens press too hard" was stale tags: done (`notebooks/act-7-camera-ladder.md`). To watch: touch moved by ~0.2mm from one sheet to the next (the Staedtler and the Stabilo both touched 0.2 low on sheet 2). Either a quick ladder per sheet, or `z_touch` per sheet/mesh.
