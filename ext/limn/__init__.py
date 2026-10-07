@@ -746,9 +746,8 @@ class Limn:
         fsr = self._routine(gcmd, bed)
         fsr.cfg = bed['fsr']                       # the config alone: not an older survey
         fsr.arrays = {a['hop']: a for a in bed['fsr']['arrays']}
-        cell = tuple(bed['fsr']['z_cell'])
         try:
-            bed_z = self._fsr_bed_z(gcmd, fsr, cell)
+            bed_z = {cell: self._fsr_bed_z(gcmd, fsr, cell) for cell in fsr.z_cells()}
             self.gcode.run_script_from_command("_CLEAR_OFFSETS")
             hops = {}
             for hop in fsr.arrays:

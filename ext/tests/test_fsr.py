@@ -621,9 +621,10 @@ def test_a_survey_finds_this_sheets_faults_and_a_healthy_one_none():
         cfg = copy.deepcopy(bed_cfg())
         fsr, bed, _ = setup(cfg=cfg, tip=(2.0, 2.13), **kw)
         bed.tool = 'T4'
-        result = fsr.survey(1, bed_z(*fsr.array(1).center(1, 1)))
+        result = fsr.survey(1, {c: bed_z(*fsr.array(1).center(*c[1:])) for c in fsr.z_cells()})
         judged = judge_survey(result, cfg, 1)
         assert judged['faulty'] == faulty and judged['weak'] == weak, judged
+        assert np.allclose(result['shift'], (2.0, 2.13), atol=0.03), result['shift']
         assert getattr(bed, 'max_press', 0) <= 0.105 and not bed.dragged
         assert 30 <= judged['early'] <= 60 and not judged['warnings']
         # The aim brings the reference tip down mid cell on a good one, its neighbours not faulty
@@ -639,7 +640,7 @@ def test_after_a_swap_the_survey_takes_the_place_of_the_config():
     cfg['arrays'][0].pop('faulty_cols')
     fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.0, 0.0), bed5=True)
     bed.tool = 'T4'
-    judged = judge_survey(fsr.survey(1, bed_z(*fsr.array(1).center(1, 1))), cfg, 1)
+    judged = judge_survey(fsr.survey(1, {c: bed_z(*fsr.array(1).center(*c[1:])) for c in fsr.z_cells()}), cfg, 1)
     assert judged['faulty'] == [(0, 3), (1, 3), (2, 3)]
     ref, _, _ = setup(cfg=copy.deepcopy(cfg), bed5=True)
     ref.apply_survey(1, judged)
