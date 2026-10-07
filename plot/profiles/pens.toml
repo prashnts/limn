@@ -94,7 +94,9 @@ z_min = 4.0                       # never lower (the tube was lengthened 2026-09
 short = "Endoscope"
 name = "Limn endoscope (OVM6946, Teensy)"
 kind = "camera"
-fixed = true                      # on the carriage: no holder, no tag, Z never moved; its URL in the settings
+# fixed = true                      # on the carriage: no holder, no tag, Z never moved; its URL in the settings
 fov = [35.5, 35.1]                # mm one shot at Z8: ~11.5 px/mm over 408 x 404 (2026-10-04, 2mm moves; a wide lens)
 turn = 44.6                       # with the snapshot flipped left-right (?flip=1): the picture is mirrored
 settle = 0.2                      # the snapshot itself waits for a frame taken after it was asked for
+focus_z = 9.2                     # sharpest on a sticker on the paper, 2026-09-30 (a flat peak 9.0-9.4)
+z_min = 5.0                       # never lower (the tube was lengthened 2026-09-30): lower it once measured
