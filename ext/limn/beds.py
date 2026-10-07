@@ -104,7 +104,7 @@ BEDS = {
             # one up to 0.3. Deeper only adds force, and 0.3mm taps with a Stabilo
             # (~670) left marks on the sheet, 2026-09-29.
             'press_strength': 450,
-            'press': 0.3,           # mm below contact for the XY taps, at most
+            'press': 0.3,           # mm below contact for the XY taps, at most (and the pen's press_max, pens.toml)
             'prior_margin': 0.4,    # mm below an expected contact z the search may go
             # The taps follow the sheet with this mesh (the moves are raw, no mesh):
             # it drops ~0.05mm per mm towards -Y, a fine tip lost 0.25 of its 0.3mm

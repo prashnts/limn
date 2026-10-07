@@ -140,7 +140,8 @@ class Limn:
         self._dry_beep_at = 0.0
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         self.dry_pens = PENS_FILE
-        self._pens = (None, {}, set())  # (mtime, {pen key: dry minutes}, keys with no ink) of the pen library
+        # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press_max}) of the pen library
+        self._pens = (None, {}, set(), {})
         self.manual = None          # the tool docked by hand: its tool_tags entry, None: none
         self.manual_window, self.manual_x_max = MANUAL_WINDOW, MANUAL_X_MAX
         self._manual_timer = None   # looks at the key's switch after a scan, while the carriage is empty
@@ -172,8 +173,10 @@ class Limn:
             ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE,
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
             ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
-            ('LRT_CALIBRATE', self.cmd_CALIBRATE, "Calibrate the bed with the reference tool (T4)"),
-            ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL, "Measure the docked tool's offsets and write its tag"),
+            ('LRT_CALIBRATE', self.cmd_CALIBRATE,
+             "LRT_CALIBRATE [PRESS=]: calibrate the bed with the reference tool (T4); PRESS: mm the FSR taps press at most"),
+            ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL,
+             "LRT_PROBE_TOOL [PRESS=]: measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
@@ -304,6 +307,9 @@ class Limn:
         cls = Rtp if sensor == 'rtp' else Fsr
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
+            press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
+            if press is not None:           # PRESS=: the taps press at most this past contact
+                routine.cfg = {**routine.cfg, 'press': press}
             self._fsr_hooks(gcmd, routine)
         return routine
 
@@ -312,6 +318,13 @@ class Limn:
         be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
         def before():
             carried = self._carried()
+            # Never pressed deeper than it may press plotting: its pen's press_max (pens.toml)
+            self._pen_dry()
+            pen = self._tags().get(str(carried), {}).get('pen')
+            fsr.press_cap = self._pens[3].get(pen)
+            most = min(fsr.cfg['press'], fsr.press_cap) if fsr.press_cap else fsr.cfg['press']
+            gcmd.respond_info(f"[LRT] Tool {carried} ({pen or 'pen not on its tag'}): taps press at most {most:.2f}mm "
+                              f"past contact{' (its press_max)' if fsr.press_cap and fsr.press_cap < fsr.cfg['press'] else ''}")
             if self._fsr_last and carried != self._fsr_last and gcmd.get_int('CLEAN', 1):
                 gcmd.respond_info(f"[LRT] The sheet last had tool {self._fsr_last}, now {carried}: wipe it first")
                 fsr.wait_clean()
@@ -618,9 +631,6 @@ class Limn:
         tip = gcmd.get('TIP', None)
         prior = {'tip': [float(v) for v in tip.split(',')] if tip else None,
                  'z': gcmd.get_float('Z', None)}
-        press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
-        if press is not None:
-            fsr.cfg = {**fsr.cfg, 'press': press}
         bed_z_given = gcmd.get_float('BED_Z', None)
         try:
             bed_z = {cell: bed_z_given if bed_z_given is not None else self._fsr_bed_z(gcmd, fsr, cell)
@@ -1293,11 +1303,12 @@ class Limn:
                     lib = tomllib.load(f)
                 lib = {k: v for k, v in lib.items() if isinstance(v, dict)}
                 self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items() if v.get('dry')},
-                              {k for k, v in lib.items() if v.get('kind', 'pen') not in INKY})
+                              {k for k, v in lib.items() if v.get('kind', 'pen') not in INKY},
+                              {k: float(v['press_max']) for k, v in lib.items() if v.get('press_max')})
         except (OSError, ImportError, ValueError) as e:
             if self._pens[0] != 'missing':
                 logging.info("[Tool holder] no pen library for drying times (%s): %s", self.dry_pens, e)
-            self._pens = ('missing', {}, set())
+            self._pens = ('missing', {}, set(), {})
         return self._pens[1]
 
     def _dry_tick(self, eventtime):

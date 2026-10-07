@@ -487,3 +487,14 @@ def test_a_reading_in_the_air_is_a_false_start():
 
 if __name__ == '__main__':
     run_tests(globals())
+
+def test_taps_never_deeper_than_the_pens_press_max():
+    '''A fine tip never reaches press_strength: it went the whole `press` (0.3mm) on
+    every tap, deeper than it ever presses plotting. Capped by its pen's press_max.'''
+    fsr, bed, _ = setup(cfg=copy.deepcopy(bed_cfg()), gain=700)
+    profile = fsr.calibrate()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(bed_cfg()), gain=700, tip=(0.35, -0.2))
+    bed.tool = 'T1'
+    fsr.press_cap = 0.25
+    fsr.probe_tool(profile)
+    assert abs(fsr.depth[1] - 0.25) < 1e-9
