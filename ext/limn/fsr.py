@@ -65,7 +65,8 @@ class Fsr:
 
     def read(self, hop, limit=True):
         '''After a move: waits for it and for fresh frames -> {(row, col): strength},
-        without the array's dead rows. limit: a press over press_limit stops us.'''
+        without the array's dead rows and faulty columns. limit: a press over
+        press_limit stops us.'''
         self.machine.wait_moves()
         since = self.machine.now()
         self.machine.pause(self.cfg['settle'])
@@ -75,10 +76,11 @@ class Fsr:
             self.machine.pause(0.02)
 
         dead = self.arrays[hop].get('dead_rows', ())
+        faulty = self.arrays[hop].get('faulty_cols', ())
         cells = {}
         for frame in self.samples.since(since, hop=hop, kind=FSR, state=S_MATRIX):
             for row, col, strength in frame.values:
-                if row not in dead:
+                if row not in dead and col not in faulty:
                     cells.setdefault((row, col), []).append(strength)
         strengths = {cell: float(np.median(v)) for cell, v in cells.items()}
         hardest = max(strengths.values(), default=0)
@@ -183,8 +185,14 @@ class Fsr:
             # At first touch the crosstalk can lead the pressed cell: only a
             # real press elsewhere means the tip is not over `cell`.
             if touched and strengths[touched[0]] >= cfg['sure']:
-                raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
-                               f"({self.top(strengths)}): check the array origin")
+                # One reading isn't enough to stop on: read again where it is
+                strengths = self.read(hop)
+                touched = self.touched(strengths, hop)
+                if touched and tuple(cell) in touched:
+                    return z, touched
+                if touched and strengths[touched[0]] >= cfg['sure']:
+                    raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
+                                   f"({self.top(strengths)}): check the array origin")
             if touched:
                 elsewhere = z if elsewhere is None else elsewhere
                 if elsewhere - z >= cfg.get('wrong_depth', 0.2) - 1e-9:

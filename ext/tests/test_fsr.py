@@ -358,7 +358,7 @@ def test_waits_for_the_sheet_to_be_wiped():
     assert bed.ran == ['_BUZZ_WARN', '_BUZZ_DOOP'] and not dock.matrix
 
 def test_a_brush_on_one_cell_is_no_wipe():
-    fsr, bed, dock = setup(wipes=[(1.0, 2.0, {(1, 3)}, 600)])
+    fsr, bed, dock = setup(wipes=[(1.0, 2.0, {(1, 2)}, 600)])
     fsr.cfg = {**fsr.cfg, 'clean': {**fsr.cfg['clean'], 'timeout': 20}}
     bed.tool = 'T1'
     try:
@@ -527,3 +527,14 @@ def test_locate_doesnt_measure_towards_the_dead_row():
     fsr.matrix(True)
     shift, _ = fsr.locate(1, bed_z(*fsr.array(1).point(1.5, 5.5)))
     assert abs(shift[0] - 1.85) < 0.3 and abs(shift[1] - 2.2) < 0.3, shift
+
+def test_a_faulty_column_is_never_read():
+    '''BED_5's column 3 lights up while the rest of its row is pressed: it read 469 with
+    the pen on (1,1) and stopped LRT_CALIBRATE ("responds instead of", 2026-10-07).'''
+    cfg = copy.deepcopy(bed_cfg())
+    fsr, bed, _ = setup(cfg=cfg, row_crosstalk=0.9)
+    bed.tool = 'T1'
+    fsr.matrix(True)
+    s = fsr.read(1)
+    assert all(c[1] != 3 for c in s) and all(c[0] != 3 for c in s)
+    assert cfg['arrays'][0]['faulty_cols'] == (3,)
