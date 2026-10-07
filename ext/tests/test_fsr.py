@@ -27,7 +27,8 @@ class FsrBed:
 
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
-                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None):
+                 crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
+                 dead_lifts=0.0):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -49,6 +50,7 @@ class FsrBed:
         self.slope_y = slope_y                  # the sheet rises this much per mm in Y, on top of bed_z
         self.mesh = mesh                        # an lrt_fsr mesh of it, as LRT_MESH_CALIBRATE takes
         self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
+        self.dead_lifts = dead_lifts            # a press on row 3 (no series resistor) lifts its column's rows by this share
         self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
         self.ghost = ghost                      # (from, to mm over contact, cell, strength): a reading in the air
         self.rng = np.random.default_rng(7)
@@ -131,6 +133,8 @@ class FsrBed:
                 s = abs(self.rng.normal(0, self.noise))
                 if (row, col) in shares:
                     s = 1000 if self.spike else min(880, self.press() * self.gain) * shares[(row, col)] + s
+                elif self.dead_lifts and (3, col) in shares:
+                    s += self.dead_lifts * pressed * shares[(3, col)]
                 elif self.crosstalk and col in columns:
                     s += {3: 530, 0: 220}.get(row, 0)
                 elif row in rows:
@@ -498,3 +502,28 @@ def test_taps_never_deeper_than_the_pen_presses_plotting():
     fsr.press_cap = 0.1
     dx, dy, _ = fsr.probe_tool(profile)
     assert abs(fsr.depth[1] - 0.1) < 1e-9 and abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03
+
+def test_a_weak_press_on_another_cell_stops_short_of_the_floor():
+    '''A fineliner off by a cell pressed its neighbour too weakly to count as "sure",
+    and LRT_FSR_Z went on down to the floor (2026-10-07). It stops 0.2mm on now.'''
+    fsr, bed, _ = setup(cfg=copy.deepcopy(bed_cfg()), gain=700, tip=(2.5, 0))     # a row off: (2, 1) under it
+    bed.tool = 'T1'
+    presses, read = [], fsr.read
+    fsr.read = lambda hop, limit=True: presses.append(bed.press()) or read(hop, limit)
+    fsr.matrix(True)
+    try:
+        fsr.contact_z(1, 1, 1, bed_z(*fsr.array(1).center(1, 1)))
+        assert False, 'it should stop'
+    except FsrError as e:
+        assert 'another cell' in str(e) or 'instead of' in str(e), e
+    assert max(presses) < 0.21 + 0.2 + 0.15, max(presses)
+
+def test_locate_doesnt_measure_towards_the_dead_row():
+    '''BED_5's row 3 has no series resistor: pressed, it lifts its column's other rows,
+    so row 2 seemed to go on responding over it, and locate put the tip 1.3mm too far in
+    X (3.16 for ~1.85, 2026-10-07). It measures towards row 1 instead.'''
+    fsr, bed, _ = setup(cfg=copy.deepcopy(bed_cfg()), tip=(1.85, 2.2), crosstalk=True, dead_lifts=0.6)
+    bed.tool = 'T1'
+    fsr.matrix(True)
+    shift, _ = fsr.locate(1, bed_z(*fsr.array(1).point(1.5, 5.5)))
+    assert abs(shift[0] - 1.85) < 0.3 and abs(shift[1] - 2.2) < 0.3, shift
