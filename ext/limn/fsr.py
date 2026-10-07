@@ -109,6 +109,12 @@ class Fsr:
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
+    def _boundary(self, hop, axis):
+        '''The point between the two cells of the axis' first edge (cfg x_edges / y_edges).'''
+        h, a, b = next(e for e in self.cfg[f'{axis}_edges'] if e[0] == hop)
+        array = self.array(hop)
+        return (np.asarray(array.center(*a)) + np.asarray(array.center(*b))) / 2
+
     def apply_survey(self, hop, judged):
         '''Go by a survey of this sheet (judge_survey): its faulty cells aren't read, its
         `early` instead of the config's. The config itself stays as it is.'''
@@ -424,6 +430,7 @@ class Fsr:
 
     # The sheet, cell by cell (LRT_FSR_SURVEY): after a swap, what the config can't know
     def survey(self, hop, bed_z, depth=0.08, step=0.02, rest_s=2.0):
+        # bed_z: {cell: BLTouch z} for z_cells(), as for measure()
         '''Every cell of the array (but its dead rows) pressed by the carried tool, a felt
         tip: -> {'rest': {cell: median at rest}, 'cells': {cell: {...}}, 'shift': tip}.
         At rest first, untouched. Then where the tip is (locate), and over each cell's
@@ -449,8 +456,14 @@ class Fsr:
             levels = out['rest']
             floor_rest = float(np.median([v for c, v in levels.items() if c[0] in rows])) if levels else 0.0
             high = {c for c, v in levels.items() if v >= floor_rest + HIGH_AT_REST}
-            shift, top = self.locate(hop, bed_z)
+            # Where the tip is, exactly: from the edges, as a calibration has it (locate's guess
+            # was 1.65mm out on the plotter, 2026-10-07: every cell pressed near its border)
+            m = self.measure(bed_z)
+            self.matrix(True)                       # measure() turned it off
+            shift = np.array([self._boundary(hop, 'x')[0] - m['x'], self._boundary(hop, 'y')[1] - m['y']])
+            top = m['z'] + cfg['back_off']
             out['shift'] = [float(v) for v in shift]
+            self.machine.say(f"[LRT][Survey] the tip is {shift.round(3).tolist()} from the toolhead (from the edges)")
             early = cfg.get('survey_touch', 30)     # over rest: a weak cell's first touch too, not 0.05mm on
             for row in rows:
                 for col in range(array.cols):
@@ -483,8 +496,10 @@ class Fsr:
                             if max(s.values(), default=0) >= cfg['press_limit'] * 0.85:
                                 break
                         self.machine.move(z=z + 0.6, speed=JOG_SPEED * 5)
-                    at = lambda d: next((m for dd, m, _, _ in steps if dd >= d - 1e-6), None)
-                    ok = bool(steps) and all(m >= o for dd, m, _, o in steps if dd >= 0.04 - 1e-6)
+                    at = lambda d: next((m_ for dd, m_, _, _ in steps if dd >= d - 1e-6), None)
+                    deep = [(m_, o) for dd, m_, _, o in steps if dd >= 0.04 - 1e-6]
+                    # Another cell answers: clearly stronger than this one at most of its deeper steps
+                    ok = bool(deep) and 2 * sum(o > 1.1 * m_ for m_, o in deep) < len(deep)
                     info = {'z': first, 'steps': steps, 's04': at(0.04), 's08': at(0.08), 'ok': ok,
                             'rest': out['rest'].get(cell, 0.0), 'air': base.get(cell, 0.0), 'at': [float(x), float(y)]}
                     out['cells'][cell] = info
