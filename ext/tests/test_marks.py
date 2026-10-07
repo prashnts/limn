@@ -476,3 +476,17 @@ def test_fsr_bltouch_z_puts_away_a_tool_not_saved_as_carried():
 
 if __name__ == '__main__':
     run_tests(globals())
+
+def test_a_calibration_keeps_over_a_restart_without_save_config():
+    p = plotter(carried=0, bed=reply('BED_5'))
+    ref = {'x': 114.0, 'y': 52.5, 'z': 3.44, 'gaps': [1.0, 0.04], 'tip': [1.5, 1.6], 'bed_z': [[1, 1, 1, 2.72]]}
+    p.ext._save_profile({'fsr_ref': ref})
+    assert p.svv['lrt_profile']['version'] and p.ext.calibrated('fsr')
+    p = p.restart()                                         # no SAVE_CONFIG: the config has none
+    assert not p.ext.calibrated('fsr')
+    p.ext._load_saved_profile()                             # klippy:connect
+    assert p.ext.calibrated('fsr') and p.ext.profile['fsr_ref'] == ref
+    p.svv['lrt_profile'] = {**p.svv['lrt_profile'], 'version': 'v0'}     # another format: not taken
+    p = p.restart()
+    p.ext._load_saved_profile()
+    assert not p.ext.calibrated('fsr')

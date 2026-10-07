@@ -208,21 +208,39 @@ class Limn:
         self.printer.register_event_handler("klippy:connect", self._on_connect)
         self.printer.register_event_handler("klippy:ready", self._on_ready)
 
-    # Profile, in the [limn] section (SAVE_CONFIG)
+    # Profile: in the [limn] section (SAVE_CONFIG), and in the saved variables
+    # (`lrt_profile`, on disk at once): a calibration keeps over a restart without
+    # SAVE_CONFIG. The saved variables win, they are written with every calibration.
     def _load_profile(self, config):
         profile = {}
-        loaders = {
+        loaders = self._loaders()
+        for key, load in loaders.items():
+            value = config.get(key, None)
+            if value:
+                profile[key] = load(value)
+        return profile
+
+    def _loaders(self):
+        return {
             'touch_params': json.loads,
             'ref_samples': lambda v: [ProbeValue(*pt) for pt in json.loads(v)],
             'ref_z_panel': lambda v: [ProbeValue(*pt) for pt in json.loads(v)],
             'ref_z_paper': json.loads,
             'fsr_ref': json.loads,
         }
-        for key, load in loaders.items():
-            value = config.get(key, None)
-            if value:
-                profile[key] = load(value)
-        return profile
+
+    def _load_saved_profile(self):
+        '''The profile in the saved variables over the config's (klippy:connect).'''
+        saved = self._vars().get('lrt_profile')
+        if not isinstance(saved, dict) or saved.get('version') != LRT_CONF_VERSION:
+            return
+        loaders = self._loaders()
+        for key, value in saved.items():
+            if key in loaders:
+                try:
+                    self.profile[key] = loaders[key](value)
+                except (ValueError, TypeError) as e:
+                    logging.info("[LRT] the saved %s doesn't load: %s", key, e)
 
     def _save_profile(self, update):
         self.profile.update(update)
@@ -230,6 +248,10 @@ class Limn:
         configfile.set(self.name, 'version', LRT_CONF_VERSION)
         for key, value in update.items():
             configfile.set(self.name, key, json.dumps(value))
+        saved = self._vars().get('lrt_profile')
+        saved = dict(saved) if isinstance(saved, dict) and saved.get('version') == LRT_CONF_VERSION else {}
+        saved.update({key: json.dumps(value) for key, value in update.items()}, version=LRT_CONF_VERSION)
+        self._save_vars({'lrt_profile': saved})
 
     def calibrated(self, sensor):
         if sensor == 'rtp':
@@ -238,6 +260,7 @@ class Limn:
 
     # Dock lines
     def _on_connect(self):
+        self._load_saved_profile()
         if self.holder:
             self.holder.start()
         if self.dock.connect():
@@ -444,14 +467,13 @@ class Limn:
                     self._save_profile(routine.calibrate_reference(bed_z))
                 except ROUTINE_ERRORS as e:
                     raise gcmd.error(str(e))
-                gcmd.respond_info(f"[LRT] Calibrated again with the reference tool {REFERENCE_TOOL}, "
-                                  f"SAVE_CONFIG to keep it")
+                gcmd.respond_info(f"[LRT] Calibrated again with the reference tool {REFERENCE_TOOL} (saved)")
             run("UNDOCK")
             if not why:
                 return
         self._save_profile(routine.bed_z_update(self.profile, bed_z))
         gcmd.respond_info(f"[LRT] New bed z only, the reference tool {REFERENCE_TOOL} can't calibrate: {why}. "
-                          f"Tools probed now may be a little off in XY; SAVE_CONFIG to keep it")
+                          f"Tools probed now may be a little off in XY (saved)")
 
     def _no_reference(self, gcmd):
         '''Why the reference tool can't be docked to read its tag, None when it can.'''
@@ -552,7 +574,8 @@ class Limn:
         self._save_profile(profile)
         self._draw_test_mark(gcmd, bed)
         self.gcode.run_script_from_command("_BUZZ_DOOP")
-        gcmd.respond_info("[LRT] Calibrated, SAVE_CONFIG to keep it")
+        gcmd.respond_info("[LRT] Calibrated and saved (it keeps over a restart). "
+                          "Now each pen: LIMN_TOOL_CALIBRATE T=41 .. 44, its offsets go onto its tag")
 
     def cmd_PROBE_TOOL(self, gcmd):
         bed = self._bed(gcmd)
