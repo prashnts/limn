@@ -36,11 +36,13 @@ class FsrBed:
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
-                 dead_lifts=0.0, bed5=False, fresh=False):
+                 dead_lifts=0.0, bed5=False, fresh=False, shift=(0.0, 0.0), dead_cols=()):
         self.samples = samples
         self.dock = dock
-        self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
-                       for a in cfg['arrays']]
+        # shift: the sheet sits that far from where the config has it (a swap)
+        self.arrays = [FsrArray(a['hop'], np.asarray(a['origin'], float) + np.asarray(shift, float),
+                                a['col_dir'], a['row_dir'], cfg['pitch']) for a in cfg['arrays']]
+        self.dead_cols = set(dead_cols)         # columns whose line doesn't answer (a ribbon off)
         self.pos = [0.0, 0.0, cfg['z_park']]
         self.t = 0.0
         self.tool = None
@@ -152,7 +154,7 @@ class FsrBed:
         first = 1 / (1 + (max(p, 0) / 0.035) ** 4)                 # 1 at first touch, ~0 from 0.07mm
         ripple = 1 + 0.07 * np.cos(2 * np.pi * self.tip_xy()[0] / 0.4)
         weak = {} if self.fresh else self.WEAK
-        pressed = {c: curve * s * weak.get(c, 1.0) * ripple for c, s in shares.items()}
+        pressed = {c: curve * s * weak.get(c, 1.0) * ripple for c, s in shares.items() if c[1] not in self.dead_cols}
         values = []
         for row in range(array.rows):
             for col in range(array.cols):
@@ -697,3 +699,26 @@ def test_a_fresh_sheet_with_the_config_as_it_is():
         dx, dy, _ = fsr.probe_tool(profile)
         assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
         assert bed.max_press <= 0.1, (tip, bed.max_press)
+
+def test_a_map_finds_where_the_sheet_sits_and_what_doesnt_answer():
+    '''LRT_FSR_MAP on a fresh sheet that sits 1mm +X, 0.15mm +Y from the config (as the new
+    one did, 2026-10-07) with its columns 4-7 dead (a ribbon off): the fitted origin is where
+    it sits, the pitch 2.5, and those columns are silent.'''
+    from limn import fsr_map
+    cfg = bed_cfg()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(2.0, 2.13), bed5=True, fresh=True, shift=(1.0, 0.15),
+                        dead_cols=(4, 5, 6, 7))
+    bed.tool = 'T4'
+    fsr.matrix(True)
+    points = fsr.map_sheet(1, bed_z(*fsr.array(1).center(1, 1)), step=1.25, margin=1.0, tip=(2.0, 2.13))
+    result = fsr_map.analyse(points, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
+    origin = np.array(cfg['arrays'][0]['origin']) + (1.0, 0.15)
+    assert np.allclose(result['origin'], origin, atol=0.35), (result['origin'], origin)
+    assert abs(result['pitch'] - 2.5) < 0.1 and result['far'] == []
+    assert {(r, c) for r in range(4) for c in (4, 5, 6, 7)} <= set(result['silent'])
+    assert not {(r, c) for r in range(4) for c in range(4)} & set(result['silent']), result['silent']
+    # A spot that never answers (the margin round the cells, a dead cell) goes 0.06 under where
+    # the last touch and the mesh put the sheet: up to ~0.12 past touch where the mesh is off
+    assert bed.max_press <= 0.125 and not bed.dragged, bed.max_press
+    picture = fsr_map.svg(points, result, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
+    assert picture.startswith('<svg') and picture.count('<rect') > len(points)

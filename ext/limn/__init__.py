@@ -50,6 +50,7 @@ from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshe
 from . import marks
 from .rtp import Rtp
 from .fsr import Fsr, judge_survey
+from . import fsr_map
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
 from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
@@ -144,6 +145,7 @@ class Limn:
         self._dry_beep_at = 0.0
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         self.dry_pens = PENS_FILE
+        self.fsr_map_dir = os.path.expanduser("~/printer_data/logs/fsr-maps")   # LRT_FSR_MAP writes there (fsr_map_dir)
         # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press}) of the pen library
         self._pens = (None, {}, set(), {})
         self.manual = None          # the tool docked by hand: its tool_tags entry, None: none
@@ -169,6 +171,7 @@ class Limn:
             self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
             self.manual_window = float(config.get('manual_dock_window', MANUAL_WINDOW))
             self.manual_x_max = float(config.get('manual_dock_x_max', MANUAL_X_MAX))
+            self.fsr_map_dir = config.get('fsr_map_dir', '~/printer_data/logs/fsr-maps')
 
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
@@ -187,6 +190,9 @@ class Limn:
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
              "LRT_FSR_MEASURE [BED_Z=] [TIP=x,y] [Z=] [PRESS=]: measure the carried tool on the FSR "
              "like LRT_PROBE_TOOL, only report it"),
+            ('LRT_FSR_MAP', self.cmd_FSR_MAP,
+             "LRT_FSR_MAP [STEP=1.25] [MARGIN=1] [RISE=40] [DEPTH=0.02] [TIP=x,y]: touch the FSR spot by spot, "
+             "which cell answers where: its layout, origin and pitch fitted, a picture in the logs (fsr-maps/)"),
             ('LRT_FSR_SURVEY', self.cmd_FSR_SURVEY,
              "LRT_FSR_SURVEY [CLEAR=1]: press every cell of the FSR with the carried tool (a felt tip), "
              "find the faulty and weak ones, the noise, an aim; saved and used by every measurement after"),
@@ -730,6 +736,57 @@ class Limn:
         gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={m['z'] - z_bed:.3f} "
                           f"over bed_z={z_bed:.3f}) tip={[round(v, 2) for v in m['tip']]} "
                           f"gaps={[round(g, 3) for g in m['gaps']]}")
+
+    def cmd_FSR_MAP(self, gcmd):
+        '''Which cell answers where, the sheet touched spot by spot (fsr_map.py): after a swap,
+        to set the array's origin (and see a ribbon off by a pin). Writes JSON and SVG to
+        `fsr_map_dir` (default ~/printer_data/logs/fsr-maps: Moonraker serves it).'''
+        bed = self._bed(gcmd, 'fsr')
+        self._need_tool(gcmd)
+        self._ensure_meshes(gcmd)
+        fsr = self._routine(gcmd, bed)
+        fsr.cfg = bed['fsr']                       # the config alone: not a survey
+        fsr.arrays = {a['hop']: a for a in bed['fsr']['arrays']}
+        tip = gcmd.get('TIP', None)
+        tip = tuple(float(v) for v in tip.split(',')) if tip else (0.0, 0.0)
+        step = gcmd.get_float('STEP', 1.25, minval=0.5, maxval=5.0)
+        args = dict(step=step, margin=gcmd.get_float('MARGIN', 1.0, minval=0.0, maxval=5.0),
+                    rise=gcmd.get_float('RISE', 40.0, minval=10.0), depth=gcmd.get_float('DEPTH', 0.02, minval=0.0, maxval=0.1),
+                    tip=tip)
+        try:
+            cell = tuple(bed['fsr']['z_cell'])
+            bed_z = self._fsr_bed_z(gcmd, fsr, cell)
+            self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+            stamp = time.strftime('%Y%m%d-%H%M%S')
+            folder = os.path.expanduser(self.fsr_map_dir)
+            os.makedirs(folder, exist_ok=True)
+            for hop, spec in fsr.arrays.items():
+                fsr.matrix(True)
+                try:
+                    points = fsr.map_sheet(hop, bed_z, **args)
+                finally:
+                    fsr.matrix(False)
+                pitch = bed['fsr']['pitch']
+                result = fsr_map.analyse(points, spec, pitch, bed['fsr']['respond'])
+                name = f"{self.bed}-hop{hop}-{stamp}"
+                meta = {'bed': self.bed, 'hop': hop, 'date': stamp, 'tip': list(tip), 'args': {k: v for k, v in args.items() if k != 'tip'},
+                        'config': {'origin': list(spec['origin']), 'pitch': pitch}}
+                with open(os.path.join(folder, name + '.json'), 'w') as f:
+                    f.write(fsr_map.to_json(points, result, meta))
+                with open(os.path.join(folder, name + '.svg'), 'w') as f:
+                    f.write(fsr_map.svg(points, result, spec, pitch, bed['fsr']['respond'], step,
+                                        title=f"{self.bed} hop {hop}, {stamp}: which cell answers where"
+                                              f"{' (toolhead coordinates)' if tip == (0.0, 0.0) else ''}"))
+                coords = 'toolhead' if tip == (0.0, 0.0) else 'tip'
+                gcmd.respond_info(
+                    f"[LRT][Map] hop {hop}: {result['answered']} of {result['spots']} spots answered; "
+                    f"fitted origin {result['origin']} ({coords} coordinates; beds.py has {list(spec['origin'])}"
+                    f"{' for the tip' if coords == 'toolhead' else ''}), pitch {result['pitch']} (config {pitch}); "
+                    f"silent {result['silent'] or 'none'}; answering far from their place {result['far'] or 'none'}; "
+                    f"touch z {result['touch']}")
+                gcmd.respond_info(f"[LRT][Map] saved: logs/fsr-maps/{name}.svg and .json")
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
 
     def cmd_FSR_SURVEY(self, gcmd):
         '''Every cell pressed with the carried tool: after a sensor swap, what the config can't
