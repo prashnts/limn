@@ -90,6 +90,27 @@ clear_z = 7.5                     # machine Z (no mesh, no dz): sideways moves c
 focus_z = 9.2                     # sharpest on a sticker on the paper, 2026-09-30 (a flat peak 9.0-9.4)
 z_min = 4.0                       # never lower (the tube was lengthened 2026-09-30): lower it once measured
 
+[picam]
+short = "Pi camera"
+name = "Pi Zero 2 W + Pi camera (limn_picam)"
+kind = "camera"
+# Docked by hand (DOCK_MANUAL): on the carriage until taken off, never picked up from a holder.
+# Its own server (limn_endoscope/picam): full-res stills; /snapshot.jpg is the fast preview frame
+webcam = "http://limn-picam.local:4250/capture.jpg"
+# fov, turn, center, focus_z: measure once it is on (a ruler or a printed grid), as for cam-u20
+clear_z = 7.5
+z_min = 5.0
+
+[rxcam]
+short = "Radxa 13M"
+name = "Radxa Cubie + Camera 13M 214 (limn_picam --backend radxa)"
+kind = "camera"
+# Docked by hand (DOCK_MANUAL), like picam. 4208 x 3120 through the Cubie's ISP: JPEG only, no DNG
+webcam = "http://rx-cam0.local:4250/capture.jpg"
+# fov, turn, center, focus_z: measure once it is on (with a clip-on macro lens: a few mm of focus only)
+clear_z = 7.5
+z_min = 5.0
+
 [endo]
 short = "Endoscope"
 name = "Limn endoscope (OVM6946, Teensy)"

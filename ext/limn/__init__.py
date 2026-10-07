@@ -18,6 +18,8 @@
 #   tool_holder_scan_idle: 2                # s between listens for a tag held to the reader
 #   tool_holder_scan_printing: 5            #   by hand, idle / printing; 0: only after a hand
 #                                           #   was on the holders (then every 0.5 s for a minute)
+#   manual_dock_window: 20                  # s from a scan by hand until the tool is on the carriage
+#   manual_dock_x_max: 110                  # X the carriage may reach with a tool docked by hand
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -67,6 +69,13 @@ SCAN_LATE = 60.0        # s after which a scan is forgotten without a word
 SCAN_SAME = 3.0         # s: the same tag again within this is the same scan
 SCAN_FAST = 0.5         # s between listens after a hand was on the holders,
 SCAN_AWAKE = 60.0       #   for this long
+# Docked by hand: scanned, then pushed onto the carriage (the key's switch triggers)
+# within MANUAL_WINDOW. It has no holder: the carriage stays out of the dock (X up
+# to manual_dock_x_max) until DOCK_CLEAR, or the same tag held to the reader again.
+MANUAL_TOOL = 90        # currently_docked_tool of a tool docked by hand
+MANUAL_WINDOW = 20.0    # s from the scan until the key's switch triggers
+MANUAL_POLL = 0.2       # s between looks at the key's switch, in that window
+MANUAL_X_MAX = 110.0
 INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
@@ -132,6 +141,12 @@ class Limn:
         self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
         self.dry_pens = PENS_FILE
         self._pens = (None, {}, set())  # (mtime, {pen key: dry minutes}, keys with no ink) of the pen library
+        self.manual = None          # the tool docked by hand: its tool_tags entry, None: none
+        self.manual_window, self.manual_x_max = MANUAL_WINDOW, MANUAL_X_MAX
+        self._manual_timer = None   # looks at the key's switch after a scan, while the carriage is empty
+        self._key_closed_seen = False
+        self._cleared = None        # the tag that just took the tool docked by hand off, while held there
+        self._check_move = None     # the kinematics' own check_move, while the dock is fenced off
         bus = config.getint('tool_holder_i2c_bus', None)
         if bus is not None:
             self._attach_holder(ToolHolder(
@@ -147,6 +162,8 @@ class Limn:
             self.dry_pens = os.path.expanduser(config.get('tool_dry_pens', PENS_FILE))
             self.scan_idle = float(config.get('tool_holder_scan_idle', 2.0))
             self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
+            self.manual_window = float(config.get('manual_dock_window', MANUAL_WINDOW))
+            self.manual_x_max = float(config.get('manual_dock_x_max', MANUAL_X_MAX))
 
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
@@ -179,6 +196,9 @@ class Limn:
             ('TOOL_LEDS', self.cmd_TOOL_LEDS, "Redraw the tool holder and UI LEDs, show their states"),
             ('TOOL_DRY', self.cmd_TOOL_DRY,
              "TOOL_DRY [RESET=1 [T=41]] [SILENCE=1]: how long each known pen has been out of its cap"),
+            ('DOCK_MANUAL', self.cmd_DOCK_MANUAL,
+             "Dock a tool by hand: hold its tag to the reader, then push it onto the carriage"),
+            ('DOCK_CLEAR', self.cmd_DOCK_CLEAR, "The tool docked by hand is off the carriage: the dock is free again"),
         ):
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
@@ -227,6 +247,7 @@ class Limn:
             self.reactor.register_callback(lambda e: self._probe_tag_reader())
             self.holder.start_scanning(self._scan_gate)
             self.reactor.register_timer(self._dry_tick, self.reactor.NOW)
+            self._manual_restore()
 
     def _on_data(self, data):
         if not (isinstance(data, dict) and {'hop', 'kind', 'state', 'values'} <= data.keys()):
@@ -997,6 +1018,13 @@ class Limn:
 
     def _on_scan(self, tag):
         now = self.reactor.monotonic()
+        if self.manual and tag.uid == self.manual['uid']:
+            self._manual_clear(f"{tag.name} was held to the reader again")      # taken off by hand
+            self._cleared = {'uid': tag.uid, 'seen': now}
+            return
+        if self._cleared and self._cleared['uid'] == tag.uid and now - self._cleared['seen'] < SCAN_SAME:
+            self._cleared['seen'] = now         # still held there after taking it off: no new scan
+            return
         if self._carried() and tag.uid in (self.tag.get('uid'), self._vars().get('tool_tag_uid')):
             return                  # the carried tool, near the reader
         last = self.scan
@@ -1005,9 +1033,12 @@ class Limn:
         self._request_leds()
         if last and last['tag'].uid == tag.uid and now - last['seen'] < SCAN_SAME:
             return                  # still held there
+        carriage = '' if self._carried() else f", or onto the carriage within {self.manual_window:.0f} s"
         self.gcode.respond_info(f"[Tag] Scanned {self._describe(tag)}: put it into its holder "
-                                f"within {SCAN_WINDOW:.0f} s")
+                                f"within {SCAN_WINDOW:.0f} s{carriage}")
         self._beep("_BUZZ_RFID_OK")
+        if not self._carried():
+            self._watch_key()
 
     def _take_scan(self, added, now):
         '''The holders a hand just filled -> (holder, Tag) when one took the scanned tool.'''
@@ -1036,8 +1067,14 @@ class Limn:
         self._beep("_BUZZ_RFID_ERR")
         return None
 
+    def _no_manual(self, gcmd, what):
+        if self.manual:
+            raise gcmd.error(f"[Dock] {self.manual['name']} was docked by hand: {what} would take it into the "
+                             f"dock. Take it off and DOCK_CLEAR (or hold it to the reader) first")
+
     def cmd_TOOL_TAG_READ(self, gcmd):
         self._require_holder(gcmd)
+        self._no_manual(gcmd, "reading its tag")
         tag, tries, error = self._at_reader(gcmd, self.holder.read_tag)
         if tag is None:
             self._set_tag({'ok': False, 'error': error, 'tries': tries}, 'error')
@@ -1048,6 +1085,7 @@ class Limn:
 
     def cmd_TOOL_TAG_WRITE(self, gcmd):
         self._require_holder(gcmd)
+        self._no_manual(gcmd, "writing its tag")
         # COLOR without the # (it starts a comment in G-code); COLOR=none clears it
         color = gcmd.get('COLOR', None)
         if color is not None:
@@ -1094,6 +1132,134 @@ class Limn:
         t = self.scan['tag']
         return {'uid': t.uid, 'name': t.name, 'pen': t.pen, 'color': t.color,
                 'left': round(SCAN_WINDOW - (eventtime - self.scan['seen']), 1)}
+
+    # Docked by hand: no holder, the key's switch says it is on (MANUAL_TOOL)
+    def _key_open_at(self, eventtime):
+        '''The key's switch now, without waiting on the moves (as _key_open() does):
+        for a timer. None: no such endstop.'''
+        query = self.printer.lookup_object('query_endstops', None)
+        mcu = self.printer.lookup_object('mcu', None)
+        for endstop, name in getattr(query, 'endstops', ()):
+            if name == KEY_ENDSTOP:
+                when = mcu.estimated_print_time(eventtime) if mcu else 0.0
+                return bool(endstop.query_endstop(when))
+        return None
+
+    def _watch_key(self):
+        '''After a scan with the carriage empty: the key's switch going from closed to
+        triggered (a tool pushed on) within manual_dock_window docks the scanned tool.'''
+        self._key_closed_seen = False
+        if self._manual_timer is None:
+            self._manual_timer = self.reactor.register_timer(self._manual_tick, self.reactor.NOW)
+        else:
+            self.reactor.update_timer(self._manual_timer, self.reactor.NOW)
+
+    def _manual_tick(self, eventtime):
+        scan = self.scan
+        if not scan or self._carried() or eventtime - scan['seen'] > self.manual_window:
+            return self.reactor.NEVER
+        if self.holder.busy() or self.leds.phase in CHANGE_PHASES or self._printing():
+            self._key_closed_seen = False       # the key moved by G-code isn't a hand
+            return eventtime + MANUAL_POLL
+        try:
+            key = self._key_open_at(eventtime)
+        except Exception as e:
+            logging.info("[Dock] the key's switch: %s", e)
+            return eventtime + MANUAL_POLL
+        if key is None:
+            return self.reactor.NEVER
+        if key and self._key_closed_seen:
+            self._manual_dock(scan['tag'])
+            return self.reactor.NEVER
+        self._key_closed_seen = self._key_closed_seen or not key
+        return eventtime + MANUAL_POLL
+
+    def _manual_dock(self, tag):
+        now = self.reactor.monotonic()
+        self.scan = None
+        entry = self._tag_entry(tag, 'hand')
+        self.manual = entry
+        self._save_vars({'currently_docked_tool': MANUAL_TOOL, 'tool_offset_x': tag.dx, 'tool_offset_y': tag.dy,
+                         'tool_offset_z': tag.dz, 'tool_name': tag.name, 'tool_tag_uid': tag.uid,
+                         'manual_tool': entry})
+        tags = self._tags()
+        tags[str(MANUAL_TOOL)] = entry
+        self._save_vars({'tool_tags': tags})
+        self.tag = {'ok': True, 'uid': tag.uid, 'dx': tag.dx, 'dy': tag.dy, 'dz': tag.dz, 'name': tag.name,
+                    'reference': tag.reference, 'pen': tag.pen, 'color': tag.color, 'tries': 1, 'read_at': now}
+        self._fence(True)
+        self.leds.hand('taken', now, now + SCAN_WINDOW)
+        self._sync_drying()
+        self._request_leds()
+        self.gcode.respond_info(f"[Dock] {self._describe(tag)} docked by hand. The dock is off limits "
+                                f"(X up to {self.manual_x_max:g}) until it is taken off: DOCK_CLEAR, "
+                                f"or hold it to the reader again")
+        self._beep("_BUZZ_711")
+        self.printer.send_event("limn:manual_dock", entry)
+
+    def _manual_clear(self, why):
+        name = self.manual['name'] if self.manual else ''
+        self.manual = None
+        self._save_vars({**CARRIAGE_VARS, 'tool_tag_uid': '', 'manual_tool': None})
+        tags = self._tags()
+        if tags.pop(str(MANUAL_TOOL), None) is not None:
+            self._save_vars({'tool_tags': tags})
+        self.tag = {'ok': False}
+        self._fence(False)
+        self._sync_drying()
+        self._request_leds()
+        self.gcode.respond_info(f"[Dock] {name} is off the carriage ({why}): the dock is free again")
+        self._beep("_BUZZ_RFID_OK")
+        self.printer.send_event("limn:manual_dock", None)
+
+    def _manual_restore(self):
+        '''After a restart: the tool docked by hand is still on, the dock still fenced off.'''
+        svv = self._vars()
+        entry = svv.get('manual_tool')
+        if self._carried() == MANUAL_TOOL and isinstance(entry, dict):
+            self.manual = entry
+            self._fence(True)
+            self.gcode.respond_info(f"[Dock] {entry.get('name')} is still docked by hand: the dock is off limits "
+                                    f"until DOCK_CLEAR")
+        elif entry:
+            self._save_vars({'manual_tool': None})
+
+    def _fence(self, on):
+        '''Keeps the carriage out of the dock (X over manual_dock_x_max): wraps the
+        kinematics' check_move, which homing doesn't reset (unlike its limits).'''
+        toolhead = self.printer.lookup_object('toolhead', None)
+        kin = toolhead.get_kinematics() if hasattr(toolhead, 'get_kinematics') else None
+        if kin is None:
+            return
+        if not on:
+            if self._check_move is not None:
+                kin.check_move, self._check_move = self._check_move, None
+            return
+        if self._check_move is None:
+            self._check_move = kin.check_move
+        check, x_max = self._check_move, self.manual_x_max
+
+        def check_move(move):
+            if move.end_pos[0] > x_max:
+                raise move.move_error(f"A tool docked by hand is on: the dock is off limits, X up to {x_max:g} "
+                                      f"(DOCK_CLEAR once it is off)")
+            check(move)
+        kin.check_move = check_move
+
+    def cmd_DOCK_MANUAL(self, gcmd):
+        self._require_holder(gcmd)
+        if self._carried():
+            what = self.manual['name'] if self.manual else f"tool {self._carried()}"
+            raise gcmd.error(f"[Dock] {what} is on the carriage: UNDOCK (or DOCK_CLEAR) first")
+        self._wake(self.reactor.monotonic())
+        gcmd.respond_info(f"[Dock] Hold the tool's tag to the reader, wait for the beep, then push it onto "
+                          f"the carriage within {self.manual_window:.0f} s")
+
+    def cmd_DOCK_CLEAR(self, gcmd):
+        if not self.manual and self._carried() != MANUAL_TOOL:
+            gcmd.respond_info("[Dock] No tool docked by hand")
+            return
+        self._manual_clear("DOCK_CLEAR")
 
     # Pens drying out (drying.py): a known pen in the machine is out of its cap
     def _pens_in(self):
@@ -1207,6 +1373,7 @@ class Limn:
             'scan': self._scan_status(eventtime),
             'drying': self.drying.status(self.clock(), self._printing()) if self.drying else {},
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
+            'manual': self.manual,      # the tool docked by hand (its tags entry; also tools['90']), None: none
             'leds': {k: v for k, v in self._led_states.items() if v},     # what the UI and dock LEDs show (leds.py)
         }
 

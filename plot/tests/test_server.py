@@ -369,3 +369,29 @@ def test_clear_all_and_undo(client):
     assert len(client.get('/api/state').json()['job']['objects']) == 2
     assert client.delete('/api/objects').json()['job']['objects'] == []
     assert len(client.post('/api/undo').json()['state']['job']['objects']) == 2   # one step back: both again
+
+
+def test_camera_docked_by_hand(client, monkeypatch):
+    '''A camera tool docked by hand (printer.limn.tools['90']) whose pen has its own URL: a fixed camera,
+    its stream among the webcams.'''
+    tags = {'90': {'uid': '04aa', 'name': 'Pi HQ', 'pen': 'picam', 'color': '', 'dx': 0, 'dy': 0, 'dz': 0,
+                   'reference': False, 'stale': False, 'by': 'hand'}}
+
+    class R:
+        status_code = 200
+        def __init__(self, j): self._j = j
+        def raise_for_status(self): pass
+        def json(self): return self._j
+
+    def get(url, params=None, timeout=None):
+        if url.endswith('/server/webcams/list'):
+            return R({'result': {'webcams': []}})
+        return R({'result': {'status': {'print_stats': {'state': 'standby'}, 'limn': {'tools': tags}}}})
+
+    monkeypatch.setattr(server.requests, 'get', get)
+    client.get('/api/printer')
+    cams = client.get('/api/camera').json()['cameras']
+    assert cams['manual']['fixed'] and cams['manual']['name'] == 'Pi HQ'
+    assert cams['manual']['webcam'].endswith('/capture.jpg')
+    w = {c['name']: c for c in client.get('/api/webcams').json()['webcams']}
+    assert w['Pi HQ']['stream_url'] == 'http://limn-picam.local:4250/stream.mjpg'

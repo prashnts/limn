@@ -42,6 +42,28 @@
 - [ ] Resume a scan cut short from the web tool (the job skipping the tiles it has).
 - [ ] Focus stacking for film; refocus per tile tried only in tests.
 - Film scanning: the backlit bed, stitched tiles, `refocus` for curled film.
+- Done 2026-10-07: the Pi camera tool, docked by hand (`DOCK_MANUAL`, `DOCK_CLEAR`, README): `limn_endoscope/picam` (limn_picam: Pi Zero 2 W + HQ / Camera Module 3, HTTP on :4250, /snapshot.jpg, /capture.jpg, /capture.dng, /stream.mjpg, controls, autofocus), `picam` in pens.toml (fixed while on), the dock fenced off at X 110.
+  - [ ] On the plotter: does pushing a tool on trigger the key's switch (`QUERY_ENDSTOPS` with the key closed, then pushed)? It docks on closed -> triggered within 20 s of the scan. Measure `manual_dock_x_max` with the tool on (110 is a guess: the reader is at X135, the holders from X125).
+  - [ ] Write its tag: the carriage empty, hold the tag to the reader, `TOOL_TAG_WRITE PEN=picam NAME="Pi HQ" MOVE=0` (it also saves the tag's offsets as the carried tool's: `DOCK_RESET` after). Set its URL in pens.toml, then fov / turn / center / focus_z as for cam-u20.
+  - [ ] Scans: the Scan tab's focus sweep moves Z; with the Camera Module 3, autofocus (`/capture.jpg?af=1`) instead, a setting for it.
+- Done 2026-10-07: the Radxa camera tool: the same limn_picam, `--backend radxa` (a Cubie A7A / A7Z + Camera 13M 214, IMX214, 4208 x 3120; GStreamer with Radxa's ISP in v4l2src, `en-awisp=1`), `rxcam` in pens.toml. The HQ stays on the Pi Zero 2 W (`picam`). Both tethered on their own power, docked by hand. Tested on GStreamer's test picture only.
+  - [ ] On the Cubie: `install.sh --backend radxa`; which V4L2 controls it has (exposure, focus: `v4l2-ctl -d /dev/video1 --list-ctrls`; maybe on a subdevice), whether autofocus works through them. The forum has reports of grey / near black-and-white pictures with the A733 images: check colour first.
+- **Clip-on phone macro lenses on the 13M (2026-10-07 discussion).** Worth trying, for paper and quick looks; the HQ stays the film camera (raw, a real lens).
+  - A close-up lens in front of a camera focused far: magnification m ≈ f_camera / f_clip-on, the film at about f_clip-on away. The 13M's lens is a phone one, f ≈ 3.5-4 mm (to measure), pixels 1.12 um. f_clip 25 mm: m ≈ 0.15, ~135 px/mm (3400 dpi), a 31 x 23 mm view (a 35 mm frame in one or two shots), ~25 mm away. f_clip 12.5 mm: m ≈ 0.3, ~270 px/mm, 15.5 x 11.5 mm, ~12 mm away.
+  - Depth of field at f/2.2: ~0.5 mm at m 0.15, ~0.15 mm at m 0.3: flat film, Z or the camera's own focus (its lens moves a few mm' worth: fine focus, stacking without Z).
+  - Distortion is the easy part (a grid shot, as the endoscope's lens.py, or Hugin's barrel). What can't be corrected: soft corners and field curvature, colour fringes, flare, and a clip-on that sits off-axis or tilted. So: the macro element only (of a wide + macro kit, the small one alone, never the wide/fisheye), held square and centred by a printed mount, not the phone clip; only the middle of each shot (more overlap).
+  - The 13M gives the ISP's 8-bit output (its tone curve, sharpening): inverting negatives from it loses range. Fine for proofs.
+  - [ ] Try: each clip-on on a ruler and a printed grid: px/mm, working distance, where sharpness falls off from the middle, the fringes. Keep the best one, design the mount.
+- **Film camera choice (2026-10-07 discussion).** 35 mm frame 36 x 24 mm; film holds ~4000-5000 dpi (157-200 px/mm) of real detail, past that it is grain. 160-200 px/mm over a frame is ~22-35 MP. Fewer, bigger tiles stitch better: smooth film (sky, the base between frames) gives nothing to register on (see the false matches over blank paper above), so place tiles from carriage XY and use features only to fine-tune.
+  - **Pick: the HQ camera (IMX477)** 4056 x 3040, 1.55 um pixels, sensor 6.29 x 4.71 mm, **12-bit raw** (DNG via picamera2/rpicam-still: dense negatives and the orange mask need the range; no MJPEG), manual exposure (fixes the flicker too: exposure a whole number of its periods), C/CS lenses on extension tubes.
+  - Magnification m = 1.55 um x px/mm: m 0.25 → 160 px/mm, a 25 x 19 mm view (a frame in 2-4 tiles); m 0.4 → 260 px/mm, 15.7 x 11.8 mm (~3x3 tiles), oversampled to cover a soft lens.
+  - Extension = m x f, lens-to-film ≈ f(1 + 1/m): 6 mm wide: 1.5-2.4 mm, ~21-30 mm away (lightest, soft corners: crop to the centre); 16 mm: 4-6.5 mm, ~56-80 mm (the likely best of the set); 35 mm: 9-14 mm, ~120-175 mm (too tall for the head). The 10x macro zoom: too heavy; maybe a fixed-stand reference.
+  - Aperture: small pixels are diffraction-bound early. Effective f-number N(1+m) ≲ 4-5 keeps the Airy disc to ~2-3 px, so f/2.8-4, and the depth of field is then only ~0.2-0.3 mm: hold the film flat (glass or a tensioned holder), or focus-stack by Z.
+  - Pi Camera V3 / Radxa 12MP AF: phone lenses, closest focus ~10 cm → ~35 px/mm; they need a close-up lens and the optics aren't made for it. Their one trick: a focus sweep by the VCM without moving Z. UVC: the U20 already gives ~126 px/mm (~3200 dpi) at 15.25 x 8.58 mm, so it is the baseline; but 8-bit MJPEG.
+  - [ ] Weigh the HQ board + each lens + tubes against what the head carries.
+  - [ ] CSI to the head: a long flex ribbon to the Pi (fatigue on a moving carriage) or the Pi Zero on the tool (above).
+  - [ ] Test before building: HQ + 16 mm + ~5 mm tube on a ruler and a negative's edge print, f/2.8 / 4 / 5.6: px/mm, where it stops getting sharper, grain visible or not.
+  - [ ] Light: high-CRI white or RGB for colour negatives, no PWM (above).
 
 ## The web UI: keeping it maintainable (2026-10-01 discussion)
 
