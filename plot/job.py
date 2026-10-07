@@ -61,6 +61,18 @@ class TextSpec(BaseModel):
     fit: Literal['cap', 'width'] = 'cap'    # line: caps as high as the source's; width: as wide too
 
 
+class RasterSpec(BaseModel):
+    '''What becomes of a drawing's <image>s (raster.py): left out, or made into lines.'''
+    model_config = ConfigDict(extra='forbid')
+    mode: Literal['skip', 'dither', 'lines', 'halftone'] = 'skip'
+    pitch: float = Field(0.5, gt=0.05)      # mm as plotted: between lines, dither cells, a dot's turns
+    cell: float = Field(2.0, gt=0.2)        # halftone: mm between dots
+    colour: str = Field('#000000', pattern=r'^#[0-9a-fA-F]{6}$')    # its colour's layer draws it
+    gamma: float = Field(1.0, gt=0.1, lt=5)  # over 1: lighter, more paper
+    paper: float = Field(0.1, ge=0, lt=1)   # darkness up to this is the paper: no ink (a light background)
+    invert: bool = False
+
+
 class SurfaceSpec(BaseModel):
     model_config = ConfigDict(extra='forbid')
     kind: Literal['flat', 'heightmap'] = 'flat'
@@ -107,6 +119,7 @@ class Obj(BaseModel):
     shapes: dict[str, ShapePaint] = {}  # by shape index: painted apart from their colour
     sets: list[ShapeSet] = []       # shapes grouped by hand; the later set wins for a shape in two
     group: str | None = None        # drawings of one group move and hide together (the UI)
+    raster: RasterSpec = Field(default_factory=RasterSpec)  # its <image>s: left out, or made into lines
     text: TextSpec = Field(default_factory=TextSpec)     # every <text>,
     texts: dict[str, TextSpec] = {}     # but these, by index
     placement: Placement = Field(default_factory=Placement)

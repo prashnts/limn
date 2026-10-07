@@ -1279,6 +1279,7 @@ function renderObjectPanel() {
     ${pickedHtml(o)}
     ${setsHtml(o)}
     ${I.texts.length ? `<h3>Texts (${I.texts.length})</h3>${texts}` : ''}
+    ${imagesHtml(o, I)}
     <h3>Masked regions${o.masks.length ? ` (${o.masks.length})` : ''}</h3>
     ${o.masks.length ? `<ul class="list masks">${o.masks.map((m, i) => `<li data-m="${i}" class="${maskSel && maskSel.id === o.id && maskSel.i === i ? 'on' : ''}">
         <span class="name">${num(Math.max(...m.map((p) => p[0])) * o.scale - Math.min(...m.map((p) => p[0])) * o.scale, 1)} × ${num(Math.max(...m.map((p) => p[1])) * o.scale - Math.min(...m.map((p) => p[1])) * o.scale, 1)} mm</span>
@@ -1291,6 +1292,27 @@ function renderObjectPanel() {
 
 async function patchObj(id, body) { setState(await api('PATCH', `/api/objects/${id}`, body)); }
 
+// Its pictures (<image>s): left out, or made into lines in one colour, drawn by that colour's layer
+function imagesHtml(o, I) {
+  const ims = I.images || [];
+  if (!ims.length) return '';
+  const r = o.raster, on = r.mode !== 'skip';
+  const g = on && I.groups.find((x) => x.key === `stroke ${r.colour.toLowerCase()}`);
+  return `<h3 title="The SVG's pictures: a pen can't draw them as they are">Images (${ims.length})</h3>
+    <div class="form raster">
+      <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      ${on ? `<label for="r-pitch">${r.mode === 'halftone' ? 'Line gap' : 'Pitch'}</label><div class="row"><input id="r-pitch" data-r="pitch" type="number" step="0.05" min="0.1" value="${num(r.pitch)}"
+          title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. About the pen's line: finer is darker and slower"> <span class="note">mm</span></div>
+        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.5" value="${num(r.cell)}" title="mm between dots, as plotted"> <span class="note">mm</span></div>` : ''}
+        <label for="r-gamma">Gamma</label><div class="row"><input id="r-gamma" data-r="gamma" type="number" step="0.1" min="0.2" max="4" value="${num(r.gamma)}" title="Over 1: lighter, more paper; under 1: darker"></div>
+        <label for="r-paper">Paper up to</label><div class="row"><input id="r-paper" data-r="paper" type="number" step="5" min="0" max="95" value="${num(r.paper * 100, 0)}"
+          title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span></div>
+        <label for="r-colour">Colour</label><div class="row"><input id="r-colour" data-r="colour" type="color" value="${esc(r.colour)}" title="Its lines are this colour: the layer of this colour draws them (drag its chip to another pen)">
+          <label class="check"><input type="checkbox" data-r="invert"${r.invert ? ' checked' : ''}> invert</label></div>
+        <label></label><p class="note">${g ? `${num(g.length / 1000, 1)} m of line, drawn by ${esc(target(layerGroup(o, g.key)))}` : 'Nothing dark enough to draw'} · ${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</p>` : ''}
+    </div>`;
+}
+
 $('#object-panel').addEventListener('change', async (e) => {
   const o = obj(sel); if (!o) return;
   const t = e.target;
@@ -1299,6 +1321,11 @@ $('#object-panel').addEventListener('change', async (e) => {
   }
   if (t.id === 'f-s') return scaleTo(o, +t.value / 100);
   if (t.id === 'f-occ') return patchObj(o.id, { occlude: t.checked });
+  const rk = t.dataset.r;
+  if (rk) {
+    const v = rk === 'invert' ? t.checked : ['mode', 'colour'].includes(rk) ? t.value : rk === 'paper' ? +t.value / 100 : +t.value;
+    return patchObj(o.id, { raster: { ...o.raster, [rk]: v } });
+  }
   const cf = t.dataset.cf;
   if (cf) {
     const c = chipsOf(o).find((x) => `${o.id}|${x.keys[0]}` === openChip);
@@ -2016,8 +2043,36 @@ async function addSvgs(files, at) {
       const o = r.state.job.objects.find((x) => x.id === r.id);
       setState(await api('PATCH', `/api/objects/${r.id}`, { placement: { ...o.placement, x: +(at.x - s[0] / 2).toFixed(2), y: +(at.y - s[1] / 2).toFixed(2) } }));
     } else setState(r.state);
-    toast(`${r.id} added` + (r.images ? ` · ${r.images} image${r.images > 1 ? 's' : ''} taken out: they can't be plotted` : ''));
+    toast(`${r.id} added` + (r.unreadable ? ` · ${r.unreadable} image${r.unreadable > 1 ? 's' : ''} linked, not embedded: left out` : ''));
+    if (r.images) await askImages(r.id, r.images);
   }
+}
+// An SVG with pictures in it: a pen can't draw them as they are. Leave them out, or make
+// them into lines (dither, lines, halftone: Obj.raster, raster.py); the drawing's Images
+// section tunes them after.
+const RASTER_MODES = [['skip', 'Leave out', 'Not drawn: only the rest of the SVG'],
+  ['dither', 'Dither', 'Dots of ink on a fine grid, joined along each row: the most detail, the longest plot'],
+  ['lines', 'Lines', 'Rows of lines, more of them where it is darker: quick to plot, a drawn look'],
+  ['halftone', 'Halftone', 'Dots on a grid, bigger where it is darker, each a small spiral: a printed look']];
+function askImages(id, n) {
+  return new Promise((done) => {
+    const el = $('#image-ask');
+    el.innerHTML = `<div class="card"><h2>${n} picture${n > 1 ? 's' : ''} in ${esc(id)}</h2>
+      <p>A pen can't draw ${n > 1 ? 'them' : 'it'} as ${n > 1 ? 'they are' : 'it is'}: leave ${n > 1 ? 'them' : 'it'} out, or make ${n > 1 ? 'them' : 'it'} into lines.
+        You can change this later (the drawing's <i>Images</i>).</p>
+      <div class="buttons">${RASTER_MODES.map(([m, label, title]) => `<button data-raster="${m}" class="${m === 'skip' ? '' : 'primary'}" title="${esc(title)}">${label}</button>`).join('')}</div></div>`;
+    el.hidden = false;
+    const pick = async (m) => {
+      el.hidden = true;
+      el.onclick = null;
+      if (m && m !== 'skip') {
+        await patchObj(id, { raster: { ...obj(id).raster, mode: m } });
+        toast(`${id}: ${m}: its lines are in the ${obj(id).raster.colour} layer`);
+      }
+      done();
+    };
+    el.onclick = (e) => { if (e.target === el) pick('skip'); else if (e.target.dataset.raster) pick(e.target.dataset.raster); };
+  });
 }
 $('#svg-input').addEventListener('change', (e) => { addSvgs([...e.target.files]); e.target.value = ''; });
 window.addEventListener('dragover', (e) => { e.preventDefault(); $('#drop').classList.add('over'); });

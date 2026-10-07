@@ -30,6 +30,7 @@ from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, Placement, ShapePaint
 from .preview import parse
 from .profile import bed_papers, load_pens, reach
+from .raster import raster_shapes
 from .slicer import Cache, default_groups, fillable, text_shapes
 from .tools import DRAW, Tool
 
@@ -37,7 +38,7 @@ STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
 MANUAL_HOLDER = 90      # printer.limn.tools' key of the tool docked by hand (MANUAL_TOOL in ext/limn)
 OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'sets', 'group', 'text', 'texts', 'surface',
-            'masks'}
+            'masks', 'raster'}
 SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
             'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
 
@@ -129,10 +130,19 @@ class Workspace:
         objects = {}
         for o in self.job.objects:
             d = self.drawing(o)
-            defaults = default_groups(d, tools)
-            groups = [{'key': k, 'shapes': g['shapes'], 'texts': g.get('texts', 0), 'length': g['length'] * o.scale,
-                       'widths': sorted(w * o.scale for w in g['widths']), 'default': defaults[k].model_dump()}
-                      for k, g in sorted(d.groups().items(), key=lambda kv: -kv[1]['length'])]
+            defaults = default_groups(d, tools, o)
+            stats = d.groups()
+            for sh in raster_shapes(d, o):         # the images' lines: in their colour's layer
+                g = stats.setdefault(f'stroke {sh.stroke}', {'shapes': 0, 'length': 0.0, 'widths': set()})
+                g['shapes'] += 1
+                g['images'] = g.get('images', 0) + 1
+                g['length'] += sum(float(np.hypot(*np.diff(p, axis=0).T).sum()) for p in sh.paths)
+            groups = [{'key': k, 'shapes': g['shapes'], 'texts': g.get('texts', 0), 'images': g.get('images', 0),
+                       'length': g['length'] * o.scale, 'widths': sorted(w * o.scale for w in g['widths']),
+                       'default': defaults[k].model_dump()}
+                      for k, g in sorted(stats.items(), key=lambda kv: -kv[1]['length'])]
+            images = [{'index': im.index, 'id': im.id, 'px': list(im.dark.shape[::-1]),
+                       'size': (np.ptp(im.corners(), axis=0) * o.scale).round(1).tolist()} for im in d.images]
             texts = []
             for t in d.texts:
                 spec = o.texts.get(str(t.index), o.text)
@@ -142,7 +152,7 @@ class Workspace:
                               'size': t.size * abs(t.matrix[0] * t.matrix[3] - t.matrix[1] * t.matrix[2]) ** 0.5 * o.scale,
                               'found': found.file if found else None, 'spec': spec.model_dump()})
             objects[o.id] = {'size': [d.size[0] * o.scale, d.size[1] * o.scale], 'groups': groups,
-                             'texts': texts, 'shapes': len(d.shapes), 'skipped': d.skipped}
+                             'texts': texts, 'shapes': len(d.shapes), 'skipped': d.skipped, 'images': images}
         m = machine.model_dump()
         pens = load_pens()
         holders = [{'t': f'T{i}', 'holder': h, 'tag': (self.tags or {}).get(str(h))}
@@ -163,10 +173,10 @@ class Workspace:
         local = lambda p: np.column_stack([p[:, 0] * s, (h - p[:, 1]) * s])
         out = []
         _, tools = load(self.job, self.tags)
-        for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, [], tools), key=lambda sh: sh.index):
+        for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, [], tools) + raster_shapes(d, o), key=lambda sh: sh.index):
             out.append({'i': sh.index, 'stroke': sh.stroke, 'fill': sh.fill, 'w': sh.width * s,
                         'so': sh.stroke_opaque, 'fo': sh.fill_opaque, 'line': sh.line, 'fillable': fillable(sh),
-                        'text': sh.line or any(t.index == sh.index for t in d.texts), 'rule': sh.rule,
+                        'text': sh.line or any(t.index == sh.index for t in d.texts), 'rule': sh.rule, 'raster': sh.raster,
                         'd': ' '.join(_d(local(p), c) for p, c in zip(sh.paths, sh.closed))})
         return {'size': [d.size[0] * s, d.size[1] * s], 'shapes': out}
 
@@ -227,7 +237,7 @@ def create_app(data=None):
 
     @app.post('/api/objects')
     async def add_object(file: UploadFile = File(...)):
-        data, images = svg.strip_images(await file.read())
+        data = await file.read()          # its <image>s stay: left out, or made into lines (Obj.raster)
         with ws.lock:
             oid = _unique({o.id for o in ws.job.objects}, Path(file.filename or 'drawing').stem)
             path = ws.uploads / f'{oid}.svg'
@@ -246,7 +256,8 @@ def create_app(data=None):
             ws.remember()
             ws.job.objects.append(obj)
             ws.save()
-            return {'id': oid, 'images': images, 'state': ws.state()}
+            return {'id': oid, 'images': len(d.images), 'unreadable': d.skipped.get('image (not embedded)', 0),
+                    'state': ws.state()}
 
     @app.patch('/api/objects/{oid}')
     def patch_object(oid: str, body: dict = Body(...)):
@@ -255,7 +266,10 @@ def create_app(data=None):
             bad = set(body) - OBJ_KEYS
             if bad:
                 raise HTTPException(400, f'not changeable: {", ".join(sorted(bad))}')
-            new = Obj(**{**o.model_dump(), **body})
+            try:
+                new = Obj(**{**o.model_dump(), **body})
+            except ValueError as e:
+                raise HTTPException(400, f'{oid}: {e}')
             ws.remember()
             ws.job.objects[ws.job.objects.index(o)] = new
             ws.save()
@@ -271,7 +285,10 @@ def create_app(data=None):
                 bad = set(changes) - OBJ_KEYS
                 if bad:
                     raise HTTPException(400, f'not changeable: {", ".join(sorted(bad))}')
-                news[oid] = Obj(**{**o.model_dump(), **changes})
+                try:
+                    news[oid] = Obj(**{**o.model_dump(), **changes})
+                except ValueError as e:
+                    raise HTTPException(400, f'{oid}: {e}')
             ws.remember()
             ws.job.objects = [news.get(o.id, o) for o in ws.job.objects]
             ws.save()
@@ -340,7 +357,7 @@ def create_app(data=None):
             d = ws.drawing(o)
             index, to = int(body['index']), body['to']
             target, scope = body.get('target', 'both'), body.get('scope', 'shape')
-            sh = next((s for s in d.shapes if s.index == index), None)
+            sh = next((s for s in d.shapes + raster_shapes(d, o) if s.index == index), None)
             run = next((t for t in d.texts if t.index == index), None)
             colours = {'stroke': sh.stroke, 'fill': sh.fill} if sh else {'stroke': None, 'fill': run.fill or run.stroke}
             # A shape closed but not filled in its SVG takes a fill of its own (not a whole colour's)
