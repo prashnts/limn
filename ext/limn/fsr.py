@@ -41,6 +41,9 @@ class WrongCell(FsrError):
         self.hop, self.cell, self.found = hop, tuple(cell), tuple(found)
 
 
+HIGH_AT_REST = 40      # a cell this far over the sheet's median at rest, untouched, is faulty (BED_5's col 3: 75-100)
+
+
 def judge_survey(result, cfg, hop):
     '''A survey (Fsr.survey) -> what to go by: {'faulty': [cell], 'weak': [cell], 'noise',
     'early', 'warnings': [str]}. Faulty: high at rest (with nothing on it), never touched,
@@ -49,12 +52,13 @@ def judge_survey(result, cfg, hop):
     cells = {tuple(c): v for c, v in result['cells'].items()}
     rest = {tuple(c): v for c, v in result['rest'].items() if tuple(c) in cells}       # (strengths: over rest)
     floor = float(np.median(list(rest.values()))) if rest else 0.0
-    high = {c for c, v in rest.items() if v >= max(40.0, 6 * floor + 10)}
+    high = {c for c, v in rest.items() if v >= floor + HIGH_AT_REST}
     faulty = sorted(high | {c for c, v in cells.items() if v['z'] is None or not v['ok']})
     good = [v['s08'] for c, v in cells.items() if c not in faulty and v['s08']]
     median = float(np.median(good)) if good else 0.0
     weak = sorted(c for c, v in cells.items() if c not in faulty and (v['s08'] or 0) < 0.5 * median)
-    noise = max((v for c, v in rest.items() if c not in faulty), default=0.0)
+    spread = {tuple(c): v for c, v in (result.get('spread') or {}).items() if tuple(c) in cells}
+    noise = max((v for c, v in (spread or rest).items() if c not in faulty), default=0.0)
     early = int(min(max(30, round(2 * noise + 20)), 0.8 * cfg['respond']))
     spec = next(a for a in cfg['arrays'] if a['hop'] == hop)
     used = {'z cell': [tuple(cfg['z_cell'][1:])]}
@@ -101,6 +105,7 @@ class Fsr:
         self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
         self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
+        self.air = None             # readings in the air before a descent: what `early` rises from
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
@@ -165,6 +170,12 @@ class Fsr:
         return (f"heard {heard} in {window:.0f}s. Matrix frames are FSR state {S_MATRIX}: without them, "
                 f"the node's firmware may be from before matrix mode (mcu.py update)")
 
+    def rise(self, strengths):
+        '''The most any cell reads over the baseline taken in the air before this descent
+        (self.air): the sheet's own level drifts by tens, cell by cell (2026-10-07).'''
+        air = self.air or {}
+        return max((v - air.get(c, 0.0) for c, v in strengths.items()), default=0.0)
+
     def responds(self, strengths, cell):
         '''Over `respond`, and close to the strongest cell: a press also lifts
         the other rows of its column a little (crosstalk), row 3 a lot.'''
@@ -201,8 +212,10 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(x), float(y))
             self.machine.move(z=z)
-            if (row, col) in self.touched(self.read(hop), hop):     # other cells: a reading in the air
+            here = self.read(hop)
+            if (row, col) in self.touched(here, hop):               # other cells: a reading in the air
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
+            self.air = here                         # the baseline the coarse steps rise from
             # Coarse steps only while nothing is known of the contact (no `top` from
             # locate): a coarse step goes up to `step` past it before it is seen. Then
             # fine steps from just above it (eyed on the plotter, 2026-10-07: the
@@ -251,7 +264,7 @@ class Fsr:
             touched = self.touched(strengths, hop)
             if touched and (cell is None or tuple(cell) in touched):
                 return z, touched
-            if early and max(strengths.values(), default=0) >= cfg.get('early', cfg['respond']):
+            if early and self.rise(strengths) >= cfg.get('early', cfg['respond']):
                 return z, touched       # coarse: something presses, the fine steps find where
             # At first touch the crosstalk can lead the pressed cell: only a
             # real press elsewhere means the tip is not over `cell`.
@@ -298,8 +311,10 @@ class Fsr:
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(aim[0]), float(aim[1]))
             self.machine.move(z=z)
-            if self.touched(self.read(hop), hop):
+            here = self.read(hop)
+            if self.touched(here, hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
+            self.air = here                         # the baseline the coarse steps rise from
             # Coarse, at three spots by turns: a tip in the dead zone between cells reads
             # nothing however deep it goes (to the floor: a fineliner, 2026-10-07). Offset
             # by (0, 0), (1/2, 1/4), (1/4, 1/2) of a cell: whatever border lines a tip is on,
@@ -370,7 +385,7 @@ class Fsr:
                 self.machine.move(float(p[0]), float(p[1]))
                 self.machine.move(z=z, speed=JOG_SPEED)
                 strengths = self.read(hop)
-                if self.touched(strengths, hop) or max(strengths.values(), default=0) >= cfg.get('early', cfg['respond']):
+                if self.touched(strengths, hop) or self.rise(strengths) >= cfg.get('early', cfg['respond']):
                     return z, np.asarray(p, dtype=float)
 
     def press_depth(self, hop, cell, z, target=None):
@@ -430,9 +445,10 @@ class Fsr:
                 for c, v in self.read(hop, limit=False, raw=True).items():
                     frames.setdefault(c, []).append(v)
             out['rest'] = {c: float(np.median(v)) for c, v in frames.items()}
-            base = out['rest']
-            floor_rest = float(np.median([v for c, v in base.items() if c[0] in rows])) if base else 0.0
-            high = {c for c, v in base.items() if v >= max(40.0, 6 * floor_rest + 10)}
+            out['spread'] = {c: float(np.percentile(v, 90) - np.percentile(v, 10)) for c, v in frames.items()}
+            levels = out['rest']
+            floor_rest = float(np.median([v for c, v in levels.items() if c[0] in rows])) if levels else 0.0
+            high = {c for c, v in levels.items() if v >= floor_rest + HIGH_AT_REST}
             shift, top = self.locate(hop, bed_z)
             out['shift'] = [float(v) for v in shift]
             early = cfg.get('survey_touch', 30)     # over rest: a weak cell's first touch too, not 0.05mm on
@@ -447,6 +463,11 @@ class Fsr:
                         self.machine.move(z=z + 0.4, speed=JOG_SPEED * 5)
                         self.machine.move(float(x), float(y))
                         self.machine.move(z=z, speed=JOG_SPEED)
+                        # Its own baseline, here in the air just before: the sheet's drifts by tens
+                        # from minute to minute and cell to cell (2026-10-07: everything 'touched' in
+                        # the air against a rest taken a minute before)
+                        here = [self.read(hop, limit=False, raw=True) for _ in range(3)]
+                        base = {c: float(np.median([h.get(c, 0.0) for h in here])) for c in here[0]}
                         while z > floor and (first is None or first - z < depth - 1e-9):
                             z = round(z - step, 4)
                             self.machine.move(z=z, speed=JOG_SPEED)
@@ -455,7 +476,7 @@ class Fsr:
                             mine = live.get(cell, 0.0)
                             other = max(((c, v) for c, v in live.items() if c != cell and c not in high),
                                         key=lambda cv: cv[1], default=(None, 0.0))
-                            if first is None and max(mine, other[1]) >= early:
+                            if first is None and mine >= early:           # its own rise: nobody else's
                                 first = z
                             if first is not None:
                                 steps.append([round(first - z, 3), mine, list(other[0]) if other[0] else None, other[1]])
@@ -465,13 +486,14 @@ class Fsr:
                     at = lambda d: next((m for dd, m, _, _ in steps if dd >= d - 1e-6), None)
                     ok = bool(steps) and all(m >= o for dd, m, _, o in steps if dd >= 0.04 - 1e-6)
                     info = {'z': first, 'steps': steps, 's04': at(0.04), 's08': at(0.08), 'ok': ok,
-                            'rest': out['rest'].get(cell, 0.0), 'at': [float(x), float(y)]}
+                            'rest': out['rest'].get(cell, 0.0), 'air': base.get(cell, 0.0), 'at': [float(x), float(y)]}
                     out['cells'][cell] = info
                     self.machine.say(
                         f"[LRT][Survey] {cell} at X{x:.3f} Y{y:.3f}: "
                         + (f"touch z={first:.3f}, +0.04: {info['s04']:.0f}, +0.08: {info['s08'] or 0:.0f}"
                            if first is not None else "nothing")
-                        + f", rest {info['rest']:.0f}" + ("" if ok else f" (another cell answers: {steps[-1][2] if steps else '-'})"))
+                        + f", rest {info['rest']:.0f}, in the air {info['air']:.0f}"
+                        + ("" if ok else f" (another cell answers: {steps[-1][2] if steps else '-'})"))
             self.machine.move(z=cfg['z_park'])
         finally:
             self.matrix(False)

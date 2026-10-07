@@ -143,7 +143,9 @@ class FsrBed:
         values = []
         for row in range(array.rows):
             for col in range(array.cols):
-                s = abs(self.rng.normal(0, 4)) + (75 if col == 3 else 0)
+                # Its baseline drifts by tens, slowly and cell by cell, as the real one does
+                drift = 15 * (1 + np.sin(self.t / 40 + 1.7 * row + 2.9 * col))
+                s = abs(self.rng.normal(0, 4)) + drift + (75 if col == 3 else 0)
                 if (row, col) in pressed:
                     s += pressed[(row, col)]
                 else:
