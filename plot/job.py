@@ -27,13 +27,29 @@ class Group(BaseModel):
     angle: float | None = None
     border: bool | None = None      # fills: outline the area too
     spacing: float | None = None    # fills: instead of the tool's
+    inset: bool | None = None       # fills: kept the tool's `bleed` inside its own edge (smooth corners)
 
 
 class ShapePaint(BaseModel):
-    '''One shape painted apart from its colour: its stroke, its fill, or both.'''
+    '''One shape painted apart from its colour: its stroke, its fill, or both; or only
+    its fill's margin and border, whatever draws it.'''
     model_config = ConfigDict(extra='forbid')
     stroke: Group | None = None
     fill: Group | None = None
+    inset: bool | None = None       # its fill kept its tool's bleed inside its edge
+    border: bool | None = None      # its fill outlined (along that inner edge, with the inset)
+
+
+class ShapeSet(BaseModel):
+    '''Shapes of a drawing grouped by hand: painted together, over their colours' layers
+    (a shape's own paint still wins). Only how they are drawn: the shapes themselves stay.'''
+    model_config = ConfigDict(extra='forbid')
+    name: str
+    shapes: list[int] = []          # shape indexes
+    stroke: Group | None = None
+    fill: Group | None = None
+    inset: bool | None = None       # as ShapePaint's
+    border: bool | None = None
 
 
 class TextSpec(BaseModel):
@@ -89,6 +105,8 @@ class Obj(BaseModel):
     occlude: bool = True            # what is painted over hides what is under
     groups: dict[str, Group] = {}   # by colour key; missing ones: nearest tool by colour
     shapes: dict[str, ShapePaint] = {}  # by shape index: painted apart from their colour
+    sets: list[ShapeSet] = []       # shapes grouped by hand; the later set wins for a shape in two
+    group: str | None = None        # drawings of one group move and hide together (the UI)
     text: TextSpec = Field(default_factory=TextSpec)     # every <text>,
     texts: dict[str, TextSpec] = {}     # but these, by index
     placement: Placement = Field(default_factory=Placement)

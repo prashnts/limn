@@ -31,6 +31,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its two milestones follow.
 
+### Added
+- **Layers by pen** (2026-10-07, the selected drawing's *Layers*): one per pen, with the colours it draws as chips. Colours alike that go to one pen share a chip, and long layers fold behind *+n*, so a drawing of many shades stays readable. Drag a chip onto another pen, or click it for its settings. This replaces the table of colours, which had a row for each colour's stroke and another for its fill.
+- **The shapes tool** (`A`): pick shapes by click, Shift-click or a box, and set their outline's pen, their fill's (a closed shape without a fill in its SVG can take one; lines get no fill option), a *bleed margin* and a *border*. These are checkboxes per shape.
+- **Bleed margin** (`inset`): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks on top stays as it was.
+- **Groups**: shapes of a drawing (`Obj.sets`, painted together; the shapes never move), and drawings on the bed (`Obj.group`, they move, nudge and hide together, one undo step via `PATCH /api/objects`). Ctrl+G and Ctrl+Shift+G.
+- Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`, the one being taken stays).
+
+### Changed
+- A *look* is temporary: the next capture (look, focus, corners or scan) deletes it (`ScanStore.new`).
+
 ## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display
 
 <img src="docs/plot-ui.png" alt="The plot UI: a drawing on BED_5, its colours and tools, the head live on the canvas, the LED display" width="800">

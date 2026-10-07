@@ -28,6 +28,8 @@
   <nav id="rail" class="rail plot-only" aria-label="Tools">
     <button data-mode="select" class="on" title="Select, move, scale, rotate (V)">
       <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/></svg></button>
+    <button data-mode="shapes" title="Shapes (A): pick shapes of a drawing (Shift adds, drag a box; a group's shapes come together, Alt: one alone), to set their pen, fill, margin, or group them">
+      <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/><path d="M15 15h6v6h-6z" stroke-dasharray="2 1.5"/></svg></button>
     <button data-mode="pan" title="Pan (H, or hold Space)">
       <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
     <button data-mode="paint" title="Paint with a tool (P)">
@@ -102,6 +104,8 @@
         <label class="check small" title="Show the newest captures on the bed, where they were taken"><input type="checkbox" id="shots-on-bed" checked> on the bed</label></h2>
       <p id="store-note" class="note" hidden></p>
       <ul id="captures" class="list captures"></ul>
+      <div class="row"><button id="captures-eye" class="small" title="Hide every capture from the bed, or show them all again">Hide all</button>
+        <button id="captures-clear" class="small danger" title="Delete every capture from the server (press twice), but the one being taken">Delete all</button></div>
     </section>
     <section class="plot-only" data-panel="drawings" data-fixed>
       <h2 title="The drawings on the bed: drop SVGs to add one; the eye hides one from view">Drawings</h2>
@@ -110,7 +114,9 @@
         <b>Drop SVGs</b> on the bed, or click here
       </label>
       <ul id="objects" class="list"></ul>
-      <div class="row"><button id="clear-objects" class="small danger" title="Remove every drawing from the bed (press twice; Undo brings them back)">Clear all</button></div>
+      <div class="row"><button id="clear-objects" class="small danger" title="Remove every drawing from the bed (press twice; Undo brings them back)">Clear all</button>
+        <button id="group-objects" class="small" hidden title="Group the drawings picked (Shift-click): they move, hide and pick together (Ctrl+G)">Group</button>
+        <button id="ungroup-objects" class="small" hidden title="Ungroup the selected drawing's group (Ctrl+Shift+G)">Ungroup</button></div>
     </section>
     <section id="unders-section" class="plot-only" data-panel="unders" hidden>
       <h2 title="Scans pinned with 'Under the plot' (Scan tab's viewer): shown under the drawings, where they were taken">Scans under the plot</h2>

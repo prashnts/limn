@@ -165,7 +165,7 @@ def test_store_keeps_the_newest(tmp_path):
     store = sc.ScanStore(tmp_path, keep=2)
     ids = []
     for i in range(3):
-        ids.append(store.new({'kind': 'look'}))
+        ids.append(store.new({'kind': 'scan'}))
     assert len(store.list()) == 2
     store.delete(store.list()[0]['id'])
     assert len(store.list()) == 1
@@ -349,3 +349,14 @@ def test_coverage_is_inside_the_turned_shot():
         for cx, cy in ((fx / 2, fy / 2), (-fx / 2, fy / 2)):        # its corners lie within the turned shot
             u, v = cx * c + cy * s, -cx * s + cy * c
             assert abs(u) <= 8 + 1e-6 and abs(v) <= 4.5 + 1e-6
+
+
+def test_a_look_is_gone_at_the_next_capture(tmp_path):
+    from limn_cam.scan import ScanStore
+    store = ScanStore(tmp_path)
+    store.new({'kind': 'look'})
+    scan = store.new({'kind': 'scan'})
+    assert [c['id'] for c in store.list()] == [scan]
+    store.new({'kind': 'look'})
+    store.new({'kind': 'focus'})
+    assert sorted(c['kind'] for c in store.list()) == ['focus', 'scan']

@@ -30,13 +30,14 @@ from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, Placement, ShapePaint
 from .preview import parse
 from .profile import bed_papers, load_pens, reach
-from .slicer import Cache, default_groups, text_shapes
+from .slicer import Cache, default_groups, fillable, text_shapes
 from .tools import DRAW, Tool
 
 STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
 MANUAL_HOLDER = 90      # printer.limn.tools' key of the tool docked by hand (MANUAL_TOOL in ext/limn)
-OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'text', 'texts', 'surface', 'masks'}
+OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'sets', 'group', 'text', 'texts', 'surface',
+            'masks'}
 SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
             'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
 
@@ -164,7 +165,7 @@ class Workspace:
         _, tools = load(self.job, self.tags)
         for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, [], tools), key=lambda sh: sh.index):
             out.append({'i': sh.index, 'stroke': sh.stroke, 'fill': sh.fill, 'w': sh.width * s,
-                        'so': sh.stroke_opaque, 'fo': sh.fill_opaque, 'line': sh.line,
+                        'so': sh.stroke_opaque, 'fo': sh.fill_opaque, 'line': sh.line, 'fillable': fillable(sh),
                         'text': sh.line or any(t.index == sh.index for t in d.texts), 'rule': sh.rule,
                         'd': ' '.join(_d(local(p), c) for p, c in zip(sh.paths, sh.closed))})
         return {'size': [d.size[0] * s, d.size[1] * s], 'shapes': out}
@@ -260,6 +261,22 @@ def create_app(data=None):
             ws.save()
             return ws.state()
 
+    @app.patch('/api/objects')
+    def patch_objects(body: dict = Body(...)):
+        '''{id: changes, ..}: several drawings at once, one step for undo (a group moved).'''
+        with ws.lock:
+            news = {}
+            for oid, changes in body.items():
+                o = ws.obj(oid)
+                bad = set(changes) - OBJ_KEYS
+                if bad:
+                    raise HTTPException(400, f'not changeable: {", ".join(sorted(bad))}')
+                news[oid] = Obj(**{**o.model_dump(), **changes})
+            ws.remember()
+            ws.job.objects = [news.get(o.id, o) for o in ws.job.objects]
+            ws.save()
+            return ws.state()
+
     @app.post('/api/objects/{oid}/order')
     def order(oid: str, body: dict = Body(...)):
         '''{to: front|back|forward|backward}: later in the job is on top (it hides what
@@ -326,12 +343,14 @@ def create_app(data=None):
             sh = next((s for s in d.shapes if s.index == index), None)
             run = next((t for t in d.texts if t.index == index), None)
             colours = {'stroke': sh.stroke, 'fill': sh.fill} if sh else {'stroke': None, 'fill': run.fill or run.stroke}
-            parts = [p for p in ('stroke', 'fill') if target in (p, 'both') and colours[p]]
+            # A shape closed but not filled in its SVG takes a fill of its own (not a whole colour's)
+            bare = sh is not None and not sh.fill and fillable(sh) and scope == 'shape'
+            parts = [p for p in ('stroke', 'fill') if target in (p, 'both') and (colours[p] or (p == 'fill' and bare))]
             defaults = default_groups(d, tools)
             groups, shapes = dict(o.groups), dict(o.shapes)
             for part in parts:
                 key = f'{part} {colours[part]}'
-                base = groups.get(key) or defaults.get(key) or Group()
+                base = (groups.get(key) or defaults.get(key) or Group()) if colours[part] else Group()
                 g = None if to == 'reset' else base.model_copy(update={
                     'tool': to if to not in ('mask', 'skip') else None, 'mask': to == 'mask'})
                 if scope == 'colour':
@@ -342,7 +361,7 @@ def create_app(data=None):
                 else:
                     cur = shapes.get(str(index), ShapePaint())
                     cur = cur.model_copy(update={part: g})
-                    if cur.stroke is None and cur.fill is None:
+                    if not cur.model_dump(exclude_none=True):
                         shapes.pop(str(index), None)
                     else:
                         shapes[str(index)] = cur
@@ -1044,6 +1063,20 @@ def create_app(data=None):
                     z.write(p, f'{sid}/{p.name}')
         return Response(buf.getvalue(), media_type='application/zip',
                         headers={'Content-Disposition': f'attachment; filename="limn-{sid}.zip"'})
+
+    @app.delete('/api/captures')
+    def captures_clear():
+        '''Every capture but the one the camera is taking now.'''
+        job = ws.camera_job
+        busy = job.state.get('scan') if job and not job.state['done'] else None
+        store = captures()
+        for c in store.list():
+            if c['id'] != busy:
+                try:
+                    store.delete(c['id'])
+                except KeyError:
+                    pass
+        return store.list()
 
     @app.delete('/api/captures/{sid}')
     def capture_delete(sid: str):

@@ -69,6 +69,33 @@ def inset(area, d):
     return area.buffer(-d, join_style='mitre', mitre_limit=5) if d else area
 
 
+def margin(area, d):
+    '''`area` kept `d` mm inside its own edge, its corners rounded. A part too small for
+    the rounding (it would lose a neck or a tip) keeps sharp corners; one too small for
+    any margin stays as it is.'''
+    if not d or d <= 0 or area is None or area.is_empty:
+        return area
+    out = []
+    for part in polygons(area):
+        sharp = part.buffer(-d, join_style='mitre', mitre_limit=5)
+        if sharp.is_empty:
+            out.append(part)
+            continue
+        smooth = part.buffer(-2 * d, join_style='round').buffer(d, join_style='round')
+        same = not smooth.is_empty and len(polygons(smooth)) == len(polygons(sharp)) and smooth.area >= 0.8 * sharp.area
+        out.append(smooth if same else sharp)
+    return unary_union(out)
+
+
+def polygons(geom):
+    '''The polygons of a geometry, whatever it is.'''
+    if geom is None or geom.is_empty:
+        return []
+    if geom.geom_type == 'Polygon':
+        return [geom]
+    return [p for g in getattr(geom, 'geoms', []) for p in polygons(g)]
+
+
 def hatch(area, spacing, angle):
     '''Parallel lines `spacing` apart at `angle` degrees, clipped to `area`, on a
     grid that doesn't depend on the area (neighbouring shapes line up).'''

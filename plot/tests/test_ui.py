@@ -255,13 +255,13 @@ def test_drawings_hide_but_still_plot(page, base, drawing):
 
 
 def looks(tmp_path, n=2):
-    '''n look captures in the capture store, one shot each.'''
+    '''n focus captures in the capture store, one shot each (not looks: the next capture deletes a look).'''
     from limn_cam.scan import ScanStore, capture_root
     from limn_cam.tests.test_scan import jpeg, pattern
     store = ScanStore(capture_root(tmp_path))
     ids = []
     for i in range(n):
-        sid = store.new({'kind': 'look', 'fov': [16, 9], 'turn': 0})
+        sid = store.new({'kind': 'focus', 'fov': [16, 9], 'turn': 0})
         store.add(sid, 'look.jpg', jpeg(pattern(i)), {'x': 40 + 30 * i, 'y': 80, 'z': 5})
         ids.append(sid)
         time.sleep(1.05)                    # ids are by the second
@@ -739,3 +739,18 @@ def test_clear_all_takes_two_presses(page, base, drawing):
     assert page.locator('#clear-objects.armed').count() == 0
     page.click('#clear-objects')
     assert len(requests.get(base + '/api/state').json()['job']['objects']) == 1    # armed again, not cleared
+
+
+def test_captures_hide_all_and_delete_all(page, scanning, tmp_path):
+    looks(tmp_path)
+    open_scan(page, scanning)
+    page.wait_for_function('() => document.querySelectorAll("#scan-layer image.shot").length === 2')
+    page.click('#captures-eye')
+    page.wait_for_function('() => document.querySelectorAll("#scan-layer image.shot").length === 0')
+    assert page.text_content('#captures-eye') == 'Show all'
+    page.click('#captures-eye')
+    page.wait_for_function('() => document.querySelectorAll("#scan-layer image.shot").length === 2')
+    page.click('#captures-clear')                               # twice: it asks first
+    page.click('#captures-clear')
+    page.wait_for_function('() => !document.querySelector("#captures li[data-id]")')
+    assert requests.get(scanning + '/api/captures').json() == []
