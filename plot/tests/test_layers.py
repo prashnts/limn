@@ -6,10 +6,11 @@ from fastapi.testclient import TestClient
 
 from plot import server
 from plot.emit import load, plot
-from plot.job import Group, Job, Obj, Placement
+from plot.job import Group, Job, Obj, Placement, ShapePaint, ShapeSet
 from plot.slicer import lost_detail, slice_object
 from plot.svg import strip_images
 
+from .conftest import svg_text
 from .test_server import FONT, needs_font
 
 RED = {'stroke #ff0000': Group(tool='T3')}
@@ -267,3 +268,58 @@ def test_light_under_dark(write_svg, tmp_path, tools):
     job.draw = {}
     r, _ = plot(job)
     assert r.gcode.index('--- T0') < r.gcode.index('--- T1')
+
+
+def test_fill_margin_keeps_the_fill_inside_its_edge(write_svg, tools):
+    # A 20 mm red square, T3 with a bleed of 1: with the margin its fill keeps 1 mm in from
+    # the edge (and half the line), its border along that inner edge; the corners come round
+    p = write_svg('<rect x="10" y="10" width="20" height="20" fill="#ff0000"/>')
+    bled = {**tools, 'T3': tools['T3'].model_copy(update={'bleed': 1.0, 'border': True})}
+    w = bled['T3'].width
+    plain = np.vstack(slice_object(Obj(id='d', svg=str(p), groups={'fill #ff0000': Group(tool='T3')}), bled).paths['T3'])
+    assert plain[:, 0].min() == pytest.approx(10 + w / 2, abs=0.01)
+    g = {'fill #ff0000': Group(tool='T3', inset=True)}
+    pts = np.vstack(slice_object(Obj(id='d', svg=str(p), groups=g), bled).paths['T3'])
+    assert pts[:, 0].min() == pytest.approx(11 + w / 2, abs=0.01) and pts[:, 0].max() == pytest.approx(29 - w / 2, abs=0.01)
+    corner = np.hypot(pts[:, 0] - (11 + w / 2), pts[:, 1] - (70 + 1 + w / 2)).min()
+    assert corner > 0.2                     # rounded: nothing right in the corner
+    # Per shape, over its colour's layer; a sliver too thin for the margin is filled as it is
+    sliver = write_svg('<rect x="10" y="10" width="20" height="1.5" fill="#ff0000"/>', name='s.svg')
+    o = Obj(id='d', svg=str(sliver), groups={'fill #ff0000': Group(tool='T3')}, shapes={'0': ShapePaint(inset=True)})
+    assert np.vstack(slice_object(o, bled).paths['T3'])[:, 0].min() == pytest.approx(10 + w / 2, abs=0.01)
+
+
+def test_a_closed_unfilled_shape_takes_a_fill_of_its_own_or_its_sets(write_svg, tools):
+    p = write_svg('''
+        <rect x="10" y="10" width="20" height="20" stroke="#ff0000" stroke-width="0.3" fill="none"/>
+        <path d="M40 10 L60 30" stroke="#ff0000" stroke-width="0.3" fill="none"/>''')
+    base = Obj(id='d', svg=str(p), groups=RED)
+    n = len(slice_object(base, tools).paths['T3'])
+    own = base.model_copy(update={'shapes': {'0': ShapePaint(fill=Group(tool='T0'))}})
+    assert 'T0' in slice_object(own, tools).paths
+    # The open line can't take one; a set paints both, its outlines' tool changed too
+    st = base.model_copy(update={'sets': [ShapeSet(name='g', shapes=[0, 1], fill=Group(tool='T0'), stroke=Group(tool='T1'))]})
+    s = slice_object(st, tools)
+    assert 'T3' not in s.paths and len(s.paths['T1']) == n
+    assert np.vstack(s.paths['T0'])[:, 0].max() < 31
+    # A shape's own paint wins over its set's
+    both = st.model_copy(update={'shapes': {'1': ShapePaint(stroke=Group(tool='T3'))}})
+    assert len(slice_object(both, tools).paths['T3']) == 1
+
+
+def test_api_shapes_fillable_groups_of_drawings_and_batch(client):
+    add(client, svg_text('''
+        <rect x="10" y="10" width="20" height="20" stroke="#ff0000" stroke-width="0.3" fill="none"/>
+        <path d="M40 10 L60 30" stroke="#ff0000" stroke-width="0.3" fill="none"/>'''), 'a.svg')
+    add(client, svg_text('<circle cx="50" cy="50" r="10" fill="#000000"/>'), 'b.svg')
+    sh = client.get('/api/objects/a/shapes').json()['shapes']
+    assert [s['fillable'] for s in sh] == [True, False]
+    # Paint the rectangle's (missing) fill: it takes one of its own
+    r = client.post('/api/objects/a/paint', json={'index': 0, 'to': 'T0', 'target': 'fill', 'scope': 'shape'}).json()
+    assert r['job']['objects'][0]['shapes']['0']['fill']['tool'] == 'T0'
+    r = client.patch('/api/objects', json={'a': {'group': 'g1', 'placement': {'x': 1, 'y': 2, 'rotate': 0}},
+                                           'b': {'group': 'g1'}}).json()
+    assert [o['group'] for o in r['job']['objects']] == ['g1', 'g1'] and r['job']['objects'][0]['placement']['x'] == 1
+    assert client.patch('/api/objects', json={'a': {'id': 'x'}}).status_code == 400
+    r = client.patch('/api/objects/a', json={'sets': [{'name': 'G', 'shapes': [0, 1], 'inset': True}]})
+    assert r.status_code == 200 and r.json()['job']['objects'][0]['sets'][0]['inset'] is True

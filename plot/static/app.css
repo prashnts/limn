@@ -559,3 +559,35 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px s
 }
 .drawset .grid.choices, .tools .grid.choices { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 4px; }
 .tools .grid.choices label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }
+
+/* Layers: each pen and its colours (chips), drag a chip onto another pen */
+.layers { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.layer { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; }
+.layer.empty { display: none; }
+.layers.dragging .layer.empty { display: block; border-style: dashed; }
+.layer.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.layer .lhead { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.layer .lname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer .lhead .note { margin: 0; }
+.swatch.mask { background: var(--paper, #fff); background-image: linear-gradient(45deg, transparent 45%, var(--bad) 45% 55%, transparent 55%); }
+.swatch.skip { background: transparent; border-style: dashed; }
+.chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; cursor: grab; border-radius: 99px; }
+.chip.on { outline: 2px solid var(--accent); outline-offset: -1px; }
+.chip .n { font-size: 10px; color: var(--muted); }
+.chip-edit { border: 1px solid var(--accent); border-radius: var(--radius); padding: 6px; }
+.chip-edit .row { display: flex; align-items: center; gap: 6px; }
+.chip-edit .grow { flex: 1; margin: 0; }
+.chip-edit .opts { padding-left: 0; padding-top: 4px; }
+.picked .row.wrap { flex-wrap: wrap; gap: 8px; }
+.check.mixed { font-style: italic; }
+.sets li .note { margin: 0; }
+/* The shapes tool: picked shapes glow, a box picks */
+#canvas.shapes-mode .obj { cursor: default; }
+.obj path.shape.picked { filter: drop-shadow(0 0 1px var(--accent)) drop-shadow(0 0 1.5px var(--accent)); }
+.box-draft { fill: color-mix(in srgb, var(--accent) 8%, transparent); stroke: var(--accent); stroke-width: 1.2px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.obj.with .hit { fill: color-mix(in srgb, var(--accent) 3%, transparent); stroke: var(--accent); stroke-width: 1px; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+/* Drawings: picked together, grouped */
+.list li.multi { box-shadow: inset 2px 0 var(--accent); }
+.list li.ghead .name { font-weight: 600; }
+.list li.grouped { padding-left: 18px; }

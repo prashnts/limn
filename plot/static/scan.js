@@ -335,12 +335,30 @@ function renderCaptures() {
     <li data-id="${esc(c.id)}" class="${viewing && viewing.meta.id === c.id ? 'on' : ''}${onBed(c, i) ? '' : ' hidden'}" title="${esc(c.kind)} ${esc(c.id)}: ${c.count} shot${c.count === 1 ? '' : 's'}${c.region ? ` over ${c.region.map((v) => num(v, 1)).join(', ')}` : ''}${c.error ? ` (${c.error})` : ''}">
       <button class="icon eye" data-eye="${esc(c.id)}" title="${onBed(c, i) ? 'On the bed: hide it' : 'Not on the bed: show it there'}">${onBed(c, i) ? '◉' : '◌'}</button>
       <span class="kind">${kinds[c.kind] || '·'}</span>
-      <span class="name">${esc(when(c.id))} <span class="note">${esc(c.kind)} · ${c.count}${c.done ? '' : ' …'}</span></span>
+      <span class="name">${esc(when(c.id))} <span class="note">${c.kind === 'look' ? '<span title="Only for now: the next shot, look, focus or scan deletes it">look · temporary</span>' : `${esc(c.kind)} · ${c.count}`}${c.done ? '' : ' …'}</span></span>
       ${upState(c)}
       <a class="icon" href="/api/captures/${encodeURIComponent(c.id)}/zip" title="Download all its shots (zip)">⤓</a>
       <button class="icon" data-del="${esc(c.id)}" title="Delete it from the server">✕</button>
     </li>`).join('') || '<li class="note">Nothing yet: look, focus or scan with the camera tool.</li>');
+  const n = C.captures.length, shown = C.captures.filter(onBed).length;
+  $('#captures-eye').disabled = $('#captures-clear').disabled = !n;
+  $('#captures-eye').textContent = shown ? 'Hide all' : 'Show all';
 }
+$('#captures-eye').addEventListener('click', () => {
+  const show = !C.captures.some(onBed);
+  C.captures.forEach((c) => { scanVis[c.id] = show; });
+  store.set('scanVis', scanVis);
+  renderCaptures(); drawScanLayer();
+});
+$('#captures-clear').addEventListener('click', async (e) => {
+  const n = C.captures.length, kept = C.captures.filter((c) => c.uploaded !== 'all').length;
+  if (!twice('clear-captures', e.currentTarget, `Delete all ${n} capture${n > 1 ? 's' : ''}${kept ? `: ${kept} not on the NAS` : ''}`)) return;
+  await api('DELETE', '/api/captures');
+  closeViewer();
+  for (const k of Object.keys(scanVis)) delete scanVis[k];
+  store.set('scanVis', scanVis);
+  loadCamera();
+});
 $('#captures').addEventListener('click', async (e) => {
   const eye = e.target.dataset.eye;
   if (eye) {

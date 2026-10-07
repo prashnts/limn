@@ -23,7 +23,10 @@ const geo = {};                 // object id -> {sig, data}
 let preview = null;
 let gcodeLines = null;
 let vb = null;                  // viewBox, svg user units (x, -y)
-const openOpts = new Set();     // colour rows with their options open
+let shapeSel = { id: null, idx: new Set() };   // shapes picked with the shapes tool (A), of one drawing
+const multi = new Set();        // drawings picked together (Shift-click), to group them
+let openChip = null;            // 'drawing|colour key': the layer chip whose settings are open
+const openLayers = new Set();   // 'drawing|layer': showing all its chips
 const hiddenObjs = new Set(store.get('hiddenObjs', []));   // drawings not shown (they still plot)
 function setHidden(id, hide) {
   hide ? hiddenObjs.add(id) : hiddenObjs.delete(id);
@@ -313,7 +316,7 @@ for (const type of ['pointerup', 'pointercancel']) {
 }
 
 let spaceDown = false;
-let mode = 'select';    // select | pan | paint | mask
+let mode = 'select';    // select | pan | paint | mask | shapes
 let maskSel = null;     // {id, i}: a masked region picked with the mask tool
 let drag = null;        // {kind: 'pan'|'move'|'scale'|'rotate', ...}
 
@@ -334,6 +337,7 @@ function setMode(m) {
   $$('#rail [data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
   svg.classList.toggle('pan-mode', m === 'pan');
   svg.classList.toggle('mask-mode', m === 'mask');
+  svg.classList.toggle('shapes-mode', m === 'shapes');
   renderObjects();
   renderPalette();
   drawHandles();
@@ -385,6 +389,13 @@ svg.addEventListener('pointerdown', (e) => {
     try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
     return;
   }
+  if (mode === 'shapes' && e.button === 0 && !spaceDown) {
+    const shape = pickShape(e);
+    if (shape) return pickShapes(shape.closest('g.obj').dataset.id, +shape.dataset.i, e);
+    drag = { kind: 'box', start: worldPt(e), at: worldPt(e), add: e.shiftKey };     // a box over the drawing's shapes
+    try { svg.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+    return;
+  }
   const handle = e.target.closest('[data-handle]');
   const picking = mode === 'paint' && paintTo && e.button === 0 && !spaceDown;
   const shape = picking ? pickShape(e) : e.target.closest('path.shape');
@@ -422,11 +433,53 @@ svg.addEventListener('pointerdown', (e) => {
   }
   if (!g) return;
   const id = g.dataset.id;
+  if (e.shiftKey && mode === 'select') {        // picked with the others: to move or group them together
+    if (!multi.size && sel && sel !== id) multi.add(sel);
+    multi.has(id) ? multi.delete(id) : multi.add(id);
+    sel = id; store.set('sel', sel); render();
+    return;
+  }
+  if (!multi.has(id)) multi.clear();
   if (sel !== id) { sel = id; store.set('sel', sel); render(); }
-  const o = obj(id);
-  drag = { kind: 'move', id, start: worldPt(e), p: { ...o.placement }, moved: false };
+  drag = { kind: 'move', id, start: worldPt(e), ps: Object.fromEntries(movers(id).map((m) => [m.id, { ...m.placement }])), moved: false };
   capture();
 });
+
+// The drawings that move with this one: its group's, or those picked with it (Shift-click)
+function movers(id) {
+  const o = obj(id);
+  if (!o) return [];
+  if (o.group) return S.job.objects.filter((x) => x.group === o.group);
+  return multi.has(id) ? S.job.objects.filter((x) => multi.has(x.id)) : [o];
+}
+
+// The shapes tool: a click picks a shape (its whole group, Alt: the shape alone), Shift adds
+// or takes away; a box picks what it touches
+function pickShapes(id, i, e) {
+  const o = obj(id);
+  if (shapeSel.id !== id) shapeSel = { id, idx: new Set() };
+  const st = !e.altKey && setOf(o, i);
+  const these = st ? st.shapes : [i];
+  if (e.shiftKey) {
+    const all = these.every((k) => shapeSel.idx.has(k));
+    these.forEach((k) => (all ? shapeSel.idx.delete(k) : shapeSel.idx.add(k)));
+  } else shapeSel.idx = new Set(these);
+  if (sel !== id) { sel = id; store.set('sel', sel); }
+  render();
+}
+function boxShapes(a, b, add) {
+  const o = sel && obj(sel), g = o && $(`#design-layer g.obj[data-id="${CSS.escape(o.id)}"]`);
+  if (!g || hiddenObjs.has(o.id)) return flash('Select a drawing first, then drag over its shapes');
+  const c = [[a.x, a.y], [b.x, a.y], [b.x, b.y], [a.x, b.y]].map(([x, y]) => toLocal(o.placement, { x, y }));
+  const x0 = Math.min(...c.map((p) => p.x)), x1 = Math.max(...c.map((p) => p.x));
+  const y0 = Math.min(...c.map((p) => p.y)), y1 = Math.max(...c.map((p) => p.y));
+  if (shapeSel.id !== o.id || !add) shapeSel = { id: o.id, idx: new Set() };
+  for (const p of $$('path.shape', g)) {
+    const bb = p.getBBox();
+    if (bb.x <= x1 && bb.x + bb.width >= x0 && bb.y <= y1 && bb.y + bb.height >= y0) shapeSel.idx.add(+p.dataset.i);
+  }
+  render();
+}
 
 svg.addEventListener('pointermove', (e) => {
   const w = worldPt(e);
@@ -445,6 +498,13 @@ svg.addEventListener('pointermove', (e) => {
     applyVb();
     return;
   }
+  if (drag.kind === 'box') {
+    drag.at = w;
+    const L = $('#overlay-layer'), [a, b] = [drag.start, w];
+    L.innerHTML = '';
+    svgEl('rect', { class: 'box-draft', x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) }, L);
+    return;
+  }
   if (drag.kind === 'mask') {
     drag.at = w;
     const L = $('#overlay-layer');
@@ -458,9 +518,13 @@ svg.addEventListener('pointermove', (e) => {
   drag.moved = true;
   $('#paths-layer').classList.add('stale');
   if (drag.kind === 'move') {
-    o.placement = { ...drag.p, x: +(drag.p.x + w.x - drag.start.x).toFixed(2), y: +(drag.p.y + w.y - drag.start.y).toFixed(2) };
-    placeObject(o);
-    hint(`x ${num(o.placement.x, 1)}  y ${num(o.placement.y, 1)}`);
+    for (const [mid, p] of Object.entries(drag.ps)) {
+      const m = obj(mid);
+      m.placement = { ...p, x: +(p.x + w.x - drag.start.x).toFixed(2), y: +(p.y + w.y - drag.start.y).toFixed(2) };
+      placeObject(m);
+    }
+    const n = Object.keys(drag.ps).length;
+    hint(`x ${num(o.placement.x, 1)}  y ${num(o.placement.y, 1)}${n > 1 ? ` · ${n} drawings` : ''}`);
   } else if (drag.kind === 'rotate') {
     let a = drag.p.rotate + (Math.atan2(w.y - drag.wc.y, w.x - drag.wc.x) - drag.a0) * 180 / Math.PI;
     a = ((e.shiftKey ? Math.round(a / 15) * 15 : Math.round(a * 10) / 10) % 360 + 360) % 360;
@@ -494,6 +558,15 @@ svg.addEventListener('pointerup', async () => {
     if (d.click && sel) { sel = null; store.set('sel', sel); render(); }
     return;
   }
+  if (d.kind === 'box') {
+    $('#overlay-layer').innerHTML = '';
+    const [a, b] = [d.start, d.at];
+    if (Math.abs(a.x - b.x) + Math.abs(a.y - b.y) < 3 * mmPerPx()) {      // a click on nothing: none picked
+      if (!d.add && shapeSel.idx.size) { shapeSel = { id: null, idx: new Set() }; render(); }
+      return;
+    }
+    return boxShapes(a, b, d.add);
+  }
   if (d.kind === 'mask') {
     $('#overlay-layer').innerHTML = '';
     const o = obj(d.id), [a, b] = [d.start, d.at];
@@ -507,6 +580,9 @@ svg.addEventListener('pointerup', async () => {
     return patchObj(o.id, { masks: [...(o.masks || []), poly] });
   }
   if (!d.moved) return;
+  if (d.kind === 'move' && Object.keys(d.ps).length > 1) {
+    return setState(await api('PATCH', '/api/objects', Object.fromEntries(Object.keys(d.ps).map((k) => [k, { placement: obj(k).placement }]))));
+  }
   const o = obj(d.id);
   const body = { placement: o.placement };
   if (d.kind === 'scale') body.scale = +(d.scale * d.k).toFixed(5);
@@ -523,7 +599,8 @@ function hint(text) {
   if (!text && Date.now() < flashUntil) return;     // a flash() stays its while
   $('#hint').textContent = text || (mode === 'paint' && paintTo
     ? `Painting ${paintTo} · ${paintTarget} · ${paintScope} (shift: whole colour) · Esc to stop`
-    : mode === 'mask' ? 'Mask: drag where the drawing isn\'t drawn · Del removes a picked one' : '');
+    : mode === 'mask' ? 'Mask: drag where the drawing isn\'t drawn · Del removes a picked one'
+    : mode === 'shapes' ? 'Shapes: click one (its whole group; Alt: the shape alone), Shift adds, drag a box · Ctrl+G groups them · Esc' : '');
 }
 
 // The selected object's frame: corners scale (alt: about the middle), the knob turns (shift: 15°)
@@ -647,16 +724,31 @@ function renderBed() {
   rect(m.draw_area, 'draw-area', L);
 }
 
-function effGroup(o, sh, part) {
-  const colour = part === 'stroke' ? sh.stroke : sh.fill;
-  if (!colour) return null;
-  const over = (o.shapes[String(sh.i)] || {})[part];
-  if (over) return over;
-  const key = `${part} ${colour}`;
+// The set (shapes grouped by hand) a shape is in: the later one, when in two
+function setOf(o, i) {
+  let st = null;
+  for (const x of o.sets || []) if (x.shapes.includes(i)) st = x;
+  return st;
+}
+function layerGroup(o, key) {
   if (o.groups[key]) return o.groups[key];
   const g = info(o.id).groups.find((x) => x.key === key);
   return g ? g.default : { tool: null, mask: false };
 }
+// As slicer.part_group: the shape's own paint, else its set's, else its colour's layer; a
+// fill's margin and border as the set or the shape tweak them. A line draws with its fill's.
+function effGroup(o, sh, part) {
+  const colour = part === 'stroke' ? sh.stroke : sh.fill;
+  if (part === 'stroke' && !colour) return null;
+  if (part === 'fill' && !sh.line && !sh.fillable) return null;
+  const own = o.shapes[String(sh.i)], st = setOf(o, sh.i);
+  let g = [own, st].map((p) => p && p[part]).find(Boolean) || (colour ? layerGroup(o, `${part} ${colour}`) : null);
+  if (g && part === 'fill' && !sh.line) {
+    for (const p of [st, own]) for (const k of ['inset', 'border']) if (p && p[k] != null) g = { ...g, [k]: p[k] };
+  }
+  return g;
+}
+const target = (g) => (g && g.tool) || (g && g.mask ? 'mask' : 'skip');
 
 function paintOf(g) {
   // [colour, opacity] of a group in the Tools view
@@ -691,6 +783,7 @@ async function drawObjects() {
   const L = $('#design-layer');
   const ids = new Set(S.job.objects.map((o) => o.id));
   for (const g of $$('g.obj', L)) if (!ids.has(g.dataset.id)) g.remove();
+  const had = sel && geo[sel] && geo[sel].data;
   for (const o of S.job.objects) {
     const data = await ensureGeo(o);
     let g = $(`g.obj[data-id="${CSS.escape(o.id)}"]`, L);
@@ -712,6 +805,7 @@ async function drawObjects() {
   markSmall();
   drawHandles();
   drawRulers();
+  if (sel && geo[sel] && geo[sel].data !== had) renderObjectPanel();      // its layers count shapes
 }
 
 // Shapes too small or dense for their tool's line (the slice says which): outlined in
@@ -743,7 +837,9 @@ async function removeMask(id, i) {
 function styleObject(o, g, data) {
   const paths = $$('path.shape', g);
   g.classList.toggle('selected', o.id === sel);
+  g.classList.toggle('with', o.id !== sel && !!sel && movers(sel).some((m) => m.id === o.id));
   g.classList.toggle('dim', view === 'paths');
+  const picked = shapeSel.id === o.id ? shapeSel.idx : null;
   data.shapes.forEach((sh, n) => {
     const p = paths[n];
     let stroke = 'none', fill = 'none', sw = Math.max(sh.w, 0.1), op = 1, sop = 1, fop = 1;
@@ -760,8 +856,9 @@ function styleObject(o, g, data) {
         [stroke, op] = paintOf(effGroup(o, sh, 'fill'));
         sw = 0.3;
       } else {
+        const fg = effGroup(o, sh, 'fill');
         if (sh.stroke) [stroke, sop] = paintOf(effGroup(o, sh, 'stroke'));
-        if (sh.fill) [fill, fop] = paintOf(effGroup(o, sh, 'fill'));
+        if (fg) [fill, fop] = paintOf(fg);
         if (fill === 'var(--paper)') { stroke = stroke === 'none' ? 'var(--muted)' : stroke; }
       }
     }
@@ -773,6 +870,7 @@ function styleObject(o, g, data) {
     p.setAttribute('fill-opacity', fop);
     p.setAttribute('stroke-linejoin', 'round');
     p.setAttribute('stroke-linecap', 'round');
+    p.classList.toggle('picked', !!picked && picked.has(sh.i));
   });
 }
 
@@ -887,8 +985,11 @@ function renderObjectList() {
   for (const id of hiddenObjs) if (!ids.has(id)) hiddenObjs.delete(id);
   const hidden = S.job.objects.filter((o) => hiddenObjs.has(o.id)).length;
   const n = S.job.objects.length;
-  fill($('#objects'), [...S.job.objects].reverse().map((o, k) => `
-    <li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}${hiddenObjs.has(o.id) ? ' hidden' : ''}">
+  for (const id of multi) if (!ids.has(id)) multi.delete(id);
+  const top = [...S.job.objects].reverse();
+  const row = (o) => {
+    const k = top.indexOf(o);
+    return `<li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}${multi.has(o.id) ? ' multi' : ''}${o.group ? ' grouped' : ''}${hiddenObjs.has(o.id) ? ' hidden' : ''}">
       <button class="icon eye" data-act="eye" title="${hiddenObjs.has(o.id) ? 'Hidden: show it' : 'Hide it (only from view: it still plots)'}">${hiddenObjs.has(o.id) ? '◌' : '◉'}</button>
       <span class="name">${esc(o.id)}</span>
       <button class="icon" data-act="dup" title="Duplicate (Ctrl+D)">⧉</button>
@@ -896,8 +997,49 @@ function renderObjectList() {
       ${o.id === sel && n > 1 ? `<div class="order" role="group" aria-label="Order">${ORDER.map(([to, icon, title]) =>
         `<button class="icon" data-order="${to}" title="${title}"${(to === 'front' || to === 'forward' ? k === 0 : k === n - 1) ? ' disabled' : ''}>${icon}</button>`).join('')}
         <span class="note">${k === 0 ? 'on top' : k === n - 1 ? 'at the bottom' : `${k + 1} of ${n}`}</span></div>` : ''}
-    </li>`).join('') + (hidden ? `<li class="note">${hidden} hidden from view: ${hidden > 1 ? 'they still plot' : 'it still plots'} (Skip its colours not to)</li>` : ''));
+    </li>`;
+  };
+  // A group of drawings: a row of its own, its drawings under it, at its top one's place
+  const head = (g, ms) => {
+    const off = ms.every((o) => hiddenObjs.has(o.id));
+    return `<li class="ghead${off ? ' hidden' : ''}" data-group="${esc(g)}" title="Drawings grouped (Ctrl+G): they move, hide and pick together">
+      <button class="icon eye" data-act="geye" title="${off ? 'Show them all' : 'Hide them all (only from view)'}">${off ? '◌' : '◉'}</button>
+      <span class="name">${esc(g)} <span class="note">${ms.length} drawings</span></span>
+      <button class="icon" data-act="grename" title="Rename">✎</button>
+      <button class="icon" data-act="gungroup" title="Ungroup (Ctrl+Shift+G): the drawings stay">✕</button></li>`;
+  };
+  const seen = new Set(), html = [];
+  for (const o of top) {
+    if (seen.has(o.id)) continue;
+    const ms = o.group ? top.filter((x) => x.group === o.group) : [o];
+    ms.forEach((x) => seen.add(x.id));
+    if (o.group) html.push(head(o.group, ms));
+    html.push(...ms.map(row));
+  }
+  fill($('#objects'), html.join('') + (hidden ? `<li class="note">${hidden} hidden from view: ${hidden > 1 ? 'they still plot' : 'it still plots'} (Skip its colours not to)</li>` : ''));
+  const o = sel && obj(sel);
+  $('#group-objects').hidden = multi.size < 2;
+  $('#group-objects').textContent = `Group ${multi.size}`;
+  $('#ungroup-objects').hidden = !(o && o.group);
 }
+// Drawings grouped: the same `group` on each (Shift-click picks them, Ctrl+G)
+async function groupDrawings(ids, name) {
+  setState(await api('PATCH', '/api/objects', Object.fromEntries(ids.map((id) => [id, { group: name }]))));
+}
+async function groupPickedDrawings() {
+  if (multi.size < 2) return flash('Shift-click drawings to pick them, then group them');
+  const names = new Set(S.job.objects.map((o) => o.group).filter(Boolean));
+  let n = names.size + 1;
+  while (names.has(`group ${n}`)) n++;
+  const ids = [...multi];
+  multi.clear();
+  await groupDrawings(ids, `group ${n}`);
+}
+async function ungroupDrawings(g) {
+  await groupDrawings(S.job.objects.filter((o) => o.group === g).map((o) => o.id), null);
+}
+$('#group-objects').addEventListener('click', groupPickedDrawings);
+$('#ungroup-objects').addEventListener('click', () => { const o = sel && obj(sel); if (o && o.group) ungroupDrawings(o.group); });
 $('#clear-objects').addEventListener('click', async (e) => {
   const n = S.job.objects.length;
   if (!n) return toast('Nothing on the bed');
@@ -912,10 +1054,30 @@ async function reorder(id, to) {
 }
 $('#objects').addEventListener('click', async (e) => {
   const li = e.target.closest('li'); if (!li) return;
-  const id = li.dataset.id, act = e.target.dataset.act;
+  const id = li.dataset.id, act = e.target.dataset.act, g = li.dataset.group;
+  if (g) {
+    const ms = S.job.objects.filter((o) => o.group === g);
+    if (act === 'geye') {
+      const off = ms.every((o) => hiddenObjs.has(o.id));
+      ms.forEach((o) => (off ? hiddenObjs.delete(o.id) : hiddenObjs.add(o.id)));
+      store.set('hiddenObjs', [...hiddenObjs]);
+      renderObjectList(); renderObjects();
+    } else if (act === 'gungroup') ungroupDrawings(g);
+    else if (act === 'grename') {
+      const name = (prompt('The group\'s name', g) || '').trim();
+      if (name && name !== g) groupDrawings(ms.map((o) => o.id), name);
+    } else if (ms.length) { sel = ms[ms.length - 1].id; store.set('sel', sel); render(); }
+    return;
+  }
   if (!id) return;
   if (e.target.dataset.order) return reorder(id, e.target.dataset.order);
   if (act === 'eye') return setHidden(id, !hiddenObjs.has(id));
+  if (e.shiftKey && !act && !e.target.dataset.order) {        // picked with the others: to group them
+    if (!multi.size && sel && sel !== id) multi.add(sel);
+    multi.has(id) ? multi.delete(id) : multi.add(id);
+    sel = id; store.set('sel', sel);
+    return render();
+  }
   if (act === 'del') {
     if (twice(`del-${id}`, e.target, `Remove ${id} from the bed`)) setState(await api('DELETE', `/api/objects/${id}`));
   } else if (act === 'dup') {
@@ -923,34 +1085,170 @@ $('#objects').addEventListener('click', async (e) => {
   } else { sel = id; store.set('sel', sel); render(); }
 });
 
+// --- layers: a drawing's colours by the pen that draws them ---------------------------
+// Colours alike that go to one pen share a chip, so an SVG of a thousand shades isn't a
+// thousand rows; drag a chip onto another pen, or click it for its settings. A shape's
+// own paint and its group's win over its colour's layer (effGroup).
+const NEAR = 60;        // redmean distance (0..765) under which two colours share a chip
+const CHIPS = 12;       // chips a layer shows before '+n'
+const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+function colourDist(a, b) {
+  const p = rgb(a), q = rgb(b), r = (p[0] + q[0]) / 2, d = p.map((v, i) => v - q[i]);
+  return Math.sqrt((2 + r / 256) * d[0] ** 2 + 4 * d[1] ** 2 + (2 + (255 - r) / 256) * d[2] ** 2);
+}
+function chipsOf(o) {
+  const chips = [];
+  for (const g of info(o.id).groups) {          // the longest first: it names the chip
+    const [part, colour] = g.key.split(' ');
+    const to = target(layerGroup(o, g.key));
+    const c = chips.find((x) => x.part === part && x.to === to && colourDist(x.colour, colour) < NEAR);
+    if (c) { c.keys.push(g.key); c.colours.push(colour); c.shapes += g.shapes; }
+    else chips.push({ part, colour, to, keys: [g.key], colours: [colour], shapes: g.shapes });
+  }
+  return chips;
+}
+// The shapes each pen draws of a drawing, as painted (their own, their group's, their colour's)
+function layerShapes(o) {
+  const data = geo[o.id] && geo[o.id].data, out = {};
+  if (!data) return out;
+  for (const sh of data.shapes) {
+    for (const t of new Set(['stroke', 'fill'].map((p) => effGroup(o, sh, p)).filter(Boolean).map(target))) {
+      (out[t] = out[t] || []).push(sh.i);
+    }
+  }
+  return out;
+}
+const pens = (cur) => Object.values(S.tools).filter((t) => t.draws !== false).map((t) => opt(t.id, cur, `${t.id} ${t.name}`)).join('')
+  + opt('mask', cur, 'mask') + opt('skip', cur, 'skip');
+const LAYER_NAMES = { mask: 'Mask: hides what is under', skip: 'Not drawn' };
+const swatchOf = (part, colour) => `<span class="swatch ${part}" style="${part === 'stroke' ? 'border-color' : 'background'}:${esc(colour)}"></span>`;
+function layersHtml(o) {
+  const chips = chipsOf(o), shapes = layerShapes(o);
+  const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mask', 'skip'];
+  for (const c of chips) if (!tos.includes(c.to)) tos.splice(-2, 0, c.to);      // a tool not in a holder any more
+  const chip = (c) => `<button class="chip${openChip === `${o.id}|${c.keys[0]}` ? ' on' : ''}" draggable="true" data-chip="${esc(c.keys[0])}"
+      title="${esc(`${c.part === 'stroke' ? 'Outlines' : 'Fills'} ${c.colours.slice(0, 6).join(', ')}${c.colours.length > 6 ? ` and ${c.colours.length - 6} more` : ''}: ${c.shapes} shape${c.shapes > 1 ? 's' : ''}. Drag onto another pen, click for its settings`)}">${swatchOf(c.part, c.colour)}${c.colours.length > 1 ? `<span class="n">${c.colours.length}</span>` : ''}</button>`;
+  return tos.map((to) => {
+    const cs = chips.filter((c) => c.to === to), t = S.tools[to], key = `${o.id}|${to}`;
+    const all = openLayers.has(key), n = (shapes[to] || []).length;
+    const sw = t ? `<span class="swatch" style="background:${esc(t.color)}"></span>` : `<span class="swatch ${to}"></span>`;
+    return `<div class="layer${cs.length || n ? '' : ' empty'}" data-layer="${esc(to)}">
+      <div class="lhead">${sw}<span class="lname">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}</span>` : esc(LAYER_NAMES[to] || to)}</span>
+        ${n ? `<button class="icon" data-act="pick-layer" title="Pick its ${n} shape${n > 1 ? 's' : ''} (the shapes tool, A)">${n} ⬚</button>` : '<span class="note">drop here</span>'}</div>
+      ${cs.length ? `<div class="chips">${(all ? cs : cs.slice(0, CHIPS)).map(chip).join('')}${cs.length > CHIPS
+        ? `<button class="icon" data-act="all-chips" title="${all ? 'Fewer' : 'Every colour of it'}">${all ? '−' : `+${cs.length - CHIPS}`}</button>` : ''}</div>` : ''}
+    </div>`;
+  }).join('') + chipEditor(o, chips);
+}
+// A chip's settings: for each of its colours. Left empty: as its pen draws
+function chipEditor(o, chips) {
+  const c = openChip && chips.find((x) => `${o.id}|${x.keys[0]}` === openChip);
+  if (!c) return '';
+  const cur = layerGroup(o, c.keys[0]), t = drawOf(cur.tool), b = asChoice(cur.border);
+  const opts = c.part === 'fill'
+    ? `<select data-cf="fill" title="How the insides are filled">${opt('', cur.fill ?? '', `${t.fill} (pen)`)}${['hatch', 'crosshatch', 'concentric', 'none'].map((v) => opt(v, cur.fill ?? '')).join('')}</select>
+       <label>∠<input type="number" data-cf="angle" value="${num(cur.angle)}" step="15" placeholder="${num(t.angle)}" title="Fill lines' angle"></label>
+       <label>gap<input type="number" data-cf="spacing" value="${num(cur.spacing)}" step="0.05" min="0.05" placeholder="pen" title="mm between fill lines"></label>
+       <select data-cf="border" title="Outline the fill">${opt('', b, `${t.border ? 'border' : 'no border'} (pen)`)}${opt('1', b, 'border')}${opt('0', b, 'no border')}</select>
+       <label class="check" title="Keep the fill its pen's bleed (${num(t.bleed)} mm, Tools tuning) inside its own edge, the corners round; a border runs along that inner edge"><input type="checkbox" data-cf="inset"${cur.inset ? ' checked' : ''}> bleed margin</label>`
+    : `<select data-cf="stroke" title="Outlines: a line down the middle, or as wide as the SVG has them">${opt('', cur.stroke ?? '', `${STROKES[t.stroke]} (pen)`)}${Object.entries(STROKES).map(([v, l]) => opt(v, cur.stroke ?? '', l)).join('')}</select>`;
+  const each = c.keys.length > 1 ? more('chip-each', `Each of its ${c.keys.length} colours`, c.keys.map((k) =>
+    `<label data-key="${esc(k)}">${swatchOf(c.part, k.split(' ')[1])} ${esc(k.split(' ')[1])}</label><select data-ck="${esc(k)}">${pens(target(layerGroup(o, k)))}</select>`).join('')) : '';
+  return `<div class="chip-edit">
+    <div class="row">${swatchOf(c.part, c.colour)} <b>${c.part === 'stroke' ? 'Outlines' : 'Fills'}</b>
+      <span class="note grow">${c.colours.length > 1 ? `${c.colours.length} colours alike · ` : `${esc(c.colour)} · `}${c.shapes} shape${c.shapes > 1 ? 's' : ''}</span>
+      <button class="icon" data-act="chip-close" title="Close">✕</button></div>
+    <div class="opts"><select data-cf="to" title="The pen these colours are drawn with; mask: they hide what is under; skip: not drawn">${pens(target(cur))}</select>${opts}</div>
+    ${each}</div>`;
+}
+async function setChip(o, keys, fn) {
+  const groups = { ...o.groups };
+  for (const k of keys) groups[k] = fn({ ...layerGroup(o, k) });
+  return patchObj(o.id, { groups });
+}
+const toPen = (g, v) => ({ ...g, tool: ['mask', 'skip'].includes(v) ? null : v, mask: v === 'mask' });
+
+// The shapes picked with the shapes tool: their pen, their fill (only shapes that can take
+// one: not lines), its margin and border. Exactly a group's shapes: the group's settings.
+function exactSet(o) {
+  if (shapeSel.id !== o.id || !shapeSel.idx.size) return null;
+  const idx = shapeSel.idx;
+  return (o.sets || []).find((st) => st.shapes.length === idx.size && st.shapes.every((i) => idx.has(i))) || null;
+}
+function pickedHtml(o) {
+  const data = geo[o.id] && geo[o.id].data;
+  if (shapeSel.id !== o.id || !shapeSel.idx.size || !data) return '';
+  const shs = data.shapes.filter((sh) => shapeSel.idx.has(sh.i)), st = exactSet(o);
+  const own = (sh) => st || o.shapes[String(sh.i)] || {};
+  const lines = shs.filter((sh) => sh.stroke || sh.line), fills = shs.filter((sh) => sh.fillable);
+  const same = (vs) => (vs.every((v) => v === vs[0]) ? vs[0] : undefined);
+  const lineV = same(lines.map((sh) => { const p = own(sh)[sh.line ? 'fill' : 'stroke']; return p ? target(p) : ''; }));
+  const fillV = same(fills.map((sh) => (own(sh).fill ? target(own(sh).fill) : '')));
+  const fgs = fills.map((sh) => effGroup(o, sh, 'fill')).filter(Boolean);
+  const flag = (k) => same(fgs.map((g) => !!(g[k] ?? (k === 'border' ? drawOf(g.tool).border : false))));
+  const bleeds = [...new Set(fgs.filter((g) => g.tool).map((g) => drawOf(g.tool).bleed))];
+  const pick = (f, v, title) => `<select data-pf="${f}" title="${title}">${v === undefined ? '<option value="~" selected>mixed</option>' : ''}${opt('', v ?? '', st ? 'by their colours' : 'as its layer')}${pens(v)}</select>`;
+  const check = (k, label, title) => { const v = flag(k); return `<label class="check${v === undefined ? ' mixed' : ''}" title="${title}${v === undefined ? ' (mixed)' : ''}"><input type="checkbox" data-pf="${k}"${v ? ' checked' : ''}> ${label}</label>`; };
+  const painted = shs.filter((sh) => o.shapes[String(sh.i)]).length;
+  const inSets = new Set(shs.map((sh) => setOf(o, sh.i)).filter(Boolean));
+  return `<h3>${st ? `Group “${esc(st.name)}”` : 'Picked shapes'} (${shs.length})</h3>
+    <div class="form picked">
+      ${lines.length ? `<label>Outline</label>${pick('line', lineV, 'The pen their outlines are drawn with, apart from their colour')}` : ''}
+      ${fills.length ? `<label>Fill</label>${pick('fill', fillV, 'The pen their insides are filled with, apart from their colour: a shape closed but not filled in the SVG can take one too')}
+        <label></label><div class="row wrap">${check('inset', `bleed margin${bleeds.length === 1 ? ` ${num(bleeds[0])} mm` : ''}`, 'Keep the fill its pen\'s bleed (Tools tuning) inside its own edge, the corners round (sharp where the shape is too thin for round ones)')}
+          ${check('border', 'border', 'Outline the fill (with the margin: along its inner edge)')}</div>
+        ${bleeds.length === 1 && !bleeds[0] && flag('inset') !== false ? '<label></label><p class="note">Its pen\'s bleed is 0: set one in its tuning (Tools)</p>' : ''}`
+      : '<label></label><p class="note">Lines only: nothing to fill</p>'}
+      <label></label><div class="buttons">
+        ${st ? '<button data-act="ungroup-shapes" title="The shapes stay, the group goes (Ctrl+Shift+G)">Ungroup</button>'
+          : `<button data-act="group-shapes" title="Group them: paint them together; a click on one picks them all (Ctrl+G)${inSets.size ? '. They leave the groups they are in' : ''}">Group</button>`}
+        ${!st && painted ? `<button data-act="unpaint-picked" title="Back to their layer (or group)">Clear own (${painted})</button>` : ''}
+        <button data-act="unpick" title="Pick none (Esc)">Done</button></div>
+    </div>`;
+}
+function setsHtml(o) {
+  if (!(o.sets || []).length) return '';
+  const st = exactSet(o);
+  return `<h3 title="Shapes grouped by hand (the shapes tool, Ctrl+G): painted together, over their colours. Click one to pick its shapes">Groups (${o.sets.length})</h3>
+    <ul class="list sets">${o.sets.map((x, k) => {
+      const how = [x.stroke && `outline ${target(x.stroke)}`, x.fill && `fill ${target(x.fill)}`, x.inset && 'margin',
+        x.border != null && (x.border ? 'border' : 'no border')].filter(Boolean).join(' · ');
+      return `<li data-set="${k}" class="${x === st ? 'on' : ''}"><span class="name">${esc(x.name)} <span class="note">${x.shapes.length} · ${esc(how || 'as their colours')}</span></span>
+        <button class="icon" data-act="rename-set" title="Rename">✎</button><button class="icon" data-act="ungroup-set" title="Ungroup: the shapes stay">✕</button></li>`;
+    }).join('')}</ul>`;
+}
+// Change the picked shapes' own paint (fn: (paint, shape) -> paint), or their group's when they are one
+async function editPicked(o, fn) {
+  const st = exactSet(o), clean = (p) => Object.fromEntries(Object.entries(p).filter(([, v]) => v != null));
+  if (st) return patchObj(o.id, { sets: o.sets.map((x) => (x === st ? clean(fn({ ...x }, null)) : x)) });
+  const shapes = { ...o.shapes }, data = geo[o.id].data;
+  for (const sh of data.shapes.filter((x) => shapeSel.idx.has(x.i))) {
+    const p = clean(fn({ ...(shapes[sh.i] || {}) }, sh));
+    if (Object.keys(p).length) shapes[sh.i] = p; else delete shapes[sh.i];
+  }
+  return patchObj(o.id, { shapes });
+}
+async function groupPicked(o) {
+  const idx = [...shapeSel.idx].sort((a, b) => a - b);
+  if (!idx.length) return flash('Pick shapes first (the shapes tool, A)');
+  if (exactSet(o)) return flash('They are a group already');
+  const sets = (o.sets || []).map((x) => ({ ...x, shapes: x.shapes.filter((i) => !shapeSel.idx.has(i)) })).filter((x) => x.shapes.length);
+  let n = sets.length + 1;
+  while (sets.some((x) => x.name === `Group ${n}`)) n++;
+  await patchObj(o.id, { sets: [...sets, { name: `Group ${n}`, shapes: idx }] });
+  toast(`Group ${n}: ${idx.length} shape${idx.length > 1 ? 's' : ''}`);
+}
+async function ungroupPicked(o) {
+  const st = exactSet(o);
+  if (st) await patchObj(o.id, { sets: o.sets.filter((x) => x !== st) });
+}
+
 function renderObjectPanel() {
   const P = $('#object-panel');
   const o = sel && obj(sel);
   if (!o) { P.hidden = true; return; }
   P.hidden = false;
   const I = info(o.id);
-  const groups = I.groups.map((g) => {
-    const cur = o.groups[g.key] || g.default;
-    const [part, colour] = g.key.split(' ');
-    const over = !!o.groups[g.key];
-    const open = openOpts.has(o.id + g.key);
-    const meta = [`${g.shapes}×`, g.texts ? `${g.texts} text` : '', g.length ? `${num(g.length / 1000, 2)} m` : '',
-      g.widths.length ? 'w ' + g.widths.slice(0, 3).map((w) => num(w, 2)).join('/') : ''].filter(Boolean).join(' · ');
-    // Left empty: as its tool draws (the Drawing panel for every tool, a tool's own tuning)
-    const t = drawOf(cur.tool);
-    const opts = part === 'fill'
-      ? `<select data-f="fill">${opt('', cur.fill ?? '', `${t.fill} (tool)`)}${['hatch', 'crosshatch', 'concentric', 'none'].map((v) => opt(v, cur.fill ?? '')).join('')}</select>
-         <label>∠<input type="number" data-f="angle" value="${num(cur.angle)}" step="15" placeholder="${num(t.angle)}"></label>
-         <select data-f="border">${opt('', cur.border == null ? '' : cur.border ? '1' : '0', `${t.border ? 'border' : 'no border'} (tool)`)}${opt('1', cur.border == null ? '' : cur.border ? '1' : '0', 'border')}${opt('0', cur.border == null ? '' : cur.border ? '1' : '0', 'no border')}</select>
-         <label>gap<input type="number" data-f="spacing" value="${num(cur.spacing)}" step="0.05" min="0.05" placeholder="tool"></label>`
-      : `<select data-f="stroke">${opt('', cur.stroke ?? '', `${STROKES[t.stroke]} (tool)`)}${Object.entries(STROKES).map(([v, l]) => opt(v, cur.stroke ?? '', l)).join('')}</select>`;
-    return `<tr data-key="${esc(g.key)}">
-        <td><span class="swatch ${part}" style="${part === 'stroke' ? 'border-color' : 'background'}:${esc(colour)}"></span></td>
-        <td><div class="key">${esc(part)} ${esc(colour)}${over ? ' •' : ''}</div><div class="meta">${esc(meta)}</div></td>
-        <td><select data-f="to">${toolOptions(cur)}</select></td>
-        <td><button class="icon more" data-act="opts" title="Fill and stroke options">${open ? '▾' : '▸'}</button></td>
-      </tr>${open ? `<tr data-key="${esc(g.key)}" class="opts-row"><td></td><td colspan="3"><div class="opts">${opts}</div></td></tr>` : ''}`;
-  }).join('');
   const lineFonts = S.line_fonts;
   const srcFonts = S.fonts.filter((f) => f.kind === 'outline');
   const texts = I.texts.map((t) => {
@@ -976,8 +1274,10 @@ function renderObjectPanel() {
       <label>Size</label><div>${num(I.size[0], 1)} × ${num(I.size[1], 1)} mm</div>
       <label></label><label class="check"><input type="checkbox" id="f-occ"${o.occlude ? ' checked' : ''}> what is on top hides what is under</label>
     </div>
-    <h3>Colours (${I.groups.length})</h3>
-    <table class="groups"><tbody>${groups}</tbody></table>
+    <h3 title="Each pen and what it draws of this drawing: its colours, alike ones as one chip (outlines a ring, fills a dot). Drag a chip onto another pen, or click it for its settings">Layers</h3>
+    <div class="layers">${layersHtml(o)}</div>
+    ${pickedHtml(o)}
+    ${setsHtml(o)}
     ${I.texts.length ? `<h3>Texts (${I.texts.length})</h3>${texts}` : ''}
     <h3>Masked regions${o.masks.length ? ` (${o.masks.length})` : ''}</h3>
     ${o.masks.length ? `<ul class="list masks">${o.masks.map((m, i) => `<li data-m="${i}" class="${maskSel && maskSel.id === o.id && maskSel.i === i ? 'on' : ''}">
@@ -999,16 +1299,28 @@ $('#object-panel').addEventListener('change', async (e) => {
   }
   if (t.id === 'f-s') return scaleTo(o, +t.value / 100);
   if (t.id === 'f-occ') return patchObj(o.id, { occlude: t.checked });
-  const row = t.closest('tr[data-key]');
-  if (row) {
-    const key = row.dataset.key;
-    const g = { ...(o.groups[key] || info(o.id).groups.find((x) => x.key === key).default) };
-    const f = t.dataset.f;
-    if (f === 'to') { g.tool = ['mask', 'skip'].includes(t.value) ? null : t.value; g.mask = t.value === 'mask'; }
-    else if (f === 'border') g.border = t.value === '' ? null : t.value === '1';
-    else if (f === 'angle' || f === 'spacing') g[f] = t.value === '' ? null : +t.value;
-    else g[f] = t.value === '' ? null : t.value;
-    return patchObj(o.id, { groups: { ...o.groups, [key]: g } });
+  const cf = t.dataset.cf;
+  if (cf) {
+    const c = chipsOf(o).find((x) => `${o.id}|${x.keys[0]}` === openChip);
+    if (!c) return;
+    return setChip(o, c.keys, (g) => {
+      if (cf === 'to') return toPen(g, t.value);
+      if (cf === 'inset') return { ...g, inset: t.checked || null };
+      if (cf === 'border') return { ...g, border: t.value === '' ? null : t.value === '1' };
+      if (cf === 'angle' || cf === 'spacing') return { ...g, [cf]: t.value === '' ? null : +t.value };
+      return { ...g, [cf]: t.value === '' ? null : t.value };
+    });
+  }
+  if (t.dataset.ck) return setChip(o, [t.dataset.ck], (g) => toPen(g, t.value));
+  const pf = t.dataset.pf;
+  if (pf && t.value !== '~') {
+    return editPicked(o, (p, sh) => {
+      if (pf === 'inset' || pf === 'border') return { ...p, [pf]: t.checked };
+      const part = pf === 'fill' ? 'fill' : sh && sh.line ? 'fill' : 'stroke';
+      if (sh && (pf === 'fill' ? !sh.fillable : !(sh.stroke || sh.line))) return p;
+      const colour = sh && (part === 'stroke' ? sh.stroke : sh.fill);
+      return { ...p, [part]: t.value === '' ? null : toPen(colour ? layerGroup(o, `${part} ${colour}`) : {}, t.value) };
+    });
   }
   const run = t.closest('.text-run');
   if (run) {
@@ -1035,11 +1347,42 @@ $('#object-panel').addEventListener('input', (e) => {
 });
 $('#object-panel').addEventListener('click', async (e) => {
   const o = obj(sel); if (!o) return;
-  const act = e.target.dataset.act;
-  if (act === 'opts') {
-    const k = o.id + e.target.closest('tr').dataset.key;
-    openOpts.has(k) ? openOpts.delete(k) : openOpts.add(k);
+  const act = e.target.dataset.act, chip = e.target.closest('[data-chip]'), layer = e.target.closest('[data-layer]');
+  if (chip && chip.classList.contains('chip')) {
+    const k = `${o.id}|${chip.dataset.chip}`;
+    openChip = openChip === k ? null : k;
     renderObjectPanel();
+  } else if (act === 'chip-close') {
+    openChip = null;
+    renderObjectPanel();
+  } else if (act === 'all-chips') {
+    const k = `${o.id}|${layer.dataset.layer}`;
+    openLayers.has(k) ? openLayers.delete(k) : openLayers.add(k);
+    renderObjectPanel();
+  } else if (act === 'pick-layer') {
+    shapeSel = { id: o.id, idx: new Set(layerShapes(o)[layer.dataset.layer] || []) };
+    setMode('shapes');
+    render();
+  } else if (act === 'group-shapes') {
+    groupPicked(o);
+  } else if (act === 'ungroup-shapes') {
+    ungroupPicked(o);
+  } else if (act === 'unpaint-picked') {
+    const shapes = { ...o.shapes };
+    shapeSel.idx.forEach((i) => delete shapes[i]);
+    patchObj(o.id, { shapes });
+  } else if (act === 'unpick') {
+    shapeSel = { id: null, idx: new Set() };
+    render();
+  } else if (act === 'rename-set' || act === 'ungroup-set') {
+    const k = +e.target.closest('li').dataset.set, st = o.sets[k];
+    if (act === 'ungroup-set') return patchObj(o.id, { sets: o.sets.filter((_, j) => j !== k) });
+    const name = (prompt('The group\'s name', st.name) || '').trim();
+    if (name) patchObj(o.id, { sets: o.sets.map((x, j) => (j === k ? { ...x, name } : x)) });
+  } else if (e.target.closest('.sets li[data-set]')) {
+    shapeSel = { id: o.id, idx: new Set(o.sets[+e.target.closest('li').dataset.set].shapes) };
+    setMode('shapes');
+    render();
   } else if (act === 'rot90') {
     const [w, h] = info(o.id).size, c = { x: w / 2, y: h / 2 };
     const wc = toWorld(o.placement, c), a = (o.placement.rotate + 90) % 360, r = rot(c, a);
@@ -1064,6 +1407,36 @@ $('#object-panel').addEventListener('click', async (e) => {
     maskSel = { id: o.id, i: +e.target.closest('li').dataset.m };
     render();
   }
+});
+
+// A chip dragged onto another pen's layer: its colours go to that pen
+let dragChip = null;
+$('#object-panel').addEventListener('dragstart', (e) => {
+  const c = e.target.closest && e.target.closest('.chip[data-chip]');
+  if (!c) return;
+  dragChip = c.dataset.chip;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragChip);
+  setTimeout(() => $('.layers') && $('.layers').classList.add('dragging'), 0);
+});
+$('#object-panel').addEventListener('dragend', () => {
+  dragChip = null;
+  $$('.layers.dragging, .layer.over').forEach((el) => el.classList.remove('dragging', 'over'));
+});
+$('#object-panel').addEventListener('dragover', (e) => {
+  const L = dragChip && e.target.closest('.layer');
+  if (!L) return;
+  e.preventDefault();
+  $$('.layer.over').forEach((el) => el !== L && el.classList.remove('over'));
+  L.classList.add('over');
+});
+$('#object-panel').addEventListener('drop', (e) => {
+  const L = dragChip && e.target.closest('.layer'), o = obj(sel);
+  if (!L || !o) return;
+  e.preventDefault();
+  const c = chipsOf(o).find((x) => x.keys[0] === dragChip);
+  dragChip = null;
+  if (c && c.to !== L.dataset.layer) setChip(o, c.keys, (g) => toPen(g, L.dataset.layer));
 });
 
 async function scaleTo(o, s, recentre = false) {
@@ -1689,13 +2062,14 @@ $('#zoom-out').addEventListener('click', () => zoom(1.25));
 
 // Keyboard shortcuts: the table is the help (?) too
 const KEYS = [
-  ['Tools', [['V', 'select, move, scale, turn'], ['H', 'pan (or hold Space, or the right button)'], ['P', 'paint with a tool'],
+  ['Tools', [['V', 'select, move, scale, turn'], ['A', 'shapes: pick shapes (Shift adds, a box; Alt: one of a group)'], ['H', 'pan (or hold Space, or the right button)'], ['P', 'paint with a tool'],
     ['Shift+0 … 9', 'paint with T0 … T9'], ['M', 'mask: drag over a drawing where it isn’t drawn'], ['Esc', 'stop: back to select, then deselect']]],
   ['View', [['1  2  3', 'Original · Tools · Paths'], ['F  0', 'fit the bed'], ['Z', 'zoom to the selected drawing'], ['+  −', 'zoom in, out'],
     ['T', 'travels in the Paths view'], ['G', 'the G-code beside the canvas'], ['\\', 'hide or show the panels'], ['?', 'these shortcuts']]],
   ['The selected drawing', [['← → ↑ ↓', 'nudge 1 mm (Shift 10, Alt 0.1)'], ['R  Shift+R', 'turn a quarter, either way'], ['C', 'centre it on the paper'],
     ['Tab  Shift+Tab', 'select the next, the previous drawing'], [']  [', 'bring forward, send backward'], ['Shift+]  Shift+[', 'to the front, to the back'],
-    ['Ctrl+D', 'duplicate'], ['Del', 'remove it (a masked region, with the mask tool)']]],
+    ['Ctrl+D', 'duplicate'], ['Del', 'remove it (a masked region, with the mask tool)'],
+    ['Shift+click', 'pick drawings together: they move together'], ['Ctrl+G  Ctrl+Shift+G', 'group, ungroup the picked drawings (shapes, with A)']]],
   ['Plot', [['K', 'play the plot, pause'], [',  .', 'one G-code line back, on'], ['Shift+,  Shift+.', '100 lines back, on'], ['Home  End', 'the first line, the last'],
     ['Ctrl+S', 'download the G-code'], ['Ctrl+Z  Ctrl+Shift+Z', 'undo, redo']]],
   ['Canvas', [['wheel, pinch', 'zoom'], ['two fingers', 'pan (a trackpad, a touch screen)'], ['drag a corner', 'scale (Alt: about the middle)'],
@@ -1735,6 +2109,7 @@ async function scrubBy(d, to) {
   scrubTo(line);
 }
 
+let nudgeTimer = null;
 window.addEventListener('keydown', async (e) => {
   if (e.target.closest && e.target.closest('input, select, textarea')) return;
   if (!$('#keys-help').hidden && (e.key === 'Escape' || e.key === '?')) { e.preventDefault(); return toggleKeys(false); }
@@ -1747,12 +2122,20 @@ window.addEventListener('keydown', async (e) => {
   if (e.key === ' ') { spaceDown = true; svg.classList.add('pan-mode'); e.preventDefault(); return; }
   if (e.key === '?') return toggleKeys(true);
   if (e.key === 'Escape') {
-    if (mode !== 'select') setMode('select');
+    if (shapeSel.idx.size) { shapeSel = { id: null, idx: new Set() }; render(); }
+    else if (multi.size) { multi.clear(); render(); }
+    else if (mode !== 'select') setMode('select');
     else if (sel) { sel = null; store.set('sel', sel); render(); }
     return;
   }
   if (mod) {
     const o = sel && obj(sel);
+    if (key === 'g') {
+      e.preventDefault();
+      if (mode === 'shapes' && o) return e.shiftKey ? ungroupPicked(o) : groupPicked(o);
+      if (e.shiftKey) return o && o.group ? ungroupDrawings(o.group) : null;
+      return groupPickedDrawings();
+    }
     if (key === 'd' && o) {
       e.preventDefault();
       const r = await api('POST', `/api/objects/${o.id}/duplicate`); sel = r.id; setState(r.state);
@@ -1774,6 +2157,7 @@ window.addEventListener('keydown', async (e) => {
   if (digit && !e.altKey && ['1', '2', '3'].includes(digit[1])) return setView(['original', 'tools', 'paths'][+digit[1] - 1]);
   if (digit && digit[1] === '0') return fit();
   if (key === 'v') return setMode('select');
+  if (key === 'a') return setMode('shapes');
   if (key === 'h') return setMode('pan');
   if (key === 'p') return setMode('paint');
   if (key === 'm') return setMode('mask');
@@ -1809,12 +2193,15 @@ window.addEventListener('keydown', async (e) => {
   const moves = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, d], ArrowDown: [0, -d] };
   if (moves[e.key]) {
     e.preventDefault();
-    const [dx, dy] = moves[e.key];
-    o.placement = { ...o.placement, x: +(o.placement.x + dx).toFixed(2), y: +(o.placement.y + dy).toFixed(2) };
-    placeObject(o);
+    const [dx, dy] = moves[e.key], ms = movers(o.id);
+    for (const m of ms) {
+      m.placement = { ...m.placement, x: +(m.placement.x + dx).toFixed(2), y: +(m.placement.y + dy).toFixed(2) };
+      placeObject(m);
+    }
     drawHandles();
-    clearTimeout(o._nudge);
-    o._nudge = setTimeout(() => patchObj(o.id, { placement: o.placement }), 300);
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(async () => setState(await api('PATCH', '/api/objects',
+      Object.fromEntries(ms.map((m) => [m.id, { placement: m.placement }])))), 300);
   } else if (key === 'r') {
     // a quarter turn about the middle
     const [w, h] = info(o.id).size, c = { x: w / 2, y: h / 2 };

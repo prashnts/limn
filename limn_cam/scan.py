@@ -212,7 +212,14 @@ class ScanStore:
         return sum(p.stat().st_size for p in root.rglob('*') if p.is_file()) if root.exists() else 0
 
     def new(self, meta):
+        '''A capture, its id. A look is only for now: the next capture, whatever it is, deletes it.'''
         self.root.mkdir(parents=True, exist_ok=True)
+        for d in self.root.iterdir():
+            try:
+                if self.meta(d.name).get('kind') == 'look':
+                    shutil.rmtree(d, ignore_errors=True)
+            except (KeyError, ValueError):
+                pass
         sid = time.strftime('%Y%m%d-%H%M%S')
         d = self.root / sid
         n = 1

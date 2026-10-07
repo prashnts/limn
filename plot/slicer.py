@@ -20,6 +20,12 @@
 # regions where nothing of it is drawn. With a tool's `layers`, a darker ink on
 # top doesn't cut it: it is drawn whole, first, and the dark ink over it keeps
 # its edges crisp (a light fill under a black outline).
+#
+# How a shape's stroke or fill is drawn (part_group): its own paint, else the set
+# (shapes grouped by hand) it is in, else its colour's. A shape closed but not filled
+# in the SVG takes a fill from its own paint or its set's. A fill with `inset` keeps
+# its tool's bleed inside its own edge (geometry.margin), as well as clear of inks on
+# top of it; its border, if any, runs along that inner edge.
 import hashlib
 import json
 import math
@@ -33,7 +39,7 @@ from shapely.ops import unary_union
 
 from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
-from .geometry import centerlines, fill, lines_of, region, stroke_area
+from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
 from .job import Group, Obj
 from .surface import make
 
@@ -157,6 +163,38 @@ def groups_for(obj, drawing, tools):
     return {**default_groups(drawing, tools), **obj.groups}
 
 
+def fillable(sh):
+    '''Whether a shape can take a fill: not a line (text in a line font), and filled in
+    its SVG or closed.'''
+    return not sh.line and (sh.fill is not None or any(sh.closed))
+
+
+def sets_of(obj):
+    '''Shape index -> the set it is in (the later one, when in two).'''
+    return {i: st for st in obj.sets for i in st.shapes}
+
+
+def part_group(obj, sh, part, groups, sets=None):
+    '''How a shape's 'stroke' or 'fill' is drawn (a Group), None: it has none. Its own
+    paint, else its set's, else its colour's (`groups`); a fill's inset and border as
+    the shape or its set tweak them. A line shape draws with its fill's.'''
+    colour = sh.stroke if part == 'stroke' else sh.fill
+    if part == 'stroke' and not colour:
+        return None
+    if part == 'fill' and not sh.line and not fillable(sh):
+        return None
+    own = obj.shapes.get(str(sh.index))
+    st = (sets if sets is not None else sets_of(obj)).get(sh.index)
+    g = next((getattr(p, part) for p in (own, st) if p is not None and getattr(p, part) is not None),
+             groups.get(f'{part} {colour}') if colour else None)
+    if part == 'fill' and g is not None and not sh.line:
+        tweak = {k: v for p in (st, own) if p is not None             # the shape's own over its set's
+                 for k in ('inset', 'border') if (v := getattr(p, k)) is not None}
+        if tweak:
+            g = g.model_copy(update=tweak)
+    return g
+
+
 def text_font(run, spec, fonts):
     '''The uploaded source font file for a text run, or None.'''
     if fonts is None:
@@ -242,11 +280,11 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         return t.small == 'skip'
 
     items = []      # (shape, paths, stroke group, fill group, fill area, stroke area, wide, stroke covers, covers)
+    sets = sets_of(obj)
     for sh in shapes:
         paths = [local(p) for p in sh.paths]
-        paint = obj.shapes.get(str(sh.index))
-        sg = ((paint.stroke if paint and paint.stroke else None) or groups.get(f'stroke {sh.stroke}')) if sh.stroke else None
-        fg = ((paint.fill if paint and paint.fill else None) or groups.get(f'fill {sh.fill}')) if sh.fill else None
+        sg = part_group(obj, sh, 'stroke', groups, sets)
+        fg = part_group(obj, sh, 'fill', groups, sets)
         if sh.line:
             if too_small(sh, tool_of(fg), paths, None):
                 fg = None
@@ -269,7 +307,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         stroke_covers = obj.occlude and stroke_on and sh.stroke_opaque
         s_area = stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join) if (wide or stroke_covers) else None
         covers = []                 # (area, tool id; '' a mask): what it hides of the shapes under it
-        if obj.occlude and fill_on and sh.fill_opaque and fill_area is not None:
+        if obj.occlude and fill_on and (sh.fill_opaque or not sh.fill) and fill_area is not None:
             covers.append((fill_area, fg.tool or ''))
         if stroke_covers:
             covers.append((s_area, sg.tool or ''))
@@ -310,7 +348,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             continue
         st = tool_of(sg)
         if ft is not None and fill_area is not None:
-            area = fill_area
+            area = margin(fill_area, ft.bleed) if fg.inset else fill_area
             if stroke_covers and not goes_under(ft, st):
                 gap = ft.bleed if st is None or st.id != ft.id else 0
                 area = area.difference(s_area.buffer(gap) if gap > 0 else s_area)
