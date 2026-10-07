@@ -191,8 +191,9 @@ class Limn:
              "LRT_FSR_MEASURE [BED_Z=] [TIP=x,y] [Z=] [PRESS=]: measure the carried tool on the FSR "
              "like LRT_PROBE_TOOL, only report it"),
             ('LRT_FSR_MAP', self.cmd_FSR_MAP,
-             "LRT_FSR_MAP [STEP=1.25] [MARGIN=1] [RISE=40] [DEPTH=0.02] [TIP=x,y]: touch the FSR spot by spot, "
-             "which cell answers where: its layout, origin and pitch fitted, a picture in the logs (fsr-maps/)"),
+             "LRT_FSR_MAP [STEP=1.25] [MARGIN=1] [RISE=40] [DEPTH=0.02] [TIP=x,y] [REFINE=1]: touch the FSR spot by "
+             "spot, which cell answers where: its layout, origin (refined by edge searches) and pitch, a picture in the "
+             "logs (fsr-maps/)"),
             ('LRT_FSR_SURVEY', self.cmd_FSR_SURVEY,
              "LRT_FSR_SURVEY [CLEAR=1]: press every cell of the FSR with the carried tool (a felt tip), "
              "find the faulty and weak ones, the noise, an aim; saved and used by every measurement after"),
@@ -761,13 +762,19 @@ class Limn:
             folder = os.path.expanduser(self.fsr_map_dir)
             os.makedirs(folder, exist_ok=True)
             for hop, spec in fsr.arrays.items():
+                pitch = bed['fsr']['pitch']
                 fsr.matrix(True)
                 try:
                     points = fsr.map_sheet(hop, bed_z, **args)
+                    result = fsr_map.analyse(points, spec, pitch, bed['fsr']['respond'])
+                    if result['origin'] is not None and gcmd.get_int('REFINE', 1):
+                        # to a few hundredths with the calibration's edge searches (the map's own
+                        # fit is only good to about half its step)
+                        refined, borders = fsr.refine_origin(hop, points, result['origin'], tip)
+                        if refined is not None:
+                            result = {**result, 'origin_coarse': result['origin'], 'origin': refined, 'borders': borders}
                 finally:
                     fsr.matrix(False)
-                pitch = bed['fsr']['pitch']
-                result = fsr_map.analyse(points, spec, pitch, bed['fsr']['respond'])
                 name = f"{self.bed}-hop{hop}-{stamp}"
                 meta = {'bed': self.bed, 'hop': hop, 'date': stamp, 'tip': list(tip), 'args': {k: v for k, v in args.items() if k != 'tip'},
                         'config': {'origin': list(spec['origin']), 'pitch': pitch}}
