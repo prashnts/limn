@@ -147,10 +147,30 @@ class FakeMacro:
         self.sets += 1
 
 
+class FakeKinematics:
+    def __init__(self):
+        self.checked = []
+
+    def check_move(self, move):
+        self.checked.append(move.end_pos)
+
+
+class FakeMove:
+    def __init__(self, *end_pos):
+        self.end_pos = end_pos
+
+    def move_error(self, msg="Move out of range"):
+        return GcodeError(f"{msg}: {self.end_pos}")
+
+
 class FakeToolhead:
     def __init__(self):
         self.waits = 0
         self.moves = []
+        self.kin = FakeKinematics()
+
+    def get_kinematics(self):
+        return self.kin
 
     def wait_moves(self):
         self.waits += 1
@@ -698,6 +718,77 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     clock[0] += 25
     wait(printer, 2)
     assert ext.get_status(0)['drying'] == {} and svv['pen_since'] == {}
+
+
+def _key(printer):
+    return printer.objects['query_endstops'].endstops[0][0]
+
+def _out_of_dock(printer):
+    kin = printer.objects['toolhead'].kin
+    try:
+        kin.check_move(FakeMove(130.0, 50.0, 7.0, 0.0))
+    except GcodeError:
+        return True
+    return False
+
+def test_dock_by_hand_then_take_it_off_at_the_reader():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=False)
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Pi HQ cam')
+    wait(printer, 2.5)
+    assert any('onto the carriage within 20 s' in m for m in gcode.said)
+    nfc.pages = None
+    wait(printer, 3)                                    # the tool pushed on: the key's switch triggers
+    _key(printer).triggered = True
+    wait(printer, 0.5)
+    assert svv['currently_docked_tool'] == limn.MANUAL_TOOL and svv['tool_name'] == 'Pi HQ cam'
+    assert svv['tool_offset_x'] == 1.25 and svv['manual_tool']['name'] == 'Pi HQ cam'
+    st = ext.get_status(0)
+    assert st['manual']['by'] == 'hand' and st['tools'][str(limn.MANUAL_TOOL)]['name'] == 'Pi HQ cam'
+    assert '_BUZZ_711' in gcode.scripts and any('docked by hand' in m for m in gcode.said)
+    assert _out_of_dock(printer)
+    printer.objects['toolhead'].kin.check_move(FakeMove(100.0, 50.0, 7.0, 0.0))       # elsewhere: as before
+    assert printer.objects['toolhead'].kin.checked[-1] == (100.0, 50.0, 7.0, 0.0)
+    assert 'docked by hand' in raises(lambda: gcode.run('TOOL_TAG_READ'))
+    assert 'on the carriage' in raises(lambda: gcode.run('DOCK_MANUAL'))
+    # Off by hand, held to the reader again
+    _key(printer).triggered = False
+    nfc.pages = tag_pages(name='Pi HQ cam')
+    wait(printer, 2.5)
+    assert svv['currently_docked_tool'] == 0 and svv['manual_tool'] is None and ext.manual is None
+    assert str(limn.MANUAL_TOOL) not in ext.get_status(0)['tools'] and not _out_of_dock(printer)
+    said = len(gcode.said)
+    wait(printer, 2.5)                                  # still held there: not a new scan
+    assert not any('Scanned' in m for m in gcode.said[said:])
+
+def test_dock_by_hand_too_late_or_key_already_open():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=True)
+    nfc = _nfc(ext)
+    nfc.pages = tag_pages(name='Pi HQ cam')
+    wait(printer, 2.5)
+    nfc.pages = None
+    wait(printer, 2)                                    # open all along: no edge, nothing docked
+    assert svv['currently_docked_tool'] == 0
+    _key(printer).triggered = False
+    wait(printer, 20)                                   # closed now, but the window is over
+    _key(printer).triggered = True
+    wait(printer, 1)
+    assert svv['currently_docked_tool'] == 0 and ext.manual is None
+
+def test_dock_by_hand_stays_over_a_restart_until_dock_clear():
+    printer_vars = {'currently_docked_tool': limn.MANUAL_TOOL,
+                    'manual_tool': {'uid': '04112233445566', 'name': 'Pi HQ cam', 'pen': 'picam', 'by': 'hand'}}
+    ext, printer, mcp, nfc, gcode, svv = make_with_holder(key_open=True)
+    svv.update(printer_vars)
+    printer.events['klippy:connect']()
+    wait(printer, 1)
+    printer.events['klippy:ready']()
+    wait(printer, 0.5)
+    assert ext.manual['name'] == 'Pi HQ cam' and _out_of_dock(printer)
+    gcode.run('DOCK_CLEAR')
+    assert svv['currently_docked_tool'] == 0 and not _out_of_dock(printer) and ext.get_status(0)['manual'] is None
+    gcode.run('DOCK_CLEAR')
+    assert gcode.said[-1] == '[Dock] No tool docked by hand'
 
 
 if __name__ == '__main__':

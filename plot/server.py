@@ -35,6 +35,7 @@ from .tools import DRAW, Tool
 
 STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
+MANUAL_HOLDER = 90      # printer.limn.tools' key of the tool docked by hand (MANUAL_TOOL in ext/limn)
 OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'text', 'texts', 'surface', 'masks'}
 SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
             'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
@@ -535,19 +536,32 @@ def create_app(data=None):
             p = Path(profile.PROFILES) / 'toolhead.svg'
         return FileResponse(p, media_type='image/svg+xml', headers={'Cache-Control': 'no-cache'})
 
-    def endoscope_urls():
-        '''(snapshot, stream) of the endoscope, or ('', ''): its server's address alone gets /snapshot.jpg?flip=1;
-        the stream is the snapshot's twin, /stream.mjpg with the same query (flip).'''
-        url = ws.settings()['endoscope_url']
+    def snapshot_urls(url, bare='/snapshot.jpg'):
+        '''(snapshot, stream) of a camera's own server (the endoscope, limn_picam): its address alone gets
+        `bare`; the stream is the snapshot's twin, /stream.mjpg with the same query (flip).'''
         if not url:
             return '', ''
         u = urlsplit(url)
         if u.path in ('', '/'):
-            url = url.rstrip('/') + '/snapshot.jpg?flip=1'
+            url = url.rstrip('/') + bare
             u = urlsplit(url)
         base = url[:url.index(u.path)] if u.path else url
         stream = base + u.path.rsplit('/', 1)[0] + '/stream.mjpg' + (f'?{u.query}' if u.query else '')
         return url, stream
+
+    def endoscope_urls():
+        '''(snapshot, stream) of the endoscope, or ('', ''): its server's address alone gets /snapshot.jpg?flip=1.'''
+        return snapshot_urls(ws.settings()['endoscope_url'], '/snapshot.jpg?flip=1')
+
+    def manual_camera():
+        '''The camera tool docked by hand (printer.limn.tools['90']), when its pen is a camera with a URL of its
+        own (`webcam = "http://.."` in pens.toml, eg. limn_picam): (tag, pen) or None.'''
+        with ws.lock:
+            tag = (ws.tags or {}).get(str(MANUAL_HOLDER))
+        pen = load_pens().get((tag or {}).get('pen') or '') if tag else None
+        if not pen or pen.get('kind') != 'camera' or '://' not in str(pen.get('webcam', '')):
+            return None
+        return tag, pen
 
     @app.get('/api/webcams')
     def webcams():
@@ -574,11 +588,15 @@ def create_app(data=None):
             error = None
         except Exception as e:
             cams, error = [], f'Moonraker at {machine.moonraker}: {e}'
-        snap, live = endoscope_urls()
-        if snap:                                # not Klipper's: limn_endoscope's own server
-            cams.append({'name': 'endoscope', 'stream_url': live, 'snapshot_url': snap, 'flip_horizontal': False,
-                         'flip_vertical': False, 'rotation': 0, 'service': 'mjpegstreamer', 'enabled': True})
-            error = None if cams else error
+        own = [('endoscope', endoscope_urls())]     # not Klipper's: their own servers
+        manual = manual_camera()
+        if manual:
+            own.append((manual[0].get('name') or manual[1].get('short', 'manual'), snapshot_urls(manual[1]['webcam'])))
+        for name, (snap, live) in own:
+            if snap:
+                cams.append({'name': name, 'stream_url': live, 'snapshot_url': snap, 'flip_horizontal': False,
+                             'flip_vertical': False, 'rotation': 0, 'service': 'mjpegstreamer', 'enabled': True})
+                error = None
         return {'fluidd': fluidd.rstrip('/'), 'guessed': guessed, 'set': bool(set_url), 'webcams': cams, 'error': error}
 
     @app.get('/api/settings')
@@ -717,6 +735,14 @@ def create_app(data=None):
             cams['endoscope'] = REGISTRY['camera'](id='endoscope', kind='camera', **{**spec, 'fixed': True}, webcam=url,
                                                    name=load_pens().get('endo', {}).get('short', 'Endoscope'),
                                                    pen='endo', source='settings')
+        manual = manual_camera()
+        if manual:                      # docked by hand: on the carriage until taken off, like the endoscope
+            from .tools import REGISTRY
+            tag, pen = manual
+            spec = {k: v for k, v in pen.items() if k not in ('name', 'short', 'kind', 'colors', 'dry')}
+            cams['manual'] = REGISTRY['camera'](id='manual', kind='camera', **{**spec, 'fixed': True},
+                                                name=tag.get('name') or pen.get('short', ''), pen=tag['pen'],
+                                                source='tag')
         return machine, cams
 
     @app.get('/api/camera')
