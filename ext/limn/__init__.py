@@ -49,7 +49,7 @@ from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL
 from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
 from . import marks
 from .rtp import Rtp
-from .fsr import Fsr
+from .fsr import Fsr, judge_survey
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
 from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
@@ -118,6 +118,7 @@ class Limn:
         self.profile = self._load_profile(config)
         self._chain_report_until = 0
         self._fsr_last = None       # the tool the FSR sheet last had, None: wiped or unknown
+        self._survey_said = None    # (bed, date) of the survey the console was last told about
 
         self.holder = None
         self.tag = {'ok': False}
@@ -186,6 +187,9 @@ class Limn:
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
              "LRT_FSR_MEASURE [BED_Z=] [TIP=x,y] [Z=] [PRESS=]: measure the carried tool on the FSR "
              "like LRT_PROBE_TOOL, only report it"),
+            ('LRT_FSR_SURVEY', self.cmd_FSR_SURVEY,
+             "LRT_FSR_SURVEY [CLEAR=1]: press every cell of the FSR with the carried tool (a felt tip), "
+             "find the faulty and weak ones, the noise, an aim; saved and used by every measurement after"),
             ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
              "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
@@ -336,8 +340,23 @@ class Limn:
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
             routine.verbose = bool(gcmd.get_int('VERBOSE', 0))
+            self._apply_survey(gcmd, routine)
             self._fsr_hooks(gcmd, routine)
         return routine
+
+    def _apply_survey(self, gcmd, fsr):
+        '''This sheet's survey (LRT_FSR_SURVEY), when there is one; SURVEY=0: the config alone.'''
+        survey = (self._vars().get('lrt_fsr_survey') or {}).get(self.bed)
+        if not survey or not gcmd.get_int('SURVEY', 1) or not hasattr(fsr, 'apply_survey'):
+            return
+        for hop, judged in survey.get('hops', {}).items():
+            if int(hop) in fsr.arrays:
+                fsr.apply_survey(int(hop), judged)
+                if self._survey_said != (self.bed, survey.get('date')):
+                    self._survey_said = (self.bed, survey.get('date'))
+                    gcmd.respond_info(f"[LRT][Survey] going by the survey of {survey.get('date')}: "
+                                      f"aim {judged.get('aim')}, not read {judged['faulty'] or 'none'}, "
+                                      f"early {judged['early']}")
 
     def _fsr_hooks(self, gcmd, fsr):
         '''A tool other than the one the FSR sheet last had waits for the sheet to
@@ -711,6 +730,47 @@ class Limn:
         gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={m['z'] - z_bed:.3f} "
                           f"over bed_z={z_bed:.3f}) tip={[round(v, 2) for v in m['tip']]} "
                           f"gaps={[round(g, 3) for g in m['gaps']]}")
+
+    def cmd_FSR_SURVEY(self, gcmd):
+        '''Every cell pressed with the carried tool: after a sensor swap, what the config can't
+        know. Saved per bed (`lrt_fsr_survey`); CLEAR=1 drops it.'''
+        bed = self._bed(gcmd, 'fsr')
+        surveys = dict(self._vars().get('lrt_fsr_survey') or {})
+        if gcmd.get_int('CLEAR', 0):
+            surveys.pop(self.bed, None)
+            self._save_vars({'lrt_fsr_survey': surveys})
+            gcmd.respond_info(f"[LRT][Survey] dropped for {self.bed}: the config alone from now on")
+            return
+        self._need_tool(gcmd)
+        self._ensure_meshes(gcmd)
+        fsr = self._routine(gcmd, bed)
+        fsr.cfg = bed['fsr']                       # the config alone: not an older survey
+        fsr.arrays = {a['hop']: a for a in bed['fsr']['arrays']}
+        cell = tuple(bed['fsr']['z_cell'])
+        try:
+            bed_z = self._fsr_bed_z(gcmd, fsr, cell)
+            self.gcode.run_script_from_command("_CLEAR_OFFSETS")
+            hops = {}
+            for hop in fsr.arrays:
+                result = fsr.survey(hop, bed_z)
+                judged = judge_survey(result, fsr.cfg, hop)
+                hops[str(hop)] = json.loads(json.dumps({
+                    **judged, 'faulty': [list(c) for c in judged['faulty']], 'weak': [list(c) for c in judged['weak']],
+                    'cells': {f'{c[0]},{c[1]}': [v['rest'], v['z'], v['s04'], v['s08'], v['ok']]
+                              for c, v in result['cells'].items()}}))
+                gcmd.respond_info(
+                    f"[LRT][Survey] hop {hop}: noise at rest {judged['noise']:.0f}, early {judged['early']}, "
+                    f"median 0.08mm in {judged['median']:.0f}; faulty {judged['faulty'] or 'none'}, "
+                    f"weak {judged['weak'] or 'none'}; aim {judged['aim']}")
+                for w in judged['warnings']:
+                    gcmd.respond_info(f"[LRT][Survey] !! {w}")
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        surveys[self.bed] = {'date': time.strftime('%Y-%m-%d %H:%M'), 'placement': self.placement, 'hops': hops}
+        self._save_vars({'lrt_fsr_survey': surveys})
+        self._survey_said = None
+        gcmd.respond_info(f"[LRT][Survey] saved for {self.bed}: LRT_CALIBRATE and LRT_PROBE_TOOL go by it "
+                          f"(SURVEY=0: not; LRT_FSR_SURVEY CLEAR=1: drop it)")
 
     def cmd_FSR_MATRIX(self, gcmd):
         '''The bed's arrays in matrix mode for SECONDS: what arrives, per hop. Nothing moves.'''

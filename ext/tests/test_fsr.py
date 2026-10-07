@@ -610,3 +610,44 @@ def test_bed5_as_measured_never_presses_past_the_taps():
         assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
         assert bed.max_press <= 0.1, (tip, bed.max_press)
         assert not bed.dragged
+
+def test_a_survey_finds_this_sheets_faults_and_a_healthy_one_none():
+    '''LRT_FSR_SURVEY, every cell pressed by a felt tip: BED_5 as measured has its column 3
+    high at rest and a weak (2, 4); a healthy sheet nothing. Never 0.1mm past first touch.'''
+    from limn.fsr import judge_survey
+    for kw, faulty, weak in ((dict(bed5=True), [(0, 3), (1, 3), (2, 3)], [(2, 4)]), (dict(gain=9000), [], [])):
+        cfg = copy.deepcopy(bed_cfg())
+        fsr, bed, _ = setup(cfg=cfg, tip=(2.0, 2.13), **kw)
+        bed.tool = 'T4'
+        result = fsr.survey(1, bed_z(*fsr.array(1).center(1, 1)))
+        judged = judge_survey(result, cfg, 1)
+        assert judged['faulty'] == faulty and judged['weak'] == weak, judged
+        assert getattr(bed, 'max_press', 0) <= 0.105 and not bed.dragged
+        assert 30 <= judged['early'] <= 60 and not judged['warnings']
+        # The aim brings the reference tip down mid cell on a good one, its neighbours not faulty
+        lands = np.array(judged['aim']) + np.array([2.0 / 2.5, -2.13 / 2.5])     # cols run towards -Y
+        cell = tuple(int(v) for v in lands)
+        assert cell not in faulty and cell not in weak and all(abs(v % 1 - 0.5) < 0.25 for v in lands), lands
+
+def test_after_a_swap_the_survey_takes_the_place_of_the_config():
+    '''A new sheet with a fault the config doesn't know (BED_5's column 3, but no faulty_cols):
+    surveyed, its faulty cells aren't read and a pen is measured right.'''
+    from limn.fsr import judge_survey
+    cfg = copy.deepcopy(bed_cfg())
+    cfg['arrays'][0].pop('faulty_cols')
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.0, 0.0), bed5=True)
+    bed.tool = 'T4'
+    judged = judge_survey(fsr.survey(1, bed_z(*fsr.array(1).center(1, 1))), cfg, 1)
+    assert judged['faulty'] == [(0, 3), (1, 3), (2, 3)]
+    ref, _, _ = setup(cfg=copy.deepcopy(cfg), bed5=True)
+    ref.apply_survey(1, judged)
+    profile = ref.calibrate()
+    for tip in ((2.0, 2.13), (1.0, 0.5)):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, bed5=True)
+        fsr.apply_survey(1, judged)
+        bed.tool = 'T1'
+        fsr.press_cap = 0.1
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
+        assert bed.max_press <= 0.1, bed.max_press
+        assert all(c[1] != 3 for c in fsr.read(1))

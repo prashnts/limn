@@ -515,3 +515,24 @@ def test_calibrate_uses_the_meshes_of_the_bed_as_it_sits():
     assert p.meshed == [] and p.said('using them')
     p.run('LRT_CALIBRATE', MESH=1)
     assert p.meshed == ['lrt_paper', 'lrt_panel']
+
+def test_a_saved_survey_is_gone_by_until_cleared():
+    from limn.beds import BEDS
+    p = plotter(carried=45, bed=reply('BED_5'))
+    judged = {'faulty': [[0, 3], [1, 3], [2, 3]], 'weak': [[2, 4]], 'noise': 3.0, 'early': 35,
+              'median': 500.0, 'warnings': [], 'shift': [2.0, 2.13], 'aim': [1.77, 6.28]}
+    p.svv['lrt_fsr_survey'] = {'BED_5': {'date': '2026-10-07 21:00', 'placement': None, 'hops': {'1': judged}}}
+    from limn.fsr import Fsr
+    gcmd = FakeGcmd(p.gcode, {})
+    p.run('LRT_READ_BED_ID')
+    fsr = Fsr(None, None, None, BEDS['BED_5']['fsr'])
+    p.ext._apply_survey(gcmd, fsr)
+    assert fsr.cfg['early'] == 35 and fsr.arrays[1]['aim'] == (1.77, 6.28)
+    assert [tuple(c) for c in fsr.arrays[1]['faulty_cells']] == [(0, 3), (1, 3), (2, 3)]
+    assert p.said('going by the survey of 2026-10-07 21:00')
+    assert BEDS['BED_5']['fsr']['arrays'][0]['aim'] == (1.5, 6.3)          # the config stays as it is
+    fsr = Fsr(None, None, None, BEDS['BED_5']['fsr'])
+    p.ext._apply_survey(FakeGcmd(p.gcode, {'SURVEY': 0}), fsr)
+    assert fsr.cfg.get('early') == BEDS['BED_5']['fsr']['early'] and 'faulty_cells' not in fsr.arrays[1]
+    p.run('LRT_FSR_SURVEY', CLEAR=1)
+    assert 'BED_5' not in p.svv['lrt_fsr_survey'] and p.said('dropped for BED_5')

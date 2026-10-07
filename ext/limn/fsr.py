@@ -41,6 +41,54 @@ class WrongCell(FsrError):
         self.hop, self.cell, self.found = hop, tuple(cell), tuple(found)
 
 
+def judge_survey(result, cfg, hop):
+    '''A survey (Fsr.survey) -> what to go by: {'faulty': [cell], 'weak': [cell], 'noise',
+    'early', 'warnings': [str]}. Faulty: high at rest (with nothing on it), never touched,
+    or another cell as strong while it is pressed. Weak: under half the median strength
+    0.08mm in. `early` from the noise at rest, never under 30 nor near `respond`.'''
+    cells = {tuple(c): v for c, v in result['cells'].items()}
+    rest = {tuple(c): v for c, v in result['rest'].items() if tuple(c) in cells}       # (strengths: over rest)
+    floor = float(np.median(list(rest.values()))) if rest else 0.0
+    high = {c for c, v in rest.items() if v >= max(40.0, 6 * floor + 10)}
+    faulty = sorted(high | {c for c, v in cells.items() if v['z'] is None or not v['ok']})
+    good = [v['s08'] for c, v in cells.items() if c not in faulty and v['s08']]
+    median = float(np.median(good)) if good else 0.0
+    weak = sorted(c for c, v in cells.items() if c not in faulty and (v['s08'] or 0) < 0.5 * median)
+    noise = max((v for c, v in rest.items() if c not in faulty), default=0.0)
+    early = int(min(max(30, round(2 * noise + 20)), 0.8 * cfg['respond']))
+    spec = next(a for a in cfg['arrays'] if a['hop'] == hop)
+    used = {'z cell': [tuple(cfg['z_cell'][1:])]}
+    for axis in ('x', 'y'):
+        for h, a, b in cfg[f'{axis}_edges']:
+            if h == hop:
+                used[f'{axis} edge'] = [tuple(a), tuple(b)]
+    warnings = []
+    best = sorted((c for c in cells if c not in faulty and c not in weak), key=lambda c: -(cells[c]['s08'] or 0))
+    for what, cs in used.items():
+        bad = [c for c in cs if c in faulty or c in weak]
+        if bad:
+            warnings.append(f"the {what} uses {', '.join(map(str, bad))}: "
+                            f"{'faulty' if any(c in faulty for c in bad) else 'weak'}; strongest: {best[:4]} (ext/limn/beds.py)")
+    # The aim: where the reference pen's tip (the survey's) comes down on a good cell, mid
+    # cell, none of its neighbours faulty. Other pens are ~1mm either way of it.
+    aim = list(spec['aim'])
+    shift = result.get('shift')
+    if shift is not None:
+        pitch = cfg['pitch']
+        dr = float(np.dot(shift, spec['row_dir'])) / pitch
+        dc = float(np.dot(shift, spec['col_dir'])) / pitch
+        land = (spec['aim'][0] + dr, spec['aim'][1] + dc)
+        near = lambda c: [(c[0] + i, c[1] + j) for i in (-1, 0, 1) for j in (-1, 0, 1) if (i, j) != (0, 0)]
+        ok = [c for c in cells if c not in faulty and c not in weak and not any(n in faulty for n in near(c))]
+        if ok:
+            target = min(ok, key=lambda c: np.hypot(c[0] + 0.5 - land[0], c[1] + 0.5 - land[1]))
+            aim = [round(target[0] + 0.5 - dr, 2), round(target[1] + 0.5 - dc, 2)]
+        else:
+            warnings.append("no good cell clear of faulty ones to aim at: the config's aim stays")
+    return {'faulty': faulty, 'weak': weak, 'noise': noise, 'early': early, 'median': median,
+            'warnings': warnings, 'shift': shift, 'aim': aim}
+
+
 class Fsr:
 
     def __init__(self, machine, dock, samples, cfg):
@@ -55,6 +103,13 @@ class Fsr:
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
+
+    def apply_survey(self, hop, judged):
+        '''Go by a survey of this sheet (judge_survey): its faulty cells aren't read, its
+        `early` instead of the config's. The config itself stays as it is.'''
+        self.cfg = {**self.cfg, 'early': judged['early']}
+        self.arrays = {**self.arrays, hop: {**self.arrays[hop], 'aim': tuple(judged.get('aim') or self.arrays[hop]['aim']),
+                                            'faulty_cells': [tuple(c) for c in judged['faulty']]}}
 
     def array(self, hop):
         a = self.arrays[hop]
@@ -71,10 +126,10 @@ class Fsr:
                 if on:
                     raise   # turning it off can fail quietly: the error that got us here matters more
 
-    def read(self, hop, limit=True):
+    def read(self, hop, limit=True, raw=False):
         '''After a move: waits for it and for fresh frames -> {(row, col): strength},
-        without the array's dead rows and faulty columns. limit: a press over
-        press_limit stops us.'''
+        without the array's dead rows, faulty columns and faulty cells (a survey's;
+        raw: every cell). limit: a press over press_limit stops us.'''
         self.machine.wait_moves()
         since = self.machine.now()
         self.machine.pause(self.cfg['settle'])
@@ -83,12 +138,16 @@ class Fsr:
                 raise FsrError(f"[LRT] no frames from the FSR at hop {hop}: {self.heard(since)}")
             self.machine.pause(0.02)
 
-        dead = self.arrays[hop].get('dead_rows', ())
-        faulty = self.arrays[hop].get('faulty_cols', ())
+        spec = self.arrays[hop]
+        dead, faulty = (), ()
+        bad = set()
+        if not raw:
+            dead, faulty = spec.get('dead_rows', ()), spec.get('faulty_cols', ())
+            bad = {tuple(c) for c in spec.get('faulty_cells', ())}
         cells = {}
         for frame in self.samples.since(since, hop=hop, kind=FSR, state=S_MATRIX):
             for row, col, strength in frame.values:
-                if row not in dead and col not in faulty:
+                if row not in dead and col not in faulty and (row, col) not in bad:
                     cells.setdefault((row, col), []).append(strength)
         strengths = {cell: float(np.median(v)) for cell, v in cells.items()}
         hardest = max(strengths.values(), default=0)
@@ -347,6 +406,76 @@ class Fsr:
             self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
         self.machine.say(f"[LRT] on {cell} the taps press {depth:.2f}mm")
         return depth
+
+    # The sheet, cell by cell (LRT_FSR_SURVEY): after a swap, what the config can't know
+    def survey(self, hop, bed_z, depth=0.08, step=0.02, rest_s=2.0):
+        '''Every cell of the array (but its dead rows) pressed by the carried tool, a felt
+        tip: -> {'rest': {cell: median at rest}, 'cells': {cell: {...}}, 'shift': tip}.
+        At rest first, untouched. Then where the tip is (locate), and over each cell's
+        centre down in `step`s until it reads `early` over its rest (first touch), on to
+        `depth` past that: its rise over rest, and the strongest other cell's, at each step.
+        Cells high at rest (a faulty column) don't count as answering.'''
+        cfg = self.cfg
+        array = self.array(hop)
+        rows = [r for r in range(array.rows) if r not in self.arrays[hop].get('dead_rows', ())]
+        out = {'rest': {}, 'cells': {}}
+        self.matrix(True)
+        try:
+            # At rest: the carried tool parked over the paper, clear of the sheet
+            self.machine.move(z=cfg['z_park'])
+            self.machine.move(*cfg['clean']['park'])
+            frames = {}
+            start = self.machine.now()
+            while self.machine.now() - start < rest_s:
+                for c, v in self.read(hop, limit=False, raw=True).items():
+                    frames.setdefault(c, []).append(v)
+            out['rest'] = {c: float(np.median(v)) for c, v in frames.items()}
+            base = out['rest']
+            floor_rest = float(np.median([v for c, v in base.items() if c[0] in rows])) if base else 0.0
+            high = {c for c, v in base.items() if v >= max(40.0, 6 * floor_rest + 10)}
+            shift, top = self.locate(hop, bed_z)
+            out['shift'] = [float(v) for v in shift]
+            early = cfg.get('survey_touch', 30)     # over rest: a weak cell's first touch too, not 0.05mm on
+            for row in rows:
+                for col in range(array.cols):
+                    cell = (row, col)
+                    x, y = array.center(row, col) - shift
+                    z = top + max(self.follow((x, y), array.point(*self.arrays[hop]['aim'])), 0.0) + 0.2
+                    floor = z - 0.8                  # the sheet is flat to ~0.15: never further
+                    steps, first = [], None
+                    with lifted_on_error(self.machine, cfg['z_park']):
+                        self.machine.move(z=z + 0.4, speed=JOG_SPEED * 5)
+                        self.machine.move(float(x), float(y))
+                        self.machine.move(z=z, speed=JOG_SPEED)
+                        while z > floor and (first is None or first - z < depth - 1e-9):
+                            z = round(z - step, 4)
+                            self.machine.move(z=z, speed=JOG_SPEED)
+                            s = self.read(hop, limit=False, raw=True)
+                            live = {c: v - base.get(c, 0.0) for c, v in s.items() if c[0] in rows}
+                            mine = live.get(cell, 0.0)
+                            other = max(((c, v) for c, v in live.items() if c != cell and c not in high),
+                                        key=lambda cv: cv[1], default=(None, 0.0))
+                            if first is None and max(mine, other[1]) >= early:
+                                first = z
+                            if first is not None:
+                                steps.append([round(first - z, 3), mine, list(other[0]) if other[0] else None, other[1]])
+                            if max(s.values(), default=0) >= cfg['press_limit'] * 0.85:
+                                break
+                        self.machine.move(z=z + 0.6, speed=JOG_SPEED * 5)
+                    at = lambda d: next((m for dd, m, _, _ in steps if dd >= d - 1e-6), None)
+                    ok = bool(steps) and all(m >= o for dd, m, _, o in steps if dd >= 0.04 - 1e-6)
+                    info = {'z': first, 'steps': steps, 's04': at(0.04), 's08': at(0.08), 'ok': ok,
+                            'rest': out['rest'].get(cell, 0.0), 'at': [float(x), float(y)]}
+                    out['cells'][cell] = info
+                    self.machine.say(
+                        f"[LRT][Survey] {cell} at X{x:.3f} Y{y:.3f}: "
+                        + (f"touch z={first:.3f}, +0.04: {info['s04']:.0f}, +0.08: {info['s08'] or 0:.0f}"
+                           if first is not None else "nothing")
+                        + f", rest {info['rest']:.0f}" + ("" if ok else f" (another cell answers: {steps[-1][2] if steps else '-'})"))
+            self.machine.move(z=cfg['z_park'])
+        finally:
+            self.matrix(False)
+        return out
 
     # XY
     def follow(self, xy, at):
