@@ -10,10 +10,14 @@
 # width: the line it leaves, mm. Makers quote the tip or a nominal line; what
 # matters is the line on your paper.
 # press: mm past where it first touches the paper (limn.toml z_touch), press_max:
-# never more, whatever a job asks. Fineliners are delicate: a tenth or two, never
-# driven hard; they widen, blob and break. Felt tips take more. Pressing also
-# lifts the Z axis within its play, and the lift after each stroke grows with it
-# (limn.toml [play], GEOMETRY.md).
+# never more, whatever a job asks. Pens touch lightly: a tenth for fineliners
+# (they widen, blob and break when driven), a little more for felt tips; only
+# ballpoints need force to roll. Light presses need the tags' DZ right (the FSR
+# calibration measures contact). Pressing also lifts the Z axis within its play,
+# and the lift after each stroke grows with it (limn.toml [play], GEOMETRY.md).
+# press_max also caps the FSR calibration's taps (ext/limn/fsr.py): no pen is
+# pressed deeper there than it may be plotting. A fine tip needs ~0.2 to register
+# on the FSR at all, so a fineliner's stays 0.25.
 # dry: minutes it may stay out of its cap in the machine before the dock's LEDs
 # go red and it beeps (twice that while printing; ext/limn/drying.py).
 
@@ -22,7 +26,7 @@ short = "Micron 01"
 name = "Pigma Micron 01"
 width = 0.25                # Sakura: 01 draws 0.25 mm
 feed = 2500
-press = 0.15
+press = 0.1
 press_max = 0.25
 dry = 10
 colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226", orange = "#e8651a", sepia = "#704214" }
@@ -32,7 +36,7 @@ short = "Micron 005"
 name = "Pigma Micron 005"
 width = 0.20                # Sakura: 005 draws 0.20 mm
 feed = 2000
-press = 0.15
+press = 0.1
 press_max = 0.25
 dry = 10
 colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226" }
@@ -42,7 +46,7 @@ short = "Micron 03"
 name = "Pigma Micron 03"
 width = 0.35                # Sakura: 03 draws 0.35 mm
 feed = 2500
-press = 0.15
+press = 0.1
 press_max = 0.25
 dry = 10
 colors = { black = "#1b1b1b", blue = "#1f4aa8", red = "#c8102e", green = "#1e7b45", purple = "#6a2c8f", brown = "#6b4226" }
@@ -52,7 +56,7 @@ short = "Staedtler 0.05"
 name = "Staedtler pigment liner 0.05"
 width = 0.10                # nominal 0.05, draws wider on most paper: measure the line
 feed = 2000
-press = 0.15
+press = 0.1
 press_max = 0.25
 dry = 10
 colors = { black = "#1b1b1b" }
@@ -62,7 +66,7 @@ short = "Staedtler 0.5"
 name = "Staedtler pigment liner 0.5"
 width = 0.5
 feed = 3000
-press = 0.15
+press = 0.1
 press_max = 0.25
 dry = 10
 colors = { black = "#1b1b1b" }
@@ -72,10 +76,19 @@ short = "Stabilo 88"
 name = "Stabilo point 88"
 width = 0.4
 feed = 3000
-press = 0.3               # a felt tip: it wants more to lay its ink down
-press_max = 0.6
+press = 0.15              # a felt tip: lightly, a little more than a fineliner
+press_max = 0.3
 dry = 240                   # dry-safe ink: Stabilo says it keeps for days uncapped
 colors = { black = "#1e1e1e", blue = "#3a4fb8", red = "#e03030", green = "#2e9a3e", purple = "#7a3aa0", orange = "#f07820", pink = "#e8508c", turquoise = "#10a8b8", "light green" = "#8ccc3c", yellow = "#f0d020", brown = "#7a4a2a", grey = "#8a8a8a" }
+
+[ball]
+short = "Ballpoint"
+name = "Ballpoint pen"
+width = 0.3                 # a 0.7 mm ball draws about 0.3 mm
+feed = 2500
+press = 0.35                # a ballpoint has to press to roll its ball and lay ink down
+press_max = 0.6
+colors = { black = "#1e1e1e", blue = "#1f3fa8", red = "#c8202e" }
 
 # Not pens: tools of the library that don't draw. The tag names them the same way.
 
