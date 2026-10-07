@@ -28,7 +28,7 @@ class FsrBed:
     def __init__(self, samples, dock, cfg, tip=(0.0, 0.0), tool_length=1.8, dead=0.4, gain=2000,
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
-                 dead_lifts=0.0):
+                 dead_lifts=0.0, bed5=False):
         self.samples = samples
         self.dock = dock
         self.arrays = [FsrArray(a['hop'], a['origin'], a['col_dir'], a['row_dir'], cfg['pitch'])
@@ -45,12 +45,14 @@ class FsrBed:
         self.responds = responds
         self.spike = spike
         self.disconnect_after = disconnect_after
-        self.crosstalk = crosstalk              # as on BED_5: a press lifts its column's row 3 to ~530, row 0 a bit
+        self.crosstalk = crosstalk              # as on BED_5: a press lifts its column's other rows (measured, see frame)
         self.width = width                      # tip radius: near an edge it presses both cells, each less
         self.slope_y = slope_y                  # the sheet rises this much per mm in Y, on top of bed_z
         self.mesh = mesh                        # an lrt_fsr mesh of it, as LRT_MESH_CALIBRATE takes
         self.row_crosstalk = row_crosstalk      # a press lifts the rest of its row by this share of it
         self.dead_lifts = dead_lifts            # a press on row 3 (no series resistor) lifts its column's rows by this share
+        self.bed5 = bed5                        # BED_5 with a Stabilo as measured on the plotter, 2026-10-07: see frame_bed5
+        self.max_press = 0.0                    # the deepest press past first touch seen
         self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
         self.ghost = ghost                      # (from, to mm over contact, cell, strength): a reading in the air
         self.rng = np.random.default_rng(7)
@@ -74,7 +76,7 @@ class FsrBed:
         BLTouch's offset, the way bed_mesh keeps it.'''
         if not self.mesh:
             return None
-        x0, y0, x1, y1 = 111, 40, 118.5, 59
+        x0, y0, x1, y1 = 111, 40, 118.5, 57
         return {'mesh_params': {'min_x': x0, 'max_x': x1, 'min_y': y0, 'max_y': y1, 'x_count': 4, 'y_count': 5},
                 'points': [[self.sheet(x, y) - 2.0 for x in np.linspace(x0, x1, 4)] for y in np.linspace(y0, y1, 5)]}
 
@@ -122,7 +124,37 @@ class FsrBed:
                     out[(row, col)] = 1.0 if d == 0 else 1 - d / self.width
         return out
 
+    # BED_5 as measured with the Stabilo, 2026-10-07 (~/limn-shot/fsr-2026-10-07-manual.jsonl):
+    # (1, 1) read 112, 201, 319, 461, 523, 573 at 0.01 .. 0.13mm past first touch, then less;
+    # its column's row 0 0.94 of it at first touch, ~0.4 from 0.07mm on, row 2 0.8 -> 0.37,
+    # row 3 (dead) ~1; (2, 4) never over ~230; a 0.2mm step in X: 545 / 625; column 3 ~75 at rest.
+    WEAK = {(2, 4): 0.38}
+    COLUMN = {0: (0.40, 0.55), 2: (0.37, 0.45), 3: (0.95, 0.0)}     # share of the pressed cell: base + extra at first touch
+
+    def frame_bed5(self, array):
+        p = self.press()
+        self.max_press = max(self.max_press, p)
+        shares = self.shares(array)
+        curve = 600 * (1 - np.exp(-p / 0.05)) if p > 0 else 0.0
+        first = 1 / (1 + (max(p, 0) / 0.035) ** 4)                 # 1 at first touch, ~0 from 0.07mm
+        ripple = 1 + 0.07 * np.cos(2 * np.pi * self.tip_xy()[0] / 0.4)
+        pressed = {c: curve * s * self.WEAK.get(c, 1.0) * ripple for c, s in shares.items()}
+        values = []
+        for row in range(array.rows):
+            for col in range(array.cols):
+                s = abs(self.rng.normal(0, 4)) + (75 if col == 3 else 0)
+                if (row, col) in pressed:
+                    s += pressed[(row, col)]
+                else:
+                    column = max((v for (r_, c), v in pressed.items() if c == col), default=0)
+                    base, extra = self.COLUMN.get(row, (0.4, 0.5))
+                    s += column * (base + extra * first)
+                values.append([row, col, int(min(s, 1000))])
+        return values
+
     def frame(self, array):
+        if self.bed5:
+            return self.frame_bed5(array)
         shares = self.shares(array)
         columns = {c for _, c in shares}
         pressed = min(880, self.press() * self.gain)
@@ -136,7 +168,12 @@ class FsrBed:
                 elif self.dead_lifts and (3, col) in shares:
                     s += self.dead_lifts * pressed * shares[(3, col)]
                 elif self.crosstalk and col in columns:
-                    s += {3: 530, 0: 220}.get(row, 0)
+                    # Up the column, as measured (2026-10-07): row 3 ~0.95 of the pressed cell,
+                    # row 0 0.94 of it at first touch falling to ~0.4 by 0.07mm, row 2 0.8 -> 0.37
+                    first = 1 / (1 + (max(self.press(), 0) / 0.035) ** 4)
+                    column = max(min(880, self.press() * self.gain) * v for (r_, c), v in shares.items() if c == col)
+                    base, extra = {3: (0.95, 0.0), 0: (0.40, 0.55)}.get(row, (0.37, 0.45))
+                    s += column * (base + extra * first)
                 elif row in rows:
                     s += self.row_crosstalk * pressed * rows[row]
                 if self.ghost and self.tool is not None and (row, col) == self.ghost[2] \
@@ -221,16 +258,14 @@ def test_crosstalk_up_the_column():
 
 def test_prior_brings_the_tip_down_on_the_aim():
     '''Without a prior this tip lands on the edge between rows 0 and 1 at the aim
-    (a dead zone for a tip this fine); told where it is, it comes down mid cell.'''
+    (a dead zone for a tip this fine): the first descent's second spot, half a cell
+    over, finds it (it went to the floor before). Told where it is, it comes down mid cell.'''
     profile = calibrated()
     tip = (-1.25, 0.6)
     fsr, bed, _ = setup(tip=tip)
     bed.tool = 'T0'
-    try:
-        fsr.probe_tool(profile)
-        assert False, 'lands on the dead zone'
-    except FsrError as e:
-        assert 'no contact' in str(e)
+    dx, dy, _ = fsr.probe_tool(profile)
+    assert abs(dx - 1.25) < 0.03 and abs(dy + 0.6) < 0.03, (dx, dy)
     fsr, bed, _ = setup(tip=tip)
     bed.tool = 'T0'
     bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
@@ -242,7 +277,7 @@ def test_prior_z_keeps_a_miss_short():
     '''Told where contact is expected, a miss goes only prior_margin below it.'''
     profile = calibrated()
     bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
-    fsr, bed, _ = setup(tip=(-4.5, 0.0))           # off the rows
+    fsr, bed, _ = setup(tip=(-6.0, 0.0))           # off the rows, from the second spot too
     bed.tool = 'T0'
     expected = bed_z[(1, 1, 1)] + 1.0                # where this tool's contact would be
     try:
@@ -264,15 +299,12 @@ def test_tip_on_an_edge_with_crosstalk():
         bed.tool = 'T3'
         dx, dy, _ = fsr.probe_tool(profile)
         assert abs(dx + tip[0]) < 0.05 and abs(dy + tip[1]) < 0.05, (tip, dx, dy)
-    # On a corner of four cells each gets a few percent, only the crosstalk shows:
-    # nothing to go by, so it stops and lifts. TIP= brings such a tool down mid cell.
+    # On a corner of four cells each gets a few percent, only the crosstalk shows; the
+    # first descent's second spot, half a cell over, comes down on a cell and measures it
     fsr, bed, _ = setup(tip=(1.25, 1.25), crosstalk=True, width=0.3)
     bed.tool = 'T3'
-    try:
-        fsr.probe_tool(profile)
-        assert False, 'should stop'
-    except FsrError:
-        pass
+    dx, dy, _ = fsr.probe_tool(profile)
+    assert abs(dx + 1.25) < 0.05 and abs(dy + 1.25) < 0.05, (dx, dy)
     assert bed.pos[2] == fsr.cfg['z_park'] and not bed.dragged
 
 def test_taps_follow_the_sheet():
@@ -442,8 +474,8 @@ def test_tools_far_off():
 
 def test_off_the_array_stops_at_the_floor():
     profile = calibrated()
-    # Misses the rows; lands on a dead zone (this tip has no width to reach a cell)
-    for tip in ((-4.5, 0.0), (0.0, 1.25)):
+    # Misses the rows, from both spots of the first descent
+    for tip in ((-6.0, 0.0), (-6.0, 1.25)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
         try:
@@ -555,3 +587,21 @@ def test_a_tip_a_cell_off_from_locate_is_aimed_again():
     dx, dy, _ = fsr.probe_tool(profile)
     assert abs(dx + 0.35) < 0.03 and abs(dy - 0.2) < 0.03, (dx, dy)
     assert any('aiming again' in s for s in said), said
+
+def test_bed5_as_measured_never_presses_past_the_taps():
+    '''BED_5 with a Stabilo as measured on the plotter (bed5=True, see FsrBed.frame_bed5):
+    the column's rows nearly as strong as the pressed cell at first touch, a weak cell
+    (2, 4) where locate first lands for this machine's pens, a ripple across the cells.
+    Every tip is measured to a few hundredths, and nothing presses more than 0.1mm past
+    first touch: the taps did, at the weak cell 0.17 (2026-10-07).'''
+    fsr, bed, _ = setup(bed5=True)
+    profile = fsr.calibrate()
+    assert bed.max_press <= 0.1, bed.max_press
+    for tip in ((2.0, 2.13), (2.6, 3.0), (-0.8, 1.2), (-1.25, 0.6), (1.25, 1.25)):
+        fsr, bed, _ = setup(tip=tip, bed5=True)
+        bed.tool = 'T1'
+        fsr.press_cap = 0.1
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
+        assert bed.max_press <= 0.1, (tip, bed.max_press)
+        assert not bed.dragged
