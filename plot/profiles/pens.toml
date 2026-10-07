@@ -15,9 +15,8 @@
 # ballpoints need force to roll. Light presses need the tags' DZ right (the FSR
 # calibration measures contact). Pressing also lifts the Z axis within its play,
 # and the lift after each stroke grows with it (limn.toml [play], GEOMETRY.md).
-# press_max also caps the FSR calibration's taps (ext/limn/fsr.py): no pen is
-# pressed deeper there than it may be plotting. A fine tip needs ~0.2 to register
-# on the FSR at all, so a fineliner's stays 0.25.
+# press also sets how deep the FSR calibration taps past contact (ext/limn): no
+# deeper than the pen presses plotting (0.1 when its tag names no pen, PRESS=).
 # dry: minutes it may stay out of its cap in the machine before the dock's LEDs
 # go red and it beeps (twice that while printing; ext/limn/drying.py).
 
