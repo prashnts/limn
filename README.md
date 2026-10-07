@@ -48,11 +48,19 @@ LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe 
 
 Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 1), then an edge in X and one in Y. The taps press 0.1 mm past contact at most, less for a pen that presses less plotting (its `press` in `plot/profiles/pens.toml`); each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
 
-After a sensor swap, survey the new sheet first, with the reference pen (a felt tip) on the carriage:
+After a sensor swap:
+
+1. If the new sheet sits elsewhere than the old one, set `origin` in `ext/limn/beds.py` (BED_5's `fsr`): the outer corner of cell (row 0, col 0), to a mm or so. `locate()` finds the pens' tips within a few mm of it.
+2. `LRT_FSR_MATRIX` with nothing on the sheet: every cell low (under ~30), but row 3 (no series resistor).
+3. With the reference pen (a felt tip) on the carriage:
 
 ```
-LRT_FSR_SURVEY             ; ~2 min: every cell pressed once, 0.08 mm at most
+LRT_FSR_SURVEY             ; ~8 min: every cell pressed once, 0.08 mm at most past first touch
+LRT_CALIBRATE              ; the reference: holder 45
+LIMN_TOOL_CALIBRATE T=41   ; and the others
 ```
+
+The survey's warnings name cells to move `z_cell` or the edges to when the ones in the config are weak or faulty on this sheet.
 
 It reads the sheet at rest, finds the tip, and presses every cell (but the dead row) from just above contact to 0.08 mm past first touch, one console line a cell. Then it judges: faulty (high at rest, or another cell answers while it is pressed), weak (under half the median), the noise floor and from it the `early` threshold, and an aim that brings the reference tip down mid cell on a good one. All saved per bed (`lrt_fsr_survey`) and gone by from then on: faulty cells aren't read, the aim and `early` are the survey's. It warns when the measuring cell or an edge cell is faulty or weak, with the strongest cells to use instead (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`). `SURVEY=0` on a measurement ignores it, `LRT_FSR_SURVEY CLEAR=1` drops it.
 

@@ -109,6 +109,17 @@ class Fsr:
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
+    def _roomier(self, hop, axis, at):
+        '''+1 or -1: the way along rows (axis 0) or cols (1) from `at` (in cells) with more
+        room before the array's end, a dead row or a faulty column.'''
+        array, spec = self.array(hop), self.arrays[hop]
+        n = array.rows if axis == 0 else array.cols
+        bad = set(spec.get('dead_rows', ()) if axis == 0 else spec.get('faulty_cols', ()))
+        bad |= {c[axis] for c in spec.get('faulty_cells', ())}
+        up = min([n] + [i for i in bad if i > at - 1e-9]) - at
+        down = at - max([0] + [i + 1 for i in bad if i + 1 < at + 1e-9])
+        return 1 if up >= down else -1
+
     def _boundary(self, hop, axis):
         '''The point between the two cells of the axis' first edge (cfg x_edges / y_edges).'''
         h, a, b = next(e for e in self.cfg[f'{axis}_edges'] if e[0] == hop)
@@ -325,8 +336,11 @@ class Fsr:
             # nothing however deep it goes (to the floor: a fineliner, 2026-10-07). Offset
             # by (0, 0), (1/2, 1/4), (1/4, 1/2) of a cell: whatever border lines a tip is on,
             # not all three are on one (two spots could be: a row border and a column border).
-            # Towards the array's middle (lower rows and cols from BED_5's aim): not off its end.
-            rd, cd = -np.asarray(array.row_dir, float), -np.asarray(array.col_dir, float)
+            # Each way it has more room: away from the array's ends, dead rows and faulty
+            # columns (BED_5: towards row 1, away from cols 3 and 4; a corner on col 4 touched
+            # first and the tip estimate went 1.2-1.65mm out, 2026-10-07)
+            rd = self._roomier(hop, 0, self.arrays[hop]['aim'][0]) * np.asarray(array.row_dir, float)
+            cd = self._roomier(hop, 1, self.arrays[hop]['aim'][1]) * np.asarray(array.col_dir, float)
             spots = [aim, aim + array.pitch * (0.5 * rd + 0.25 * cd), aim + array.pitch * (0.25 * rd + 0.5 * cd)]
             z, aim = self._descend_spots(hop, spots, z, cfg['step'], floor)
             while True:
@@ -361,12 +375,20 @@ class Fsr:
             cell = touched[0]
             shift = np.zeros(2)
             spec = self.arrays[hop]
+            cells_bad = {tuple(c) for c in spec.get('faulty_cells', ())}
             for axis, direction in ((1, array.col_dir), (0, array.row_dir)):
                 n = array.rows if axis == 0 else array.cols
                 bad = spec.get('dead_rows', ()) if axis == 0 else spec.get('faulty_cols', ())
-                blocked = lambda i: not 0 <= i < n or i in bad
-                sign = -1 if blocked(cell[axis] + 1) or blocked(cell[axis] + 2) else 1
-                last = self.last_response(hop, cell, aim, aim + sign * 2 * array.pitch * direction,
+
+                def blocked(i, axis=axis, n=n, bad=bad):
+                    other = list(cell)
+                    other[axis] = i
+                    return not 0 <= i < n or i in bad or tuple(other) in cells_bad
+                # Two cells over (the aim may be anywhere in its cell), else one: never onto a
+                # line that isn't read, where crosstalk passes for the cell (col 4, 2026-10-07)
+                sign, span = next(((s, k) for k in (2, 1) for s in (1, -1)
+                                   if not any(blocked(cell[axis] + s * j) for j in range(1, k + 1))), (1, 1))
+                last = self.last_response(hop, cell, aim, aim + sign * span * array.pitch * direction,
                                           z_press, z_lift, resolution=0.1, at=aim)
                 edge = (cell[axis] + 1) * array.pitch if sign > 0 else cell[axis] * array.pitch
                 tip = edge - np.dot(last - aim, direction)

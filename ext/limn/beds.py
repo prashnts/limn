@@ -65,28 +65,26 @@ BEDS = {
             # light presses on 2026-09-28 (the cols run towards -Y), to ~0.5mm.
             # dead_rows: row 3's ADC line has no series resistor: any press in
             # a column lifts it to ~500, pressed or not. It tells nothing.
-            # faulty_cols: read like the dead rows, never (column 3: see below; it
-            # read 469 with the pen on (1,1) and stopped LRT_CALIBRATE, 2026-10-07).
+            # faulty_cols: columns never read, like the dead rows. None on a fresh sheet:
+            # after a swap LRT_FSR_SURVEY finds the faulty cells of this one (and the aim).
+            # The sheet before (2026-09 to 10-07, a glue void from its transfer) had cols 3
+            # and 4 faulty and its aim at col 6.3: the tests keep it as OLD_SHEET.
             # crosstalk_rows: a press in a column lifts row 0 too, less; with a
             # fine tip split on an edge, as much as the pressed cells (fsr.py, touched).
             # aim: (row, col), in cells from the origin, where the tip first
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
             # off than the array reaches from there is not found: here -3.75..
-            # +3.75mm in X (rows 0-2), -4.25..+15.75mm in Y (8 cols). Col 6.3: this machine's
-            # pens (tips ~2mm off in X and Y) come down on (2, 5), strong, and search away from
-            # cols 3 and 4. At 5.5 they came down on (2, 4), weak, and pressing parts of col 5
-            # lit cols 3 and 4 up (the glue void): (2, 4) seemed to respond 2.5mm on, the tip
-            # estimate went 1.7mm out and LRT_CALIBRATE failed (2026-10-07). A tip that comes
-            # down on col 3 (~+8mm in Y) isn't found at all: it is never read.
+            # +3.75mm in X (rows 0-2), -6.25..+13.75mm in Y (8 cols). This machine's pens
+            # (tips ~2mm off in X and Y) come down around (2, 4). A survey moves it onto a good
+            # cell of the sheet there is (judge_survey).
             'arrays': [
-                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 6.3),
-                 'dead_rows': (3,), 'faulty_cols': (3,), 'crosstalk_rows': (0,)},
+                {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
+                 'dead_rows': (3,), 'faulty_cols': (), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
-            # Column 3 is faulty (a glue void from the transfer: preload, a dead
-            # band at col 3/4, 2026-09-29 survey), a 0.05 liner barely lifted it
-            # on 2026-09-30: z and the edges are on column 1 instead, the aim on column 5.
+            # z and the edges on cells 1-2: clear of the array's sides (a survey warns when
+            # one of them is weak or faulty on the sheet there is)
             'z_cell': (1, 1, 1),                # hop, row, col used for z
             # hop, (row, col) of a cell, (row, col) of its neighbour. The rows
             # run along X here: an edge between rows gives X, between cols Y.
