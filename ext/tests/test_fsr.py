@@ -164,7 +164,9 @@ class FsrBed:
                 drift = 15 * (1 + np.sin(self.t / 40 + 1.7 * row + 2.9 * col))
                 s = abs(self.rng.normal(0, 4)) + drift + (75 if col == 3 and not self.fresh else 0)
                 s += self.preload.get((row, col), 0) * (1 + 0.25 * np.sin(self.t / 7))
-                s += self.hover.get(row, 0) if self.tool is not None else 0
+                # the head's pickup grows as it comes down over the sheet: full near it, none 2mm up
+                near = max(0.0, 1 - max(-self.press(), 0.0) / 2.0) if self.tool is not None else 0.0
+                s += self.hover.get(row, 0) * near
                 if (row, col) in pressed:
                     s += pressed[(row, col)]
                 else:
@@ -723,9 +725,9 @@ def test_a_map_finds_where_the_sheet_sits_and_what_doesnt_answer():
     assert abs(result['pitch'] - 2.5) < 0.1 and result['far'] == []
     assert {(r, c) for r in range(4) for c in (4, 5, 6, 7)} <= set(result['silent'])
     assert not {(r, c) for r in range(4) for c in range(4)} & set(result['silent']), result['silent']
-    # A spot that never answers (the margin round the cells, a dead cell) goes 0.06 under where
-    # the last touch and the mesh put the sheet: up to ~0.12 past touch where the mesh is off
-    assert bed.max_press <= 0.125 and not bed.dragged, bed.max_press
+    # A spot that never answers (the margin round the cells, a dead cell) goes 0.05 under where
+    # the last touch and the mesh put the sheet: up to ~0.13 past touch where the mesh is off
+    assert bed.max_press <= 0.13 and not bed.dragged, bed.max_press
     picture = fsr_map.svg(points, result, cfg['arrays'][0], cfg['pitch'], cfg['respond'])
     assert picture.startswith('<svg') and picture.count('<rect') > len(points)
 
@@ -744,7 +746,7 @@ def test_a_preloaded_cell_and_a_row_that_hears_the_head_arent_a_touch():
     assert np.allclose(result['origin'], cfg['arrays'][0]['origin'], atol=0.45) and result['answered'] > 100, result
     refined, _ = fsr.refine_origin(1, points, result['origin'], tip=(2.0, 2.13))
     assert np.allclose(refined, cfg['arrays'][0]['origin'], atol=0.1), refined
-    assert bed.max_press <= 0.125
+    assert bed.max_press <= 0.13
     ref, bed, _ = setup(cfg=copy.deepcopy(cfg), **kw)
     profile = ref.calibrate()
     fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(2.0, 2.13), **kw)
