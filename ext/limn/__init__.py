@@ -77,7 +77,9 @@ MANUAL_WINDOW = 20.0    # s from the scan until the key's switch triggers
 MANUAL_POLL = 0.2       # s between looks at the key's switch, in that window
 MANUAL_X_MAX = 110.0
 INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
-TAP_PRESS = 0.1     # mm the FSR taps press past contact at most, for a tool whose tag names no pen
+TAP_PRESS = 0.1     # mm the FSR taps press past contact at most (less for a pen that presses less plotting).
+# Deeper spreads a felt tip over the cells' border: at 0.15 the Stabilo's locate went a cell off
+# in Y (3.87, 3.79 for ~2.1), an edge search failed and its contact came out 0.14 low (2026-10-07).
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
@@ -175,7 +177,8 @@ class Limn:
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
             ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE,
-             "LRT_CALIBRATE [PRESS=]: calibrate the bed with the reference tool (T4); PRESS: mm the FSR taps press at most"),
+             "LRT_CALIBRATE [PRESS=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm the FSR "
+             "taps press at most; MESH=1: new meshes even when they are of the bed as it sits"),
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL,
              "LRT_PROBE_TOOL [PRESS=]: measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
@@ -261,6 +264,7 @@ class Limn:
     # Dock lines
     def _on_connect(self):
         self._load_saved_profile()
+        self._restore_meshes()
         if self.holder:
             self.holder.start()
         if self.dock.connect():
@@ -339,17 +343,17 @@ class Limn:
         be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
         def before():
             carried = self._carried()
-            # The taps press no deeper than the pen does plotting (its `press`, pens.toml),
-            # TAP_PRESS when its tag names no pen; PRESS= instead, when given (deeper too)
+            # The taps press TAP_PRESS at most, less for a pen that presses less plotting (its
+            # `press`, pens.toml); PRESS= instead, when given (deeper too)
             self._pen_dry()
             pen = self._tags().get(str(carried), {}).get('pen')
             press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
             if press is not None:
                 fsr.press_cap, why = press, 'PRESS'
-            elif pen in self._pens[3]:
+            elif pen in self._pens[3] and self._pens[3][pen] < TAP_PRESS:
                 fsr.press_cap, why = max(0.05, self._pens[3][pen]), f'as {pen} presses plotting'
             else:
-                fsr.press_cap, why = TAP_PRESS, 'its tag names no pen'
+                fsr.press_cap, why = TAP_PRESS, 'the FSR\'s' if pen else 'the FSR\'s, its tag names no pen'
             gcmd.respond_info(f"[LRT] Tool {carried}: the taps press at most {fsr.press_cap:.2f}mm past contact ({why})")
             if self._fsr_last and carried != self._fsr_last and gcmd.get_int('CLEAN', 1):
                 gcmd.respond_info(f"[LRT] The sheet last had tool {self._fsr_last}, now {carried}: wipe it first")
@@ -369,6 +373,27 @@ class Limn:
             raise gcmd.error(f"[LRT][Mesh] no meshes known for bed {self.bed}: not probing a bed "
                              f"we don't know the shape of")
         return BEDS[self.bed]['meshes']
+
+    def _restore_meshes(self):
+        '''klippy:connect: the meshes of the saved variables that bed_mesh lost (a restart
+        without SAVE_CONFIG), back into its profiles. Whether they still fit the bed as it
+        sits is _stale_meshes' to say: the placement and their fingerprints.'''
+        bed_mesh = self.printer.lookup_object('bed_mesh', None)
+        store = getattr(getattr(bed_mesh, 'pmgr', None), 'profiles', None)
+        if store is None:
+            store = getattr(bed_mesh, 'profiles', None)       # (the tests' bed_mesh)
+        data = self._vars().get('lrt_mesh_data')
+        taken = (self._vars().get('lrt_meshes') or {}).get('profiles') or {}
+        if not isinstance(store, dict) or not isinstance(data, dict):
+            return
+        for name, profile in data.items():
+            if not isinstance(profile, dict) or not profile.get('points'):
+                continue
+            # Missing, or an older one (SAVE_CONFIG'd before): the one taken last instead
+            mine = mesh_fingerprint(profile)
+            if name not in store or (mesh_fingerprint(store[name]) != taken.get(name) == mine):
+                store[name] = profile
+                logging.info("[LRT][Mesh] %s put back from the saved variables", name)
 
     def _mesh_profiles(self):
         bed_mesh = self.printer.lookup_object('bed_mesh', None)
@@ -438,8 +463,10 @@ class Limn:
             raise gcmd.error("[LRT][Mesh] the bed moved while it was meshed, LRT_MESH_CALIBRATE again")
         profiles = self._mesh_profiles()
         self._save_vars({'lrt_meshes': {'placement': key, 'profiles': {
-            m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}}})
-        gcmd.respond_info("[LRT][Mesh] Done, SAVE_CONFIG to keep the meshes over a restart")
+            m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}},
+            # the meshes themselves: put back after a restart without SAVE_CONFIG (_restore_meshes)
+            'lrt_mesh_data': {m['profile']: profiles[m['profile']] for m in meshes if m['profile'] in profiles}})
+        gcmd.respond_info("[LRT][Mesh] Done (kept over a restart, the saved variables)")
         return carried
 
     def _rebase(self, gcmd, bed):
@@ -566,7 +593,14 @@ class Limn:
 
     def cmd_CALIBRATE(self, gcmd):
         bed = self._bed(gcmd)
-        self._run_meshes(gcmd, bed['meshes'], rebase=False)
+        # The meshes of the bed as it sits are taken once (MESH=1: again anyway)
+        stale = self._stale_meshes([m['profile'] for m in bed['meshes']])
+        if stale or gcmd.get_int('MESH', 0):
+            if stale:
+                gcmd.respond_info(f"[LRT][Mesh] Meshing first: {'; '.join(stale)}")
+            self._run_meshes(gcmd, bed['meshes'], rebase=False)
+        else:
+            gcmd.respond_info("[LRT][Mesh] The meshes are of the bed as it sits: using them (MESH=1 to take new ones)")
         try:
             profile = self._routine(gcmd, bed).calibrate()
         except ROUTINE_ERRORS as e:

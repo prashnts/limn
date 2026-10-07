@@ -432,11 +432,11 @@ def test_the_sheet_is_wiped_between_pens():
     p.svv['currently_docked_tool'] = 43
     fsr.measure()                                   # another pen: wipe first
     assert fsr.wiped == 1 and p.said('last had tool 42, now 43')
-    assert fsr.press_cap == 0.1 and p.said('at most 0.10mm past contact (its tag names no pen)')
+    assert fsr.press_cap == 0.1 and p.said('at most 0.10mm past contact (the FSR\'s, its tag names no pen)')
     p.ext._tags()['44'] = {'pen': 'stb-88'}
     p.svv['currently_docked_tool'] = 44
-    fsr.measure()                                   # a Stabilo: as deep as it presses plotting
-    assert fsr.press_cap == 0.15 and p.said('at most 0.15mm past contact (as stb-88 presses plotting)')
+    fsr.measure()                                   # a Stabilo presses 0.15 plotting: the FSR's 0.1 still
+    assert fsr.press_cap == 0.1 and p.said('at most 0.10mm past contact (the FSR\'s)')
     p.ext._fsr_hooks(FakeGcmd(p.gcode, {'PRESS': '0.3'}), fsr)
     fsr.measure()                                   # PRESS=: deeper, on purpose
     assert fsr.press_cap == 0.3
@@ -490,3 +490,25 @@ def test_a_calibration_keeps_over_a_restart_without_save_config():
     p = p.restart()
     p.ext._load_saved_profile()
     assert not p.ext.calibrated('fsr')
+
+def test_meshes_come_back_after_a_restart_without_save_config():
+    p = plotter(carried=0)
+    p.run('LRT_MESH_CALIBRATE')
+    taken = dict(p.bed_mesh.profiles)
+    p.bed_mesh.profiles.clear()
+    p.bed_mesh.profiles['lrt_paper'] = profile(5, 110, 115, 174, z=-1.8)      # an older, SAVE_CONFIG'd one
+    p = p.restart()
+    p.ext._restore_meshes()                                 # klippy:connect
+    assert p.bed_mesh.profiles == taken
+    p.run('LRT_MESH_CALIBRATE', IF_STALE=1)
+    assert p.meshed == [] and p.said('not meshing')
+
+def test_calibrate_uses_the_meshes_of_the_bed_as_it_sits():
+    p = plotter(carried=0)
+    p.run('LRT_CALIBRATE')
+    assert p.meshed == ['lrt_paper', 'lrt_panel']
+    p.meshed.clear()
+    p.run('LRT_CALIBRATE')                                  # the same bed: no new meshes
+    assert p.meshed == [] and p.said('using them')
+    p.run('LRT_CALIBRATE', MESH=1)
+    assert p.meshed == ['lrt_paper', 'lrt_panel']

@@ -236,11 +236,16 @@ class Fsr:
             self.machine.move(z=z)
             if self.touched(self.read(hop), hop):
                 raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window")
+            # Coarse, at the aim and half a cell over by turns: a tip in the dead zone between
+            # cells reads nothing however deep it goes (to the floor: a fineliner, 2026-10-07)
+            alt = aim + array.pitch * (0.5 * np.asarray(array.row_dir) + 0.25 * np.asarray(array.col_dir))
+            z, aim = self._descend_two(hop, (aim, alt), z, cfg['step'], floor)
             while True:
-                z, _ = self._descend(hop, None, z, cfg['step'], floor, early=True)
                 z = self._back_off(hop, z + cfg['back_off'])
                 z, _ = self._descend(hop, None, z, cfg['fine_step'], floor)
-                self.depth[hop] = self.press_depth(hop, None, z)
+                # Only enough to tell which cell: a weak one (BED_5's (2, 4) tops out at ~220)
+                # went the whole press for press_strength, 0.16mm past first touch (simulated)
+                self.depth[hop] = self.press_depth(hop, None, z, cfg.get('locate_strength'))
                 z_press, z_lift = z - self.depth[hop], z + 1.0
                 # Which cell: pressed in, where the crosstalk has fallen behind.
                 strengths = self.tap(hop, aim, z_press, z_lift, aim)
@@ -253,6 +258,7 @@ class Fsr:
                                  f"({self.top(strengths)}): going on down")
                 z = z_press
                 self.machine.move(z=z, speed=JOG_SPEED)
+                z, _ = self._descend(hop, None, z, cfg['step'], floor, early=True)
             # Along each axis the tip leaves the strongest cell where it reaches
             # the cell's far side, within two cells. On an edge, that is the edge.
             # (Two cells responding is no edge to go by: the column's crosstalk
@@ -260,13 +266,16 @@ class Fsr:
             # Not towards a dead row: pressed, it lifts its column's other rows, so the
             # cell seems to go on responding over it (BED_5's row 3: locate put the tip
             # 1.3mm too far in X, 2026-09-29 and 10-07). Then towards the near side.
+            # The search reaches up to two cells over: both must read (in the array, not a
+            # dead row or a faulty column), or it goes the other way.
             cell = touched[0]
             shift = np.zeros(2)
-            dead = self.arrays[hop].get('dead_rows', ())
+            spec = self.arrays[hop]
             for axis, direction in ((1, array.col_dir), (0, array.row_dir)):
                 n = array.rows if axis == 0 else array.cols
-                ahead = cell[axis] + 1
-                sign = -1 if (axis == 0 and ahead in dead) or ahead >= n else 1
+                bad = spec.get('dead_rows', ()) if axis == 0 else spec.get('faulty_cols', ())
+                blocked = lambda i: not 0 <= i < n or i in bad
+                sign = -1 if blocked(cell[axis] + 1) or blocked(cell[axis] + 2) else 1
                 last = self.last_response(hop, cell, aim, aim + sign * 2 * array.pitch * direction,
                                           z_press, z_lift, resolution=0.1, at=aim)
                 edge = (cell[axis] + 1) * array.pitch if sign > 0 else cell[axis] * array.pitch
@@ -278,7 +287,24 @@ class Fsr:
                          f"taps press {self.depth[hop]:.2f}mm")
         return shift, z + cfg['back_off']
 
-    def press_depth(self, hop, cell, z):
+    def _descend_two(self, hop, points, z, step, floor):
+        '''Coarse steps down, at each of `points` by turns, lifted between: -> (z, the point
+        where something presses). Like _descend(early=True), at two spots.'''
+        cfg = self.cfg
+        lift = cfg['back_off']
+        while True:
+            z -= step
+            if z < floor:
+                raise FsrError(f"[LRT] no contact down to z={floor:.2f}: is the tool over the array at hop {hop}?")
+            for p in points:
+                self.machine.move(z=z + lift, speed=JOG_SPEED * 5)
+                self.machine.move(float(p[0]), float(p[1]))
+                self.machine.move(z=z, speed=JOG_SPEED)
+                strengths = self.read(hop)
+                if self.touched(strengths, hop) or max(strengths.values(), default=0) >= cfg.get('early', cfg['respond']):
+                    return z, np.asarray(p, dtype=float)
+
+    def press_depth(self, hop, cell, z, target=None):
         '''How far past contact the taps press, the tip at contact (z) over
         `cell` (None: the strongest): until it reads `press_strength`, `press`
         at most. A felt tip gets there in ~0.05mm, a fine one needs ~0.3;
@@ -287,7 +313,7 @@ class Fsr:
         when set, instead of `press`: no deeper than the pen presses plotting.'''
         cfg = self.cfg
         most = self.press_cap or cfg['press']
-        target = cfg.get('press_strength')
+        target = target or cfg.get('press_strength')
         if not target:
             return most
         depth = 0.0
@@ -298,6 +324,18 @@ class Fsr:
             strength = strengths.get(tuple(cell), 0) if cell else max(strengths.values(), default=0)
             if strength >= target:
                 break
+        return depth
+
+    def depth_on(self, hop, cell, z, shift=(0, 0)):
+        '''press_depth() with the tip over `cell`, from its contact z.'''
+        x, y = self.array(hop).center(*cell) - np.asarray(shift)
+        with lifted_on_error(self.machine, self.cfg['z_park']):
+            self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
+            self.machine.move(float(x), float(y))
+            self.machine.move(z=z, speed=JOG_SPEED)
+            depth = self.press_depth(hop, cell, z)
+            self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
+        self.machine.say(f"[LRT] on {cell} the taps press {depth:.2f}mm")
         return depth
 
     # XY
@@ -325,10 +363,14 @@ class Fsr:
         of its neighbour) where `cell` still responds.'''
         resolution = resolution or self.cfg['resolution']
         start, end = np.array(start, dtype=float), np.array(end, dtype=float)
-        if not self.responds(self.tap(hop, start, z_press, z_lift, at), cell):
-            raise FsrError(f"[LRT] cell {cell} of hop {hop} does not respond at its centre {start.round(2)}: check the array origin")
-        if self.responds(self.tap(hop, end, z_press, z_lift, at), cell):
-            raise FsrError(f"[LRT] cell {cell} of hop {hop} responds at its neighbour's centre {end.round(2)}: check the array origin")
+        s = self.tap(hop, start, z_press, z_lift, at)
+        if not self.responds(s, cell):
+            raise FsrError(f"[LRT] cell {cell} of hop {hop} does not respond at its centre {start.round(2)} "
+                           f"({self.top(s) or 'nothing'}): check the array origin")
+        s = self.tap(hop, end, z_press, z_lift, at)
+        if self.responds(s, cell):
+            raise FsrError(f"[LRT] cell {cell} of hop {hop} responds at its neighbour's centre {end.round(2)} "
+                           f"({self.top(s)}): check the array origin")
         lo, hi = 0.0, 1.0
         length = float(np.linalg.norm(end - start))
         while (hi - lo) * length > resolution:
@@ -406,6 +448,10 @@ class Fsr:
                 for tries in range(3):
                     try:
                         contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
+                        # The taps' depth again, on this cell: locate's first cell may be a weak one
+                        # (BED_5's (2, 4) tops out at ~220, never press_strength: the taps all went
+                        # the whole press; (1, 1) has 450 ~0.07mm past first touch, 2026-10-07)
+                        self.depth[hop] = self.depth_on(hop, (row, col), contact[hop], shift[hop])
                         break
                     except WrongCell as e:
                         if tries == 2:

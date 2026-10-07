@@ -50,7 +50,10 @@ BEDS = {
     'BED_5': {
         'sensor': 'fsr',
         'meshes': [
-            {'origin': (111, 40), 'size': (7.5, 19), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
+            # Not to y 59: the sheet's edge (the array ends at 59.6), its row probed 0.2mm
+            # under the rest while the pen found the sheet flat there to 0.02, and the taps
+            # that follow the mesh went 0.07 out around col 1 (2026-10-07)
+            {'origin': (111, 40), 'size': (7.5, 17), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
         'marks': {'nx': 5, 'ny': 3, 'xrange': (15, 80), 'yrange': (120, 150), 'arm': 4},
@@ -109,6 +112,7 @@ BEDS = {
             # one up to 0.3. Deeper only adds force, and 0.3mm taps with a Stabilo
             # (~670) left marks on the sheet, 2026-09-29.
             'press_strength': 450,
+            'locate_strength': 180, # locate's taps: enough to tell the cell (a weak cell, (2, 4): ~220 at most)
             'press': 0.3,           # mm below contact for the XY taps, at most, when nothing else says
                                     # (ext/limn: the pen's own press, pens.toml; PRESS=)
             'prior_margin': 0.4,    # mm below an expected contact z the search may go
