@@ -360,3 +360,98 @@ def test_a_look_is_gone_at_the_next_capture(tmp_path):
     store.new({'kind': 'look'})
     store.new({'kind': 'focus'})
     assert sorted(c['kind'] for c in store.list()) == ['focus', 'scan']
+
+
+class Optics(FakeMoonraker):
+    '''A camera docked by hand whose shots are made: the bed (paper with a little texture, the cross of
+    MARK_SVG at `mark`) seen `ppm` px a mm, turned `turn`, its middle `center` mm from the tool point,
+    sharpest at z 6.'''
+
+    def __init__(self, mark, ppm=40.0, turn=30.0, center=(1.5, -1.0), size=(480, 360)):
+        super().__init__()
+        self.mark, self.ppm, self.turn, self.center, self.size = mark, ppm, turn, center, size
+        rng = np.random.default_rng(7)
+        self.res, self.span = 0.05, 40.0                # the bed around the mark, mm a cell, mm across
+        n = int(self.span / self.res)
+        g = (np.arange(n) * self.res - self.span / 2)
+        X, Y = np.meshgrid(g, g)
+        bed = 225 + 20 * np.kron(rng.random((n // 4, n // 4)), np.ones((4, 4)))[:n, :n]     # paper: 0.2 mm grain
+        bed[(np.abs(Y) < 0.2) & (np.abs(X) < 5)] = 30
+        bed[(np.abs(X) < 0.2) & (np.abs(Y) < 5)] = 30
+        self.bed = bed
+
+    def snapshot(self, camera):
+        w, h = self.size
+        U, V = np.meshgrid(np.arange(w) - w / 2, np.arange(h) - h / 2)
+        t = math.radians(self.turn)
+        wx = (U * math.cos(t) + V * math.sin(t)) / self.ppm         # sc.px_to_mm, for the whole picture
+        wy = (U * math.sin(t) - V * math.cos(t)) / self.ppm
+        bx = self.x + self.center[0] + wx - self.mark[0] + self.span / 2
+        by = self.y + self.center[1] + wy - self.mark[1] + self.span / 2
+        i = np.clip((by / self.res).astype(int), 0, self.bed.shape[0] - 1)
+        j = np.clip((bx / self.res).astype(int), 0, self.bed.shape[1] - 1)
+        im = Image.fromarray(self.bed[i, j].astype(np.uint8))
+        return jpeg(im.filter(ImageFilter.GaussianBlur(abs(self.z - 6.0) * 4 + 0.3)))
+
+
+def manual_camera(**kw):
+    from plot.tools import REGISTRY
+    return REGISTRY['camera'](**{'id': 'manual', 'name': 'Pi camera', 'webcam': 'http://picam:4250/capture.jpg',
+                                 'pen': 'picam', 'settle': 0.0, 'fixed': True, **kw})
+
+
+def test_calibrating_a_camera_docked_by_hand_on_the_cross(tmp_path):
+    mark = (50.0, 100.0)
+    mr, store = Optics(mark), sc.ScanStore(tmp_path)
+    job = sc.Job('calibrating the camera', mr, manual_camera(), machine(), store, sc.Settings(sweep=(5.0, 7.0, 0.25)))
+    st = run(job, 'calibrate', *mark, True)
+    assert st['error'] is None, st['error']
+    k = st['result']['calibration']
+    assert k['pen'] == 'picam' and k['focus_z'] == pytest.approx(6.0)
+    assert k['px_per_mm'] == pytest.approx(40, rel=0.03) and k['turn'] == pytest.approx(30, abs=1)
+    assert k['fov'] == pytest.approx([12, 9], rel=0.03) and k['steps'][1] > k['steps'][0]
+    assert k['center'] == pytest.approx([1.5, -1.0], abs=0.1) and k['residual'] < 0.1
+    assert 'LAZY_HOME' in mr.scripts[0] and not any('T0' in s or 'DOCK' in s for s in mr.scripts)   # never a tool change
+    assert store.meta(st['scan'])['kind'] == 'calibrate'
+    # Without the cross in sight (its center too far off): said so, nothing measured
+    far = Optics(mark, center=(15.0, 0.0))
+    st = run(sc.Job('calibrating the camera', far, manual_camera(), machine(), sc.ScanStore(tmp_path / 'b'),
+                    sc.Settings(sweep=(5.0, 7.0, 0.5))), 'calibrate', *mark, True)
+    assert 'no cross in sight' in st['error'] and st['result'] is None
+
+
+def test_the_app_places_the_cross_calibrates_and_saves_into_the_pen(tmp_path, monkeypatch):
+    import shutil
+    from fastapi.testclient import TestClient
+    from plot import profile, server
+    import limn_cam.moonraker as mrmod
+    pens = tmp_path / 'pens.toml'
+    shutil.copy(profile.PENS, pens)
+    monkeypatch.setattr(profile, 'PENS', pens)
+    fake = Optics((50.0, 100.0))
+    monkeypatch.setattr(mrmod, 'Moonraker', lambda url: fake)
+    client = TestClient(server.create_app(tmp_path / 'ws'))
+    ws = client.app.state.ws
+    ws.tags = {'90': {'pen': 'picam', 'name': 'Pi camera'}}        # docked by hand
+    assert client.post('/api/camera/calibrate').status_code == 400   # no cross, no spot
+    st = client.post('/api/camera/mark', json={'x': 50, 'y': 100}).json()
+    assert [o['id'] for o in st['job']['objects']] == ['camera-mark']
+    assert client.post('/api/camera/mark', json={'x': 50, 'y': 100}).json()['job']['objects'][0]['placement']['x'] == 44
+    cam = client.get('/api/camera').json()
+    assert list(cam['cameras']) == ['manual'] and cam['mark'] == [50, 100]
+    client.patch('/api/camera', json={'tool': 'manual', 'settle': 0, 'sweep': [5.0, 7.0, 0.25]})
+    assert client.post('/api/camera/calibration').status_code == 400        # nothing measured yet
+    assert client.post('/api/camera/calibrate').status_code == 200
+    for _ in range(1000):
+        job = client.get('/api/camera').json()['job']
+        if job['done']:
+            break
+        time.sleep(0.01)
+    assert job['error'] is None, job['error']
+    r = client.post('/api/camera/calibration').json()
+    assert r['pen'] == 'picam'
+    saved = profile.load_pens()['picam']
+    assert saved['fov'] == pytest.approx([12, 9], rel=0.03) and saved['center'] == pytest.approx([1.5, -1.0], abs=0.1)
+    assert saved['webcam'] == 'http://limn-picam.local:4250/capture.jpg' and saved['z_min'] == 5.0
+    assert '# Docked by hand (DOCK_MANUAL)' in pens.read_text()             # its comments stay
+    assert r['camera']['cameras']['manual']['fov'] == saved['fov']          # used from now on

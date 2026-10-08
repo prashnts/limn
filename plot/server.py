@@ -188,7 +188,7 @@ class Workspace:
         result, sliced = plot(self.job, self.cache, self.fonts, self.tags)
         self.gcode = result.gcode
         self.name = 'limn-' + '-'.join(o.id for o in self.job.objects)[:60] + '.gcode'
-        sim = parse(result.gcode)
+        sim = result.sim or parse(result.gcode)
         runs = [[k, t, n, np.round(pts[:, :2], 3).ravel().tolist()] for k, t, pts, n in sim.runs()]
         bounds = {}
         for o in self.job.objects:
@@ -792,7 +792,8 @@ def create_app(data=None):
                 'cameras': {k: {**t.model_dump(), 'z_limits': t.z_limits(machine)} for k, t in cams.items()},
                 'job': job.state if job else None, 'captures': captures().list(),
                 'store': {'volatile': captures().volatile, 'mb': round(captures().size() / 1e6, 1), 'max_mb': captures().max_mb},
-                'travel_area': machine.travel_area, 'zones': [z.model_dump() for z in machine.zones]}
+                'travel_area': machine.travel_area, 'zones': [z.model_dump() for z in machine.zones],
+                'mark': mark_spot()}
 
     @app.patch('/api/camera')
     def camera_settings(body: dict = Body(...)):
@@ -949,6 +950,68 @@ def create_app(data=None):
         for x, y in ((x0, y0), (x0, y1), (x1, y0), (x1, y1)):
             check_spot(x, y)
         return camera_job('checking the corners', 'corners')
+
+    MARK = 'camera-mark'            # the drawing of the cross the camera is calibrated on
+
+    def mark_spot():
+        '''Where the calibration cross's middle is on the bed, None: it isn't in the job.'''
+        from limn_cam.scan import MARK_MID
+        o = next((o for o in ws.job.objects if o.id == MARK), None)
+        if o is None:
+            return None
+        p = o.placement.apply([[MARK_MID[0] * o.scale, MARK_MID[1] * o.scale, 0]])[0]
+        return round(float(p[0]), 3), round(float(p[1]), 3)
+
+    @app.post('/api/camera/mark')
+    def camera_mark(body: dict = Body(...)):
+        '''{x, y}: the calibration cross as a drawing, its middle there (one only: moved when it is there).
+        Plotted like any drawing, with a pen, before the camera goes on: a camera docked by hand keeps
+        the dock out of reach.'''
+        from limn_cam.scan import MARK_MID, MARK_SVG
+        x, y = float(body['x']), float(body['y'])
+        with ws.lock:
+            (ws.uploads / f'{MARK}.svg').write_text(MARK_SVG)
+            ws.remember()
+            at = Placement(x=x - MARK_MID[0], y=y - MARK_MID[1])
+            old = next((o for o in ws.job.objects if o.id == MARK), None)
+            if old is not None:
+                old.placement, old.scale = at, 1.0
+            else:
+                ws.job.objects.append(Obj(id=MARK, svg=f'uploads/{MARK}.svg', placement=at))
+            ws.save()
+            return ws.state()
+
+    @app.post('/api/camera/calibrate')
+    def camera_calibrate(body: dict = Body(None)):
+        '''Measure the camera: on the calibration cross when the job has it (and then its center too), else at
+        {x, y}. The result is the job's: /api/camera/calibration saves it.'''
+        spot = mark_spot()
+        if spot is None and not (body and 'x' in body and 'y' in body):
+            raise HTTPException(400, 'no cross to calibrate on: add one (Calibration cross) and plot it, or give x, y')
+        x, y = spot or (float(body['x']), float(body['y']))
+        check_spot(x, y)
+        return camera_job('calibrating the camera', 'calibrate', x, y, spot is not None)
+
+    @app.post('/api/camera/calibration')
+    def camera_calibration_save():
+        '''The last calibration into its camera's pen (pens.toml): fov, turn, focus_z, center when measured.'''
+        job = ws.camera_job
+        cal = ((job.state.get('result') or {}).get('calibration') if job and job.state['done'] else None)
+        if not cal or job.state['error']:
+            raise HTTPException(400, 'no calibration to save: calibrate first')
+        key = cal.get('pen')
+        pens = load_pens()
+        if not key or key not in pens:
+            raise HTTPException(400, f'the camera has no pen of the library to save into ({key!r})')
+        spec = {**pens[key], 'fov': cal['fov'], 'turn': cal['turn'], 'focus_z': cal['focus_z']}
+        if cal.get('center') is not None:
+            spec['center'] = cal['center']
+        with ws.lock:
+            try:
+                saved = pen_library.save(profile.PENS, key, spec)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        return {'pen': key, 'saved': saved, 'camera': camera_state()}
 
     @app.post('/api/camera/stop')
     def camera_stop():

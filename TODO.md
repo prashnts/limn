@@ -1,6 +1,7 @@
 # Next
 
 ## BED_5's new FSR sheet: to calibrated pens (2026-10-07, in progress)
+- **Read `notebooks/act-8-fsr-checkpoint.md` first**: what went wrong on 2026-10-07/08 and the plan (Z from the paper, XY from ratio-fitted borders at a force target, hardware first). The items below are from before it; check them against it.
 - [ ] `LRT_FSR_MAP TIP=2.0,2.13`: the origin (refined by edge searches) and pitch, which cells answer. The first run (2026-10-07 23:27) 'touched' 4 mm up on (3, 0)'s preload and mapped nothing: fixed (descents go by their rise over the air), to run again. Set `origin` in ext/limn/beds.py from it; `faulty_cols` if whole columns stay silent.
 - [ ] Columns 4-7 answered as (3, 0) on the first hand map, and (3, 0) has a resting preload of 80-130 since the sheet was handled (was <=16): the ribbon and the (3, 0) corner, before trusting those columns.
 - [ ] `LRT_FSR_SURVEY` (the reference Stabilo in holder 45): faulty/weak cells, `early`, the aim. Its warnings say whether `z_cell` (1, 1) and the edges (1, 1)|(2, 1), (1, 1)|(1, 2) suit this sheet.

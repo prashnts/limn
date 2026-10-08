@@ -171,9 +171,18 @@ class Pen(Tool):
         ctx.g.line(z=ctx.clamp(self, self.down(ctx, p[2])), f=self.plunge_feed)
 
     def draw(self, ctx, pts):
-        for a, b in zip(pts[:-1], pts[1:]):
-            ctx.drawn[self.id] = ctx.drawn.get(self.id, 0.0) + math.dist(a[:2], b[:2])
-            ctx.g.line(x=b[0], y=b[1], z=ctx.clamp(self, self.down(ctx, b[2])), f=self.feed)
+        if type(self).down is not Pen.down:     # a kind's own heights (a pencil's wear): point by point
+            for a, b in zip(pts[:-1], pts[1:]):
+                ctx.drawn[self.id] = ctx.drawn.get(self.id, 0.0) + math.dist(a[:2], b[:2])
+                ctx.g.line(x=b[0], y=b[1], z=ctx.clamp(self, self.down(ctx, b[2])), f=self.feed)
+            return
+        pts = np.asarray(pts, float)            # all at once: a picture's lines have hundreds of thousands
+        ctx.drawn[self.id] = ctx.drawn.get(self.id, 0.0) + float(np.hypot(*np.diff(pts[:, :2], axis=0).T).sum())
+        z = pts[1:, 2] + self.pen_z(ctx)
+        lo, hi = self.z_limits(ctx.m)
+        for v in z[(z < lo - 1e-9) | (z > hi + 1e-9)][:1]:
+            ctx.clamp(self, float(v))           # says so
+        ctx.g.polyline(np.column_stack([pts[1:, :2], np.clip(z, lo, hi)]), self.feed)
 
     def disengage(self, ctx):
         at = None if ctx.g.x is None or ctx.g.y is None else (ctx.g.x, ctx.g.y)

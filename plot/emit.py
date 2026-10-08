@@ -209,6 +209,7 @@ class Result:
     problems: list[str] = field(default_factory=list)
     stats: dict = field(default_factory=dict)
     unsafe: list[str] = field(default_factory=list)     # it must not be sent to the plotter
+    sim: object = None          # preview.Sim: the G-code read back
 
 
 def _fields(machine, tool, tools):
@@ -217,24 +218,23 @@ def _fields(machine, tool, tools):
             'mesh': f' MESH={machine.mesh}' if machine.mesh else ''}
 
 
-def _outside(machine, pts):
-    '''The first point of `pts` off the draw area, or None.'''
+def _on_paper(machine, oid, tid, paths, placement, problems):
+    '''The paths placed, and clipped to the paper; a problem when that cut any.'''
+    if not paths:
+        return []
+    starts = np.cumsum([0] + [len(p) for p in paths[:-1]])
+    pts = placement.apply(np.vstack(paths))     # all at once: a picture's lines are tens of thousands
     x0, y0, x1, y1 = machine.draw_area
-    xy = pts[:, :2]
-    bad = (xy[:, 0] < x0 - 1e-6) | (xy[:, 0] > x1 + 1e-6) | (xy[:, 1] < y0 - 1e-6) | (xy[:, 1] > y1 + 1e-6)
-    return xy[bad][0] if bad.any() else None
-
-
-def _on_paper(machine, oid, tid, placed, problems):
-    '''The paths clipped to the paper; a problem when that cut any.'''
+    bad = ((pts[:, 0] < x0 - 1e-6) | (pts[:, 0] > x1 + 1e-6) | (pts[:, 1] < y0 - 1e-6) | (pts[:, 1] > y1 + 1e-6))
+    off = np.logical_or.reduceat(bad, starts)
     out = []
-    for p in placed:
-        off = _outside(machine, p)
-        if off is None:
+    for p, cut_, a in zip(np.split(pts, starts[1:]), off, starts):
+        if not cut_:
             out.append(p)
             continue
         if not any(q.startswith(f'{oid}: {tid} draws') for q in problems):
-            problems.append(f'{oid}: {tid} draws at ({num(off[0])}, {num(off[1])}), outside the draw area '
+            x, y = pts[a + int(np.argmax(bad[a:a + len(p)])), :2]
+            problems.append(f'{oid}: {tid} draws at ({num(x)}, {num(y)}), outside the draw area '
                             f'{list(machine.draw_area)}: only the part on the paper is drawn')
         out += clip(p, machine.draw_area)
     return out
@@ -281,29 +281,61 @@ def hidden(job, tools, sliced):
     return out
 
 
+def drawing_order(s, tid, budget):
+    '''The slice's paths of a tool in the order they are drawn, object mm: kept on the
+    slice (cached with it), as moving or turning a drawing doesn't change how far apart
+    its paths are. Nearest next from its corner, then improved for `budget` seconds.'''
+    k = (tid, budget)
+    if k not in s.orders:
+        start = s.bounds[:2] if s.bounds else (0, 0)
+        s.orders[k] = improve(order(s.paths[tid], start), start, budget)
+    return s.orders[k]
+
+
+def chain(blocks, start):
+    '''Blocks of paths in their order, one after another: the nearest next, drawn from
+    its last path back when that end is nearer.'''
+    out, pos, left = [], np.asarray(start[:2], float), [b for b in blocks if b]
+    while left:
+        d = [(min(math.dist(pos, b[0][0, :2]), math.dist(pos, b[-1][-1, :2])), i) for i, b in enumerate(left)]
+        b = left.pop(min(d)[1])
+        if math.dist(pos, b[-1][-1, :2]) < math.dist(pos, b[0][0, :2]):
+            b = [p[::-1] for p in reversed(b)]
+        out += b
+        pos = b[-1][-1, :2]
+    return out
+
+
 def emit(job, machine, tools, sliced) -> Result:
     problems = []
-    by_tool: dict[str, list[np.ndarray]] = {}
+    by_tool: dict[str, list[list[np.ndarray]]] = {}     # tool -> each drawing's paths, in order
     obstacles = [ZoneObstacle(z) for z in machine.zones]
     under = hidden(job, tools, sliced)
+    count = {}                  # paths of each tool: its ordering time is shared out by them
+    for obj in job.objects:
+        for tid, paths in sliced[obj.id].paths.items():
+            count[tid] = count.get(tid, 0) + len(paths)
     for obj in job.objects:
         s = sliced[obj.id]
         problems += [p for p in s.problems if p not in problems]
         if s.surface.max_z > 0:
             obstacles.append(ObjectObstacle(obj, s.surface))
-        for tid, paths in s.paths.items():
+        for tid in s.paths:
             if tid not in tools:
                 problems.append(f'{obj.id}: no tool {tid}')
                 continue
             if not tools[tid].draws:
                 problems.append(f'{obj.id}: {tid} is a {tools[tid].kind}, it doesn\'t draw: not drawn')
                 continue
-            if tid in under.get(obj.id, {}):
+            budget = round(machine.order_time * len(s.paths[tid]) / count[tid], 3)
+            paths = drawing_order(s, tid, budget)
+            if tid in under.get(obj.id, {}):        # cut in order: the pieces stay in it
                 paths = [s.surface.drape(p) for p in cut([p[:, :2] for p in paths], under[obj.id][tid])]
-            placed = _on_paper(machine, obj.id, tid, [obj.placement.apply(p) for p in paths], problems)
-            by_tool.setdefault(tid, []).extend(placed)
+            placed = _on_paper(machine, obj.id, tid, paths, obj.placement, problems)
+            by_tool.setdefault(tid, []).append(placed)
 
     first = job.tool_order or list(tools)
+    by_tool = {t: bs for t, bs in by_tool.items() if any(bs)}
     used = [t for t in first if by_tool.get(t)] + [t for t in by_tool if t not in first]
     if any(tools[t].layers for t in used):
         used.sort(key=lambda t: -lightness(tools[t].color))     # light first: the dark goes over it
@@ -328,8 +360,7 @@ def emit(job, machine, tools, sliced) -> Result:
         g.raw((tool.begin or machine.tool_begin).format(**_fields(machine, tool, tools)))
         g.at(*machine.park)
         e.surface_z = 0.0
-        paths = improve(order(by_tool[tid], machine.park[:2]), machine.park[:2], machine.order_time)
-        for p in join(paths, link=tool.link_gap):
+        for p in join(chain(by_tool[tid], machine.park[:2]), link=tool.link_gap):
             e.stroke(tool, p)
         g.rapid(z=e.clamp(tool, max(g.z, min(machine.z_travel, machine.z_max))), f=machine.feed_z)
         end = tool.end if tool.end is not None else machine.tool_end
@@ -348,7 +379,7 @@ def emit(job, machine, tools, sliced) -> Result:
     bad = unsafe(machine, g.moves)
     if bad:
         problems.append(f'UNSAFE, not for the plotter: {bad[0]}' + (f' (and {len(bad) - 1} more)' if len(bad) > 1 else ''))
-    return Result(text, problems + e.problems, stats(sim, machine, tools), bad)
+    return Result(text, problems + e.problems, stats(sim, machine, tools), bad, sim)
 
 
 def load(job, tags=None):

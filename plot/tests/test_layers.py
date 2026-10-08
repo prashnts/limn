@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from plot import server
 from plot.emit import load, plot
 from plot.job import Group, Job, Obj, Placement, ShapePaint, ShapeSet
-from plot.slicer import lost_detail, slice_object
+from plot.slicer import Cache, lost_detail, slice_object
 from plot.svg import strip_images
 
 from .conftest import svg_text
@@ -453,3 +453,35 @@ def test_a_page_background_and_paints_we_cant_read_arent_drawn_black(write_svg, 
     assert 'T0' not in s.paths                              # the background is the paper
     painted = Obj(id='d', svg=str(p), groups=g, shapes={str(d.shapes[0].index): ShapePaint(fill=Group(tool='T0'))})
     assert 'T0' in slice_object(painted, tools).paths       # unless painted on purpose
+
+
+def test_an_images_lines_are_drawn_as_lines_and_a_move_keeps_their_order(tmp_path, tools, monkeypatch):
+    from plot import emit, geometry
+    from plot.job import RasterSpec
+    p = tmp_path / 'g.svg'
+    p.write_text(gradient_svg())
+    # Strokes drawn by their width everywhere: an image's lines still aren't filled in as areas
+    job = Job(objects=[Obj(id='d', svg=str(p), raster=RasterSpec(mode='halftone'), placement=Placement(x=20, y=60))],
+              draw={'stroke': 'width', 'bleed': 0.25})
+    job._root = tmp_path
+    geometry.FILLS.clear()
+    calls = []
+    real = geometry._fill
+    monkeypatch.setattr(geometry, '_fill', lambda *a: calls.append(a) or real(*a))
+    cache = Cache()
+    r, sliced = plot(job, cache)
+    assert len(calls) == 1                     # the red line's area, not a fill for each dot
+    s = sliced['d']
+    assert s.orders and not r.unsafe
+    # Moved: not sliced again, its paths not ordered again, all of it drawn as far over
+    ordered = []
+    monkeypatch.setattr(emit, 'improve', lambda *a: ordered.append(a) or a[0])
+    job.objects[0].placement.x += 7
+    r2, _ = plot(job, cache)
+    assert cache.slices == 1 and not ordered
+    d1, d2 = (sim.segs[sim.kind == 1] for sim in (r.sim, r2.sim))
+    assert len(d1) == len(d2) and np.allclose(np.sort(d2[:, 3]) - 7, np.sort(d1[:, 3]), atol=1e-3)
+    # Only the image changed: the line's fill comes from before
+    job.objects[0].raster.gamma = 2
+    plot(job, cache)
+    assert cache.slices == 2 and len(calls) == 1

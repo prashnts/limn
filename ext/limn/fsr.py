@@ -93,15 +93,6 @@ def judge_survey(result, cfg, hop):
             'warnings': warnings, 'shift': shift, 'aim': aim}
 
 
-def local_rise(strengths):
-    '''The most a cell stands out over the median of its own row (cells: rises or readings).'''
-    rows = {}
-    for (r, c), v in strengths.items():
-        rows.setdefault(r, []).append(v)
-    floor = {r: float(np.median(v)) if len(v) >= 4 else 0.0 for r, v in rows.items()}
-    return max((v - floor[c[0]] for c, v in strengths.items()), default=0.0)
-
-
 class Fsr:
 
     def __init__(self, machine, dock, samples, cfg):
@@ -124,7 +115,7 @@ class Fsr:
         toolhead; (0, 0): toolhead coordinates). The sheet is found once at the aim; at each spot
         down from where the mesh puts it, in 0.01 steps, until a cell rises `rise` over its
         reading in the air, then `depth` deeper: every cell's rise there. A spot where nothing
-        answers (the margin, a dead cell) goes 0.05 under where the last touch and the mesh put
+        answers (the margin, a dead cell) goes 0.06 under where the last touch and the mesh put
         the sheet, no further. -> [points].'''
         cfg = self.cfg
         array = self.array(hop)
@@ -163,12 +154,12 @@ class Fsr:
                     self.machine.move(z=z, speed=JOG_SPEED)
                     air = self.read(hop, limit=False, raw=True)
                     touch, cells = None, {}
-                    while z > pred - 0.05:      # a spot that never answers (a dead cell) isn't pressed in
+                    while z > pred - 0.06:      # a spot that never answers (a dead cell) isn't pressed in
                         z = round(z - 0.01, 4)
                         self.machine.move(z=z, speed=JOG_SPEED)
                         s = self.read(hop, limit=False, raw=True)
                         up = {c: v - air.get(c, 0.0) for c, v in s.items()}
-                        if max(s.values(), default=0) >= cfg['press_limit'] or local_rise(up) >= rise:
+                        if max(s.values(), default=0) >= cfg['press_limit'] or max(up.values(), default=0) >= rise:
                             touch = z
                             ref = (z, np.array([x, y]))
                             self.machine.move(z=z - depth, speed=JOG_SPEED)
@@ -319,11 +310,9 @@ class Fsr:
                 f"the node's firmware may be from before matrix mode (mcu.py update)")
 
     def rise(self, strengths):
-        '''How much a cell stands out (read() gives rises over the descent's baseline in the
-        air): over the median of its own row. The head coming down over the sheet lifts a
-        whole row evenly (the new sheet's row 3, by ~40, plus (3, 0)'s preload drifting:
-        a 'touch' 0.15mm up, 2026-10-07); a press lifts one cell over the rest.'''
-        return local_rise(strengths)
+        '''The most any cell reads over the baseline taken in the air before this descent:
+        read() gives them so (self.air). The sheet's own level drifts by tens, cell by cell.'''
+        return max(strengths.values(), default=0.0)
 
     def baseline(self, hop, z):
         '''The readings in the air here, before a descent: what the cells rise from (self.air).

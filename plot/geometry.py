@@ -5,7 +5,9 @@
 #
 # Fills keep the ink inside the shape: the tool's centre runs half its width
 # in from the edge, so the edge of the ink is the edge of the shape.
+import hashlib
 import math
+from collections import OrderedDict
 
 import numpy as np
 import shapely
@@ -165,11 +167,26 @@ def link(paths, area, max_gap):
     return out
 
 
+FILLS = OrderedDict()   # the fills made, by their area and settings: most of a slice's time,
+FILLS_KEPT = 4096       # and the same again when only something else of the drawing changed
+
+
 def fill(area, width, spacing, pattern='hatch', angle=45, border=True):
     '''Paths that cover `area` with a tool of `width`, lines `spacing` apart.'''
-    from .order import order
     if area.is_empty:
         return []
+    k = (hashlib.sha1(shapely.to_wkb(area)).digest(), width, spacing, pattern, angle, border)
+    if k in FILLS:
+        FILLS.move_to_end(k)
+    else:
+        FILLS[k] = _fill(area, width, spacing, pattern, angle, border)
+        if len(FILLS) > FILLS_KEPT:
+            FILLS.popitem(last=False)
+    return list(FILLS[k])
+
+
+def _fill(area, width, spacing, pattern, angle, border):
+    from .order import order
     inner = inset(area, width / 2)
     out = thin(area, inner, width)
     if inner.is_empty:

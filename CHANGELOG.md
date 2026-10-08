@@ -32,6 +32,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Ver
 
 Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its milestones follow.
 
+### Added
+- **Camera calibration** (the Scan tab's *Calibration cross* and *Calibrate*, `Job.calibrate` in `limn_cam/scan.py`): a camera's `fov`, `turn`, `focus_z` and `center` measured instead of by hand. A 12 mm cross is plotted with a pen (before a camera docked by hand goes on: the dock is out of reach then); over it the job sweeps the focus, moves 0.5 mm and then a quarter of a shot along X and Y (phase correlation, the two agreeing within 8%), finds the cross for the offset from the tool point and checks it with a second look. *Save* writes the values into the camera's entry in `pens.toml`, its comments kept. Made for the Pi camera docked by hand (`limn_picam`); the README's *Adding a camera* says how.
+- A drawn cross is found in a turned picture too (`cross_centre(turn=)`), and to its arm's middle rather than its peak: 0.025 mm off in the tests (it was up to 0.08).
+
+### Fixed
+- **Halftone and lines slice in seconds** (`plot/slicer.py`): a picture's lines were taken for strokes, so with `stroke = "width"` every halftone spiral and every row was made an area, filled, and thinned (Voronoi). A 40 × 30 mm picture took 235 s, and its spirals came out as blobs. A picture's lines are now always drawn on their line: ~2 s, and a 120 × 90 mm halftone that never finished slices in ~3 s (laptop; the Pi is a few times slower). The occlusion check no longer buffers a picture's thousands of lines to look for what lies near them (`dwithin`).
+
+### Changed
+- **Reslicing is cached at more levels**, so moving a drawing, or changing one thing of it, doesn't redo the rest:
+  - The order its paths are drawn in, per pen, is kept with its slice, in the drawing's own mm: moving or turning it changes no distance between them, so a move skips 2-opt. Drawings are then drawn one after another, nearest next (the order used to be made across all of them). Paths cut by the paper's edge or a drawing on top keep that order.
+  - Fills by their area and settings (`geometry.fill`, the last 4096): when only a picture's settings or another colour's pen changed, the drawing's other fills come from before (the Bicycle diagram: 5.8 s → 1.7 s).
+  - The G-code is read back once for the preview, not twice.
+- Pens write a stroke's G-code all at once (`Writer.polyline`, the same lines as before), and a drawing's paths are placed and checked against the paper together. A 120 × 90 mm halftone moves in ~1.5 s.
+- A pen whose heights go outside its z limits is warned about once a stroke, not once for each height.
+
 ## [2026.10.07] - Pen layers, pictures as halftone, the FSR calibration measured
 
 <img src="docs/plot-ui-shapes.png" alt="The plot UI: a drawing's layers by pen, a picked shape (the shapes tool) with its pen, fill, bleed margin and border, and its group" width="800">
