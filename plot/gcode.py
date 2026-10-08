@@ -76,5 +76,30 @@ class Writer:
     def line(self, x=None, y=None, z=None, f=None):
         return self._move('G1', x, y, z, f)
 
+    def polyline(self, pts, f=None):
+        '''A G1 to each of `pts` (n, 3) in turn: as line() for each, only quicker.'''
+        if not len(pts):
+            return
+        x, y, z, cur, lines, moves = self.x, self.y, self.z, self.f, self.lines, self.moves
+        for px, py, pz in (pts.tolist() if hasattr(pts, 'tolist') else pts):
+            start, words = (x, y, z), []
+            if x is None or abs(x - px) >= EPS:
+                words.append('X' + num(px))
+                x = float(px)
+            if y is None or abs(y - py) >= EPS:
+                words.append('Y' + num(py))
+                y = float(py)
+            if z is None or abs(z - pz) >= EPS:
+                words.append('Z' + num(pz))
+                z = float(pz)
+            if not words:
+                continue
+            if f is not None and f != cur:
+                words.append('F' + num(f))
+                cur = f
+            lines.append('G1 ' + ' '.join(words))
+            moves.append((start, (x, y, z)))
+        self.x, self.y, self.z, self.f, self._up = x, y, z, cur, None
+
     def text(self):
         return '\n'.join(self.lines) + '\n'

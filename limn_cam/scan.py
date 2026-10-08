@@ -74,6 +74,15 @@ def shift(a, b, width=640):
     return dx * step, dy * step
 
 
+CAL_STEP = 0.5      # mm: calibrate()'s first moves, small enough for a shot of a few mm
+CAL_AGREE = 0.08    # its two measures of px/mm may differ by this much
+
+# A cross for the camera to find (cross_centre), 12 mm square, its middle at (6, 6) (MARK_MID)
+MARK_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="12mm" height="12mm" viewBox="0 0 12 12">'
+            '<path d="M1 6 H11 M6 1 V11" stroke="#000000" stroke-width="0.4" fill="none"/></svg>')
+MARK_MID = (6.0, 6.0)
+
+
 def px_to_mm(du, dv, ppm, turn):
     '''An offset in the image (px, its y down) as mm on the bed (X, Y). turn: the
     angle machine +X makes in the image (calibrate()): +Y is +X turned a quarter
@@ -84,10 +93,26 @@ def px_to_mm(du, dv, ppm, turn):
     return float(d @ ex / ppm), float(d @ ey / ppm)
 
 
-def cross_centre(img, band=0.08):
+def cross_centre(img, band=0.08, turn=0.0):
     '''Where a drawn cross (+) is in a shot -> (u, v) px, None without one: the row and
-    the column the most ink lies along (its arms), refined around their peaks.'''
+    the column the most ink lies along (its arms), refined around their peaks. turn: the
+    angle machine +X makes in the image (calibrate()): a cross drawn along X and Y is
+    straightened first, its arms along the rows and columns.'''
     a = load(img)
+    if abs(math.sin(math.radians(2 * turn))) > 1e-3:      # not a multiple of 90: turned
+        h, w = a.shape
+        bg = float(np.median(a))
+        a = np.asarray(Image.fromarray(a.astype(np.float32), 'F').rotate(turn, Image.BILINEAR, fillcolor=bg))
+        c = cross_centre_straight(a, band)
+        if c is None:
+            return None
+        du, dv, t = c[0] - w / 2, c[1] - h / 2, math.radians(turn)
+        return w / 2 + du * math.cos(t) - dv * math.sin(t), h / 2 + du * math.sin(t) + dv * math.cos(t)
+    return cross_centre_straight(a, band)
+
+
+def cross_centre_straight(a, band=0.08):
+    '''cross_centre() of a picture (a 2-D array, 0..1) whose cross is along its rows and columns.'''
     k = max(3, a.shape[1] // 80)
     ink = np.clip(0.5 - a / np.maximum(np.median(a), 1e-3) * 0.5, 0, None)     # darker than the paper
     ink[ink < 0.08] = 0
@@ -98,8 +123,15 @@ def cross_centre(img, band=0.08):
     def peak(p):
         p = np.convolve(p, np.ones(k) / k, mode='same')
         i = int(np.argmax(p))
-        lo, hi = max(0, i - k), min(len(p), i + k + 1)
-        w = p[lo:hi]
+        # The arm's whole width (over half its height above the other arm's floor): its middle, not
+        # wherever the top of a wide line happens to peak
+        q = p - np.median(p)
+        lo, hi = i, i + 1
+        while lo > 0 and q[lo - 1] > q[i] / 2:
+            lo -= 1
+        while hi < len(p) and q[hi] > q[i] / 2:
+            hi += 1
+        w = q[lo:hi]
         return float((np.arange(lo, hi) * w).sum() / w.sum()), float(p[i] / (p.mean() + 1e-9))
     v, rv = peak(rows)
     u, ru = peak(cols)
@@ -545,6 +577,77 @@ class Job:
             self.store.add(sid, f'{name}.jpg', jpeg, {'corner': name, 'x': x, 'y': y, 'z': z if z is None else round(z, 3),
                                                       'flicker': self.flicker})
             self.state['i'] = i + 1
+
+    def calibrate(self, x, y, mark=False):
+        '''Measures the camera over (x, y), for its pen's fov, turn, focus_z and, with `mark` (a cross drawn
+        at x, y: MARK_SVG), its center. Nothing is saved: the result is the job's, the app saves it.
+        1. the focus: the sweep, the sharpest z;
+        2. how far the picture moves for a small move along X and along Y (shift(), phase correlation):
+           CAL_STEP mm first, then a quarter of the shot as that measured it (more pixels, less error),
+           the two agreeing within CAL_AGREE;
+        3. the cross's place in the picture: how far the image's middle is from where it was asked to be,
+           so the center; then a look with it, where the cross should be in the middle (its residual).'''
+        if self.camera.fixed and not self.over_paper(x, y):
+            raise RuntimeError(f'{self.camera.name}: calibrate over the paper (Z is not moved elsewhere)')
+        zs = self.sweep()
+        self.state['n'] = len(zs) + 5 + (2 if mark else 0)
+        self.carry()
+        sid = self.store.new(self._meta('calibrate', (x, y, x, y)))
+        self.state['scan'] = sid
+        z, _, curve = self.best_of(x, y, zs, count=True)
+        self.state['i'] = len(zs)
+
+        def at(dx, dy, name):
+            self._check()
+            self.xy = None                          # shot again even where it was: from above, settled
+            self.goto(x + dx, y + dy, z)
+            jpeg = self.shot()
+            self.store.add(sid, name, jpeg, {'x': x + dx, 'y': y + dy, 'z': round(z, 3), 'flicker': self.flicker})
+            self.state['i'] += 1
+            return jpeg
+
+        base = at(0, 0, 'base.jpg')
+        size = Image.open(io.BytesIO(base)).size
+
+        def measure(step):
+            mx, my = shift(base, at(step, 0, f'x{step:g}.jpg')), shift(base, at(0, step, f'y{step:g}.jpg'))
+            if min(math.hypot(*mx), math.hypot(*my)) < 3:
+                raise RuntimeError(f'the picture hardly moved for {step:g} mm ({mx[0]:.1f}, {mx[1]:.1f} px; '
+                                   f'{my[0]:.1f}, {my[1]:.1f} px): nothing to see there? Calibrate over the cross')
+            return calibrate(size, mx, my, step)
+        first = measure(CAL_STEP)
+        step = round(min(max(CAL_STEP, 0.25 * min(first['fov'])), 10.0), 2)
+        cal = measure(step) if step > CAL_STEP * 1.5 else first
+        if abs(cal['px_per_mm'] - first['px_per_mm']) > CAL_AGREE * cal['px_per_mm']:
+            raise RuntimeError(f'the moves don\'t agree: {first["px_per_mm"]:g} px/mm for {CAL_STEP:g} mm, '
+                               f'{cal["px_per_mm"]:g} for {step:g}: the correlation was fooled (a regular grid, glare). '
+                               f'Calibrate over the cross on plain paper')
+        if cal['mirrored']:
+            raise RuntimeError('the picture is mirrored: flip it at the camera (limn_picam: hflip in its settings; '
+                               'the endoscope: ?flip=1) and again')
+        if mark and cross_centre(base, turn=cal['turn']) is None:
+            raise RuntimeError(f'no cross in sight at ({x:g}, {y:g}): the camera\'s center is too far off to see it. '
+                               f'Set a rough center in its pen (a ruler: mm from the tool point to the lens) and again')
+        out = {'pen': self.camera.pen, 'focus_z': round(float(z), 2), 'fov': [float(v) for v in cal['fov']],
+               'turn': float(cal['turn']),
+               'px_per_mm': cal['px_per_mm'], 'skew': cal['skew'], 'steps': [CAL_STEP, step],
+               'center': None, 'residual': None}
+        if mark:
+            w, h = size
+
+            def off(jpeg):
+                c = cross_centre(jpeg, turn=cal['turn'])
+                if c is None:
+                    raise RuntimeError('lost the cross')
+                return px_to_mm(c[0] - w / 2, c[1] - h / 2, cal['px_per_mm'], cal['turn'])
+            dx, dy = off(base)                  # the cross's place from the image's middle, mm
+            cx, cy = self.camera.center
+            center = (round(float(cx - dx), 2), round(float(cy - dy), 2))
+            self.camera = self.camera.model_copy(update={'center': center, 'turn': cal['turn'], 'fov': cal['fov']})
+            rx, ry = off(at(0, 0, 'check.jpg'))
+            out.update(center=list(center), residual=round(float(math.hypot(rx, ry)), 3))
+        self.store.update(sid, curve=curve, z=z, calibration=out)
+        self.state['result'] = {'z': float(z), 'curve': curve, 'calibration': out}
 
     def scan(self):
         region = self.s.region

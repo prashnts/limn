@@ -62,6 +62,7 @@ class Sliced:
     problems: list[str] = field(default_factory=list)
     cover: dict = field(default_factory=dict)   # tool ('': a mask) -> the area its opaque paint hides, object mm
     small: list[int] = field(default_factory=list)  # shapes too small or dense for their tool
+    orders: dict = field(default_factory=dict)  # emit's: (tool, order_time) -> its paths in drawing order, object mm
 
 
 def lost_detail(paths, width, ink=None):
@@ -323,7 +324,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             if too_small(sh, tool_of(fg), paths, fill_area):
                 fg, fill_on, fill_area = None, False, None
         st = tool_of(sg)
-        wide = st is not None and (setting(sg, st, 'stroke') == 'width'
+        wide = st is not None and not sh.raster and (setting(sg, st, 'stroke') == 'width'
                                    or (setting(sg, st, 'stroke') == 'auto' and sh.width * s >= st.width * WIDE))
         if st is not None and not wide and not sh.raster and too_small(sh, st, paths,
                                                      stroke_area(paths, sh.closed, max(sh.width * s, 0.02))):
@@ -348,7 +349,8 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             return None
         bleed = tool.bleed if tool is not None else 0
         hits = []
-        for j in tree.query(geom.buffer(bleed) if bleed > 0 else geom):
+        # Within the bleed, not intersecting a buffer: buffering an image's thousands of lines takes seconds
+        for j in (tree.query(geom, predicate='dwithin', distance=bleed) if bleed > 0 else tree.query(geom)):
             k, g, t = flat[j]
             if k <= i or goes_under(tool, tools.get(t)):
                 continue

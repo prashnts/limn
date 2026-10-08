@@ -19,7 +19,10 @@ GRID = 2000         # more paths than this: the nearest end from a grid of bucke
 
 
 def _closed(p):
-    return len(p) > 3 and np.allclose(p[0, :2], p[-1, :2])
+    if len(p) <= 3:
+        return False
+    (x0, y0), (x1, y1) = p[0, :2].tolist(), p[-1, :2].tolist()      # np.allclose, without its cost
+    return abs(x0 - x1) <= 1e-8 + 1e-5 * abs(x1) and abs(y0 - y1) <= 1e-8 + 1e-5 * abs(y1)
 
 
 def _rotate(p, pos):

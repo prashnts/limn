@@ -237,18 +237,32 @@ function renderJob() {
       <div class="row"><span class="note">sharpest at z ${num(j.result.z, 2)}</span>
       <button data-act="use-z" data-z="${j.result.z}" title="Shoot at this z from now on">Use it</button></div></div>`;
   }
+  let cal = '';
+  const k = j && !busy && !j.error && j.result && j.result.calibration;
+  if (k) {
+    const c = cam();
+    cal = `<div class="calibration" title="What the calibration measured: Save writes it into the camera's pen (pens.toml)">
+      <div class="mono note">one shot ${num(k.fov[0], 2)} × ${num(k.fov[1], 2)} mm · ${num(k.px_per_mm, 1)} px/mm · turn ${num(k.turn, 1)}°
+      · focus z ${num(k.focus_z, 2)}${k.center ? ` · center ${num(k.center[0], 2)}, ${num(k.center[1], 2)} mm (the cross ${num(k.residual, 2)} mm off after)` : ' · no cross: center not measured'}</div>
+      ${k.skew > 0.05 ? `<p class="note warn">⚠ X and Y aren't square in the picture (skew ${num(k.skew, 2)}): a tilted camera?</p>` : ''}
+      ${k.residual > 0.2 ? `<p class="note warn">⚠ The cross is still ${num(k.residual, 2)} mm off with the new center: calibrate again</p>` : ''}
+      <div class="row"><span class="note">was ${num(c.fov[0], 2)} × ${num(c.fov[1], 2)} mm, turn ${num(c.turn || 0, 1)}°</span>
+      <button data-act="cal-save" class="primary" ${k.pen ? '' : 'disabled'} title="Write fov, turn, focus_z${k.center ? ' and center' : ''} into [${esc(k.pen || '?')}] of pens.toml">Save to ${esc(k.pen || '?')}</button></div></div>`;
+  }
   const last = j && j.scan ? `<img class="last" data-open="${esc(j.scan)}" src="/api/captures/${encodeURIComponent(j.scan)}/thumb/${
-    j.what === 'finding the focus' ? 'best.jpg' : j.what === 'looking' ? 'look.jpg' : 'latest'}?t=${j.i}" alt="" title="The last shot: click to open" onerror="this.remove()">` : '';
+    j.what === 'finding the focus' ? 'best.jpg' : j.what === 'looking' ? 'look.jpg' : j.what === 'calibrating the camera' ? 'base.jpg' : 'latest'}?t=${j.i}" alt="" title="The last shot: click to open" onerror="this.remove()">` : '';
   fill(P, `
     <div class="buttons wrap">
       <button data-act="look" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="One shot at the middle of the region, at the focus z (or click the bed with Look, L)">Look</button>
       <button data-act="focus" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Sweep z at the middle of the region and find where it is sharpest (or click the bed with Focus, K)">Find focus</button>
       <button data-act="corners" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="A shot on each corner of the region: see where its edges fall on what is there, and click to set them (4 shots)">Check corners</button>
       <button data-act="scan" class="primary" ${busy || !has || !C.settings.region ? 'disabled' : ''} title="Take every tile of the region: it picks up the camera first if it isn't on the carriage">Scan region</button>
+      <button data-act="mark" ${busy || !C.settings.region ? 'disabled' : ''} title="Put the calibration cross (a drawing, 12 mm) at the middle of the region. Plot it with a pen before the camera goes on: a camera docked by hand keeps the dock out of reach">Calibration cross</button>
+      <button data-act="calibrate" ${busy || !has || !(C.mark || C.settings.region) ? 'disabled' : ''} title="${C.mark ? `Measure the camera on the cross at ${num(C.mark[0], 1)}, ${num(C.mark[1], 1)}: focus, shot size and turn, its center` : 'Measure the camera at the middle of the region: focus, shot size and turn (no cross: not its center)'}">Calibrate</button>
       <button data-act="stop" ${busy ? '' : 'disabled'} title="Stop after the shot it is taking">Stop</button>
       <button data-act="park" ${busy || !has ? 'disabled' : ''} title="Put the camera back in its holder">Put away</button>
     </div>
-    <div class="job">${status}</div>${flick(j)}${focus}${last}`);
+    <div class="job">${status}</div>${flick(j)}${focus}${cal}${last}`);
 }
 function flick(j) {
   const f = j && j.flicker;
@@ -273,6 +287,18 @@ $('#camera-job').addEventListener('click', async (e) => {
   if (act === 'look') await api('POST', '/api/camera/look', { ...mid, z: focusZ() });
   if (act === 'focus') await api('POST', '/api/camera/focus', mid);
   if (act === 'corners') { await api('POST', '/api/camera/corners'); openWhenDone = true; }
+  if (act === 'mark') {
+    setState(await api('POST', '/api/camera/mark', mid));
+    toast('The calibration cross is on the bed: plot it with a pen, then put the camera on');
+  }
+  if (act === 'calibrate') {
+    if (!twice('calibrate', t, C.mark ? 'Calibrate on the cross: about a minute of moves and shots' : 'Calibrate without a cross (no center)')) return;
+    await api('POST', '/api/camera/calibrate', C.mark ? {} : mid);
+  }
+  if (act === 'cal-save') {
+    const r = await api('POST', '/api/camera/calibration');
+    toast(`Saved into [${r.pen}] of pens.toml`);
+  }
   if (act === 'scan') {
     const n = scanTiles().length;
     if (!twice('scan', t, `Scan the region: ${n} shot${n > 1 ? 's' : ''} at z ${num(focusZ(), 2)}`)) return;
@@ -314,7 +340,7 @@ $('#nas').addEventListener('click', async (e) => {
 
 // --- captures: the list and the viewer ---------------------------------------------------
 const when = (id) => id.replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2}).*/, '$3.$2. $4:$5');
-const kinds = { scan: '▦', focus: '◎', look: '◉', corners: '⌜' };
+const kinds = { scan: '▦', focus: '◎', look: '◉', corners: '⌜', calibrate: '⊕' };
 // Which captures lie on the bed (Scan tab): the newest 12 unless shown or hidden by hand
 const scanVis = store.get('scanVis', {});
 const onBed = (c, i) => c.count > 0 && (scanVis[c.id] ?? i < 12);
