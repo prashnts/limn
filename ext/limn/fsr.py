@@ -144,6 +144,7 @@ class Fsr:
         self.surface = None         # the array's bed mesh profile, see follow()
         self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
         self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
+        self.dz_trim = cfg.get('dz_trim', 0.0)  # mm off every dz written to a tag (DZ_TRIM=), see calibrate_reference
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
         self.air = None             # readings in the air before a descent: what `early` rises from
         self.before_measure = None  # called before / after measuring a tool: the wipe
@@ -949,9 +950,16 @@ class Fsr:
         return {'fsr_ref': {**profile['fsr_ref'], 'bed_z': [[*cell, z] for cell, z in bed_z.items()]}}
 
     def calibrate_reference(self, bed_z):
-        '''The reference tool on the carriage, bed_z just probed -> profile.'''
+        '''The reference tool on the carriage, bed_z just probed -> profile. Its tag's dz is the
+        contact over the BLTouch z less `dz_trim`: contact is where the sheet starts to rise, and
+        a pen put down at Z1 there only just touched the paper (nothing drawn, 2026-10-09). The
+        trim takes every tag's dz down alike, the reference's and the pens' (probe_tool): each
+        pen sits that much lower, all of them still the same against each other.'''
         ref = self.measure(bed_z)
-        tool_z = round(ref['z'] - bed_z[tuple(self.cfg['z_cell'])], 3)
+        contact = ref['z'] - bed_z[tuple(self.cfg['z_cell'])]
+        tool_z = round(contact - self.dz_trim, 3)
+        self.machine.say(f"[LRT] the reference touches {contact:.3f} over the BLTouch z, dz={tool_z:.3f} "
+                         f"with the trim of {self.dz_trim:.2f}")
         if max(ref['sigma'].values()) > self.cfg.get('max_sigma', 0.15):
             self.machine.say(f"[LRT] the reference is unsure: ±{ref['sigma']}; every pen measured against it "
                              f"will be as unsure")
@@ -971,7 +979,7 @@ class Fsr:
         m = self.measure(bed_z)
         dx = round(m['x'] - ref['x'], 3)
         dy = round(m['y'] - ref['y'], 3)
-        dz = round(m['z'] - bed_z[tuple(self.cfg['z_cell'])], 3)
+        dz = round(m['z'] - bed_z[tuple(self.cfg['z_cell'])] - self.dz_trim, 3)        # as the reference's
         ref_sigma = ref.get('sigma', {})
         sigma = {k: float(np.hypot(m['sigma'][k], ref_sigma.get(k, 0.0))) for k in ('x', 'y', 'z')}
         said = (f"dx={dx} ±{sigma['x']:.3f} dy={dy} ±{sigma['y']:.3f} dz={dz} ±{sigma['z']:.3f} "
