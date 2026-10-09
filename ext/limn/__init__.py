@@ -181,10 +181,11 @@ class Limn:
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
             ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE,
-             "LRT_CALIBRATE [PRESS=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm the FSR "
-             "taps press at most; MESH=1: new meshes even when they are of the bed as it sits"),
+             "LRT_CALIBRATE [PRESS=] [DZ_TRIM=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm "
+             "the FSR taps press at most; DZ_TRIM: mm off the dz written (FSR, beds.py dz_trim); MESH=1: new "
+             "meshes even when they are of the bed as it sits"),
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL,
-             "LRT_PROBE_TOOL [PRESS=]: measure the docked tool's offsets and write its tag"),
+             "LRT_PROBE_TOOL [PRESS=] [DZ_TRIM=]: measure the docked tool's offsets and write its tag"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
@@ -347,6 +348,7 @@ class Limn:
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
             routine.verbose = bool(gcmd.get_int('VERBOSE', 0))
+            routine.dz_trim = gcmd.get_float('DZ_TRIM', routine.dz_trim, minval=-0.5, maxval=0.5)
             self._apply_survey(gcmd, routine)
             self._fsr_hooks(gcmd, routine)
         return routine
@@ -736,7 +738,7 @@ class Limn:
             raise gcmd.error(str(e))
         z_bed = bed_z[tuple(bed['fsr']['z_cell'])]
         gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={m['z'] - z_bed:.3f} "
-                          f"over bed_z={z_bed:.3f}) tip={[round(v, 2) for v in m['tip']]} "
+                          f"over bed_z={z_bed:.3f}, {m['z'] - z_bed - fsr.dz_trim:.3f} on a tag with the trim) tip={[round(v, 2) for v in m['tip']]} "
                           f"gaps={[round(g, 3) for g in m['gaps']]} "
                           f"±{ {k: round(v, 3) for k, v in m['sigma'].items()} }")
 

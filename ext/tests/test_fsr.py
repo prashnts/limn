@@ -274,7 +274,7 @@ def test_tool_offsets():
     ref_fsr, ref_bed, _ = setup()
     ref_bed.tool = 'T4'
     _, _, ref_dz = ref_fsr.probe_tool(profile)
-    assert abs(ref_dz - 1.0) < 0.1 and abs(dz - ref_dz - 0.4) < 0.03
+    assert abs(ref_dz + ref_fsr.dz_trim - 1.0) < 0.1 and abs(dz - ref_dz - 0.4) < 0.03     # contact ~1.0 over the BLTouch
     assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
 
 def test_crosstalk_up_the_column():
@@ -822,6 +822,26 @@ def test_a_patchy_sheet_is_measured_or_refused_never_wrong():
         assert abs(dx + tip[0]) < 0.02 and abs(dy + tip[1]) < 0.02, (tip, dx, dy)
         # press_cap past contact; contact (60 over the air) is ~0.011 past first touch where a cell reads half
         assert bed.max_press <= 0.1 + 0.012 and not bed.dragged, (tip, bed.max_press)
+
+
+def test_dz_trim_takes_every_tag_down_alike():
+    '''The reference at Z1 on its measured dz only just touched the paper (2026-10-09): `dz_trim` comes
+    off the reference's dz and every pen's alike, so they stay the same against each other.'''
+    cfg = {**bed_cfg(), 'dz_trim': 0.0}
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg))
+    profile = fsr.calibrate()
+    plain = float(bed.ran[-1].split('DZ=')[1].split()[0])
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg))
+    fsr.dz_trim = 0.15
+    fsr.calibrate()
+    assert abs(float(bed.ran[-1].split('DZ=')[1].split()[0]) - (plain - 0.15)) < 0.02, bed.ran[-1]
+    dzs = []
+    for trim in (0.0, 0.15):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.35, -0.2), tool_length=2.2)
+        bed.tool = 'T1'
+        fsr.dz_trim = trim
+        dzs.append(fsr.probe_tool(profile)[2])
+    assert abs(dzs[0] - dzs[1] - 0.15) < 0.02, dzs
 
 
 if __name__ == '__main__':
