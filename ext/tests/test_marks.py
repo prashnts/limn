@@ -477,9 +477,6 @@ def test_fsr_bltouch_z_puts_away_a_tool_not_saved_as_carried():
     assert p.said('taking 42 as the one on the carriage') and p.undocked == [42] and p.docked == [42]
 
 
-if __name__ == '__main__':
-    run_tests(globals())
-
 def test_a_calibration_keeps_over_a_restart_without_save_config():
     p = plotter(carried=0, bed=reply('BED_5'))
     ref = {'x': 114.0, 'y': 52.5, 'z': 3.44, 'gaps': [1.0, 0.04], 'tip': [1.5, 1.6], 'bed_z': [[1, 1, 1, 2.72]]}
@@ -536,3 +533,7 @@ def test_a_saved_survey_is_gone_by_until_cleared():
     assert fsr.cfg.get('early') == BEDS['BED_5']['fsr']['early'] and 'faulty_cells' not in fsr.arrays[1]
     p.run('LRT_FSR_SURVEY', CLEAR=1)
     assert 'BED_5' not in p.svv['lrt_fsr_survey'] and p.said('dropped for BED_5')
+
+
+if __name__ == '__main__':
+    run_tests(globals())

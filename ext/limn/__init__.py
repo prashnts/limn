@@ -688,12 +688,12 @@ class Limn:
         try:
             fsr.matrix(True)
             try:
-                z = fsr.contact_z(*cell, self._fsr_bed_z(gcmd, fsr, cell))
+                z, sigma = fsr.contact_z(*cell, self._fsr_bed_z(gcmd, fsr, cell))
             finally:
                 fsr.matrix(False)
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
-        gcmd.respond_info(f"[LRT] contact at z={z:.3f} on {cell}")
+        gcmd.respond_info(f"[LRT] contact at z={z:.3f} ±{sigma:.3f} over {cell}")
 
     def cmd_FSR_EDGE(self, gcmd):
         bed = self._bed(gcmd, 'fsr')
@@ -705,13 +705,14 @@ class Limn:
         try:
             fsr.matrix(True)
             try:
-                z = fsr.contact_z(hop, row, col_a, self._fsr_bed_z(gcmd, fsr, (hop, row, col_a)))
-                point, gap = fsr.find_edge(edge, z)
+                z, _ = fsr.contact_z(hop, row, col_a, self._fsr_bed_z(gcmd, fsr, (hop, row, col_a)))
+                point, gap, sigma = fsr.find_edge(edge, z)
             finally:
                 fsr.matrix(False)
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
-        gcmd.respond_info(f"[LRT] {axis} edge {edge}: {point.round(3).tolist()} gap={gap:.3f} (contact z={z:.3f})")
+        gcmd.respond_info(f"[LRT] {axis} edge {edge}: {point.round(3).tolist()} ±{sigma:.3f} gap={gap:.3f} "
+                          f"(contact z={z:.3f})")
 
     def cmd_FSR_MEASURE(self, gcmd):
         '''What LRT_CALIBRATE and LRT_PROBE_TOOL measure with the carried tool (where
@@ -736,7 +737,8 @@ class Limn:
         z_bed = bed_z[tuple(bed['fsr']['z_cell'])]
         gcmd.respond_info(f"[LRT] measured x={m['x']:.3f} y={m['y']:.3f} z={m['z']:.3f} (dz={m['z'] - z_bed:.3f} "
                           f"over bed_z={z_bed:.3f}) tip={[round(v, 2) for v in m['tip']]} "
-                          f"gaps={[round(g, 3) for g in m['gaps']]}")
+                          f"gaps={[round(g, 3) for g in m['gaps']]} "
+                          f"±{ {k: round(v, 3) for k, v in m['sigma'].items()} }")
 
     def cmd_FSR_MAP(self, gcmd):
         '''Which cell answers where, the sheet touched spot by spot (fsr_map.py): after a swap,
