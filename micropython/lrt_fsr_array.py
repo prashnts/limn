@@ -19,15 +19,20 @@ FSR_Y = NODE.get('fsr_y', [29, 28, 27, 26])  # BED_3: [29, 28, 26, 27]
 IO_X = [Pin(pin_x, Pin.OUT, value=0) for pin_x in FSR_X]
 IO_Y = [Pin(pin_y, Pin.IN, Pin.PULL_DOWN) for pin_y in FSR_Y]
 ADC_Y = [(pin_y, ADC(pin_y)) for pin_y in IO_Y]
-ADC_DAMP_PIN = IO_Y[3]   # sense row 3 reads high, scaled by 0.8
+# Each sense row needs a load to GND: the FSR cell and it make the divider the ADC
+# reads. "fsr_load": ohms of the external resistor on each row (47k, notebooks/pinout.md).
+# Without one the rows floated (2026-10: crosstalk up the columns, drift, row 3 hearing
+# the head over the sheet), and row 3 was read x 0.8 to tame it.
+FSR_LOAD = NODE.get('fsr_load')
+ADC_DAMP_PIN = None if FSR_LOAD else IO_Y[3]   # no load: sense row 3 reads high, scaled by 0.8
 
 # ADC() switches the pad's pull-down off. "fsr_pull_down": true in node.json
-# turns it back on; the thresholds below were tuned without it.
+# turns it back on (~50k, loosely specified); not with an external load.
 PADS_BANK0 = 0x4001C000
 def _pad(pin_id):
     return PADS_BANK0 + 4 + 4 * pin_id
 
-if NODE.get('fsr_pull_down'):
+if NODE.get('fsr_pull_down') and not FSR_LOAD:
     for pin_id in FSR_Y:
         machine.mem32[_pad(pin_id)] = machine.mem32[_pad(pin_id)] | 0x4
 
@@ -107,6 +112,7 @@ def log(text):
     link.send(T_LOG, text.encode())
 
 def diag():
+    log('diag>>fsr_load=%s' % (FSR_LOAD or 'none (rows float unless fsr_pull_down)'))
     for pin_id in FSR_Y:
         pad = machine.mem32[_pad(pin_id)]
         log('diag>>gpio%d pull_down=%d pull_up=%d input=%d' % (pin_id, pad >> 2 & 1, pad >> 3 & 1, pad >> 6 & 1))

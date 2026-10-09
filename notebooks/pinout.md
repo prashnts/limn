@@ -169,15 +169,38 @@ How the four panel pins are driven, per step (`get_points`, `pen_detect_on`):
   column 7         ◀──┤ GP15  col 7                  │
                       │                              │
   onboard LED      ◀──┤ GP16  WS2812, 1 px           │
-                      │       sense (ADC, pull-down) │
-  row 0            ──▶┤ GP29  ADC3                   │
-  row 1            ──▶┤ GP28  ADC2                   │
-  row 2 / row 3    ──▶┤ GP26  ADC0   (see table)     │
-  row 3 / row 2    ──▶┤ GP27  ADC1   (see table)     │
-                      │ USB   (bench only: hop 0)    │
+                      │       sense (ADC)            │
+  row 0  ──R_s──┬───▶┤ GP29  ADC3                   │
+               47k                                  │
+               GND                                  │
+  row 1  ──R_s──┬───▶┤ GP28  ADC2                   │
+               47k                                  │
+               GND                                  │
+  row 2/3 ─R_s──┬───▶┤ GP26  ADC0   (see table)     │
+               47k                                  │
+               GND                                  │
+  row 3/2 ─R_s──┬───▶┤ GP27  ADC1   (see table)     │
+               47k                                  │
+               GND    │ USB   (bench only: hop 0)    │
                       └──────────────────────────────┘
    * MicroPython's default UART pins. No down UART: the FSR is the last node.
+   R_s: the board's series resistors, on three of the rows (act-6: not on row 3).
+   47k: the load of each row's divider, to GND (fitted 2026-10-09, `"fsr_load"`).
 ```
+
+**The sense rows need a load to GND.** The scan drives one column high and the others low, and each row reads the divider of the pressed cell (column to row) and the row's load (row to GND): `V = 3.3 V × R_load / (R_load + R_cell)`. Without a load there's no divider: the row floats, and its reading depends on charge left on the line and on the ADC's sampling capacitor from the row read before it. Until 2026-10-09 the rows had none: `ADC()` turns the pad pull-downs off, and `"fsr_pull_down"` (which turns them back on) was never set. That fits what the sheet did on both sheets: a press lifting its whole column (row 3, without a series resistor, the most), row 3 reading 30–50 with the head merely over the sheet, baselines drifting by tens a minute.
+
+**Its size: about the cell's resistance at the press you measure.** That's where `V` changes most with force. A pen's tap is a light press, so the cell is high, tens of kΩ. 47k is the default here:
+
+| Load | Light tap (cell ~100k) | Firm press (cell ~10k) | Notes |
+|---|---|---|---|
+| 10k | 0.3 V | 1.65 V | the usual FSR value, for finger presses; a fine tip barely shows |
+| 47k | 1.05 V | 2.7 V | the default |
+| 100k | 1.65 V | 3.0 V | more for a fine tip; slower to settle into the ADC, more pickup |
+
+The cell values are guesses: measure one cell with a meter, a pen pressing it as the taps do, and pick the load near it. Beyond ~100k the ADC's input (a few pF sampled for ~2 µs, after the mux switched from another row) settles less well. The internal pull-down (`"fsr_pull_down": true`) is ~50k but loosely specified and drifts with temperature: fine for a first test, not instead of resistors. Either side of the series resistor works: no current flows into the ADC.
+
+With `"fsr_load"` in node.json the firmware leaves the internal pull-downs off and drops row 3's `× 0.8`. The readings' scale changes with the load: run `LRT_FSR_SURVEY` again (it sets `early` from the noise at rest), and check `respond` / `press_strength` against a ladder.
 
 Columns, `FSR_X = [10, 9, 12, 11, 8, 13, 14, 15]` (index = column):
 
@@ -191,10 +214,10 @@ Rows, `fsr_y` from `node.json` (index = row):
 |---|---|---|---|
 | 0 | GP29 (ADC3) | GP29 (ADC3) | |
 | 1 | GP28 (ADC2) | GP28 (ADC2) | |
-| 2 | GP26 (ADC0) | GP27 (ADC1) | |
-| 3 | GP27 (ADC1) | GP26 (ADC0) | `ADC_DAMP_PIN`: read × 0.8. No series resistor on the board (act-6) |
+| 2 | GP27 (ADC1) | GP26 (ADC0) | |
+| 3 | GP26 (ADC0) | GP27 (ADC1) | No series resistor on the board (act-6). Read × 0.8 without `fsr_load` |
 
-The sense pins are set up with pull-downs, but `ADC()` turns them off. `"fsr_pull_down": true` turns them back on through `PADS_BANK0` (not set in either file); `diag()` reports their state.
+The sense pins are set up with pull-downs, but `ADC()` turns them off. `"fsr_pull_down": true` turns them back on through `PADS_BANK0` (set in neither file); with `"fsr_load"` (BED_5, 47k fitted) they stay off. `diag()` reports both.
 
 Scan: for each column, drive it high, read all 4 rows, drive it low (`READ_MATRIX`, 32 cells).
 
@@ -204,10 +227,10 @@ Every cell, as (row, col) → (sense pin, drive pin), `fsr.json`:
 |---|---|---|---|---|---|---|---|---|
 | **row 0 GP29** | 29·10 | 29·9 | 29·12 | 29·11 | 29·8 | 29·13 | 29·14 | 29·15 |
 | **row 1 GP28** | 28·10 | 28·9 | 28·12 | 28·11 | 28·8 | 28·13 | 28·14 | 28·15 |
-| **row 2 GP26** | 26·10 | 26·9 | 26·12 | 26·11 | 26·8 | 26·13 | 26·14 | 26·15 |
-| **row 3 GP27** | 27·10 | 27·9 | 27·12 | 27·11 | 27·8 | 27·13 | 27·14 | 27·15 |
+| **row 2 GP27** | 27·10 | 27·9 | 27·12 | 27·11 | 27·8 | 27·13 | 27·14 | 27·15 |
+| **row 3 GP26** | 26·10 | 26·9 | 26·12 | 26·11 | 26·8 | 26·13 | 26·14 | 26·15 |
 
-For `fsr_bed3.json`, swap the sense pins of rows 2 and 3 (row 2 = GP27, row 3 = GP26).
+For `fsr_bed3.json`, swap the sense pins of rows 2 and 3 (row 2 = GP26, row 3 = GP27).
 
 
 ## 5. The bed connector and the chain
@@ -416,10 +439,10 @@ Every RP2040 GPIO, which node uses it and for what. `—` = unused. `(def)` = Mi
 | 16 | | WS2812 LED | WS2812 LED | WS2812 LED | WS2812 LED | NeoPixel lamp (30) |
 | 17 | | — | — | — | — | NeoPixel indockator (30) |
 | 18–25 | | — | — | — | — | — |
-| 26 | ADC0 | — | XM (X−) | row 2 | row 3 | — |
-| 27 | ADC1 | — | YP (Y+) | row 3 | row 2 | — |
-| 28 | ADC2 | — | XP (X+, pen IRQ) | row 1 | row 1 | — |
-| 29 | ADC3 | DETECT | YM (Y−) | row 0 | row 0 | — |
+| 26 | ADC0 | — | XM (X−) | row 3 (+47k to GND) | row 2 | — |
+| 27 | ADC1 | — | YP (Y+) | row 2 (+47k to GND) | row 3 | — |
+| 28 | ADC2 | — | XP (X+, pen IRQ) | row 1 (+47k to GND) | row 1 | — |
+| 29 | ADC3 | DETECT | YM (Y−) | row 0 (+47k to GND) | row 0 | — |
 
 Free on every MicroPython node: GP3, GP6, GP17–GP25 (as far as the RP2040 goes; which of them the boards break out isn't in the code). GP2/GP3 stay free for the touch diode.
 
@@ -428,7 +451,7 @@ The MicroPython boards: all three put a 1-pixel WS2812 on GP16 and use GP29 as a
 
 ## 10. Loose ends found while reading
 
-- **FSR row order, comment vs files.** `lrt_fsr_array.py` has `NODE.get('fsr_y', [29, 28, 27, 26])  # BED_3: [29, 28, 26, 27]`, but `nodes/fsr_bed3.json` is `[29, 28, 27, 26]` and `nodes/fsr.json` is `[29, 28, 26, 27]`: the other way round. The node files are what runs; the comment looks stale. Worth checking which bed has which wiring before trusting row 2/3 on either.
+- **FSR row order.** Checked 2026-10-09: `nodes/fsr.json` (BED_5) is `[29, 28, 27, 26]` and `nodes/fsr_bed3.json` `[29, 28, 26, 27]`, as `lrt_fsr_array.py`'s comment has it; this page had them the other way round (fixed). Which physical row lacks the series resistor (act-6 says row 3: GP26 on BED_5) is worth a look while fitting the loads.
 - **UART pins on the bed nodes are defaults.** `rtp.json` and `fsr*.json` give only `"id"`, so UART0 is GP0/GP1 and UART1 is GP4/GP5 because MicroPython's RP2040 port defaults to them. A firmware build with other defaults would move them silently; `"tx"`/`"rx"` in the node files would pin them down, as `dock.json` does.
 - **The bed power switch** is only described in STRATEGY.md; its part isn't in the code. (The OR gate: section 11.)
 - **MPU9250 address** isn't in the config, so it's Klipper's default (0x68). An AD0-high board would need `i2c_address: 105`.
