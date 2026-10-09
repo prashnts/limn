@@ -69,6 +69,8 @@ Safety stops are unchanged: too hard, no frames, the floor, still touching after
 
 ## Still open
 
+*(As of the morning of 2026-10-09; the Handoff below supersedes it: the loads are being fitted, and the reworked code has run on the plotter.)*
+
 - **The readout electronics.** The sense rows are ADC pins whose pull-downs `ADC()` switches off. `fsr_pull_down` isn't set in `nodes/fsr.json`, so unless the board has load resistors, the rows float. Floating, high-impedance sense lines would explain several things at once:
   - crosstalk up the columns on *both* sheets, worst on row 3 (the one without a series resistor);
   - row 3 hearing the head hover (30–50);
@@ -78,3 +80,52 @@ Safety stops are unchanged: too hard, no frames, the floor, still touching after
 - **Not yet on the plotter.** Everything above is the simulator and replayed readings. Next: `LRT_FSR_MEASURE CLEAN=0 VERBOSE=1` three times with the Stabilo. Do X, Y and z repeat within their sigma, and how many taps vote wrong?
 - **Z from the FSR is still a force threshold** (act-7, act-8): the onset is closer to first touch than 150 was, but the paper (the camera ladder) is still the better judge of dz.
 - **Faults near a border:** a sweep crosses only the cells of its edge, so it never sees faults elsewhere. A survey still helps pick good edge cells.
+
+## Handoff (2026-10-09 evening, for whoever continues)
+
+The user is fitting 47k load resistors from each FSR sense row to GND tonight. This session ends there: the measurement code is reworked and committed, and the firmware change for the resistors is written but not yet flashed.
+
+**State:**
+- **Committed** (`4afd41d` *fsr: switch algorithm*, `8ae8fe7` *fsr: z depth*): the rework above, plus `dz_trim` (beds.py, 0.1; `DZ_TRIM=` on `LRT_CALIBRATE` / `LRT_PROBE_TOOL`). It takes every FSR tag's dz down alike: the reference's first test mark at Z1 drew nothing.
+- **Uncommitted** (the user commits):
+  - `micropython/lrt_fsr_array.py`: `"fsr_load"` in node.json means external loads, so the internal pulls stay off and row 3's × 0.8 goes; `diag()` reports it;
+  - `micropython/nodes/fsr.json`: `"fsr_load": 47000`. Flash it only with the resistors fitted: without them row 3 reads high;
+  - `notebooks/pinout.md`: the loads drawn in, how to size them, and BED_5's rows 2/3 corrected: **row 3 is GP26** (`fsr.json` is `[29, 28, 27, 26]`; the page had it swapped);
+  - `TODO.md`: the steps.
+- **Why the resistors:** the rows have floated all along. `ADC()` turns the pad pull-downs off, and `"fsr_pull_down"` was never set. That fits the column crosstalk on both sheets, row 3 (no series resistor) the worst, row 3 hearing the head, and the drift.
+- **On the plotter now:** the reworked host code (the user deployed it), the old firmware, the Stabilo as reference. `LRT_CALIBRATE` was running at the end of the session. Its profile will be stale once the loads change the readings.
+- **Measured with the reworked code, before the loads:** `LRT_FSR_MEASURE` three times:
+
+  | Run | x | y | z | ± x, y, z |
+  |---|---|---|---|---|
+  | 1 | 114.806 | 52.600 | 3.519 | 0.003, 0.005, 0.03 |
+  | 2 | 114.756 | 52.663 | 3.517 | 0.003, 0.009, 0.03 |
+  | 3 | 114.763 | 52.700 | 3.534 | 0.003, 0.009, 0.01 |
+
+  bed_z 2.810, tip ~(1.2, 1.95), gaps ~0 (x) and ~1.0 (y). z repeats well. X spreads 0.05 and Y 0.10 while each run claims under 0.01: **the sigma only covers the taps within a sweep, not run to run** (drift, the Z play, the tip estimate), so `max_sigma` won't catch that scatter.
+
+**Next, in order:**
+1. **Hardware check** with the user: four 47k resistors fitted, GP26–29 to GND. Did they measure a cell with a meter? If the cell under a pen tap is far from 47k, note it in pinout.md's table.
+2. **Flash:** the user flashes with `mcu.py update`; ask, don't flash yourself. Then `mcu.py send 'diag()'` should say `fsr_load=47000`, `pull_down=0` on the four pins.
+3. **Did the loads fix the sensor?** A ladder on (1, 1) and a scan along its column with `~/limn-shot/fsr-2026-10-07-manual.py` (copy it as `fsr_manual.py` with `-run-cmd.py` as `run_cmd.py`). Compare against `fsr-2026-10-07-manual.jsonl` #0 (ladder) and #1 (scan), and log to a new jsonl. Look at:
+   - how much the column's other rows lift against the pressed cell (it was 0.15–0.35 on the new sheet, row 3 the most);
+   - row 3 with the head just over the sheet (it read 30–50);
+   - the rest level over a minute (it drifted by tens);
+   - the response against depth: the scale changes with the load.
+
+   Write down what changed, in a new act or appended here.
+4. **Retune to the new scale:** `LRT_FSR_SURVEY` sets `early` from the noise at rest. Check `respond` (150), `press_strength` (450), `locate_strength` (180), `sure` (450) and `press_limit` (950) against the ladder. If the column crosstalk is gone, `crosstalk_rows: (0,)` in beds.py may go too.
+5. **Calibrate:**
+   - `LRT_CALIBRATE` with paper on the bed;
+   - tune `dz_trim` (try `DZ_TRIM=` first) until the Stabilo's test mark is complete with the least trim;
+   - `LRT_FSR_MEASURE CLEAN=0` three times: did the X / Y spread (0.05 / 0.10 before) shrink?
+6. **If the spread didn't shrink:** make the sigma honest about run-to-run scatter. For example, measure each edge twice, from both sides, and fold their difference into sigma, or keep a per-sheet floor from repeated runs. Then `max_sigma` means something. Fix the estimator; don't add a threshold.
+7. **Then the pens:** `LIMN_TOOL_CALIBRATE T=41..44`, each tag named first.
+
+**Ground rules** (from the user, see memory):
+- the user deploys and restarts Klipper and flashes the MCUs: say what is ready and wait;
+- ask before using the printer's URLs or SSH;
+- keep every press inside the FSR cells;
+- fix the estimator rather than patching thresholds;
+- test against recorded real data where there is any (`test_the_border_from_real_taps` is the one fixture so far; record raw 32-cell frames when you can);
+- every image goes in `~/limn-shot`.
