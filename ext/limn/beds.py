@@ -100,7 +100,7 @@ BEDS = {
             # and never goes below the bottom.
             'tool_z': (-0.5, 3.0),
             'step': 0.1,            # mm, coarse z steps: a step can go this far past contact before it is seen
-            'wrong_depth': 0.2,     # mm on down while only another cell responds (crosstalk leads), then stop
+            'confirm': 2,           # fine steps on past a touch: it must grow there, or it was a reading in the air
             'back_off': 0.4,        # mm up after finding contact: clear of it, a tip on an edge registers ~0.2 deep
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
@@ -121,6 +121,7 @@ BEDS = {
             # (~670) left marks on the sheet, 2026-09-29.
             'press_strength': 450,
             'locate_strength': 180, # locate's taps: enough to tell the cell (a weak cell, (2, 4): ~220 at most)
+            'identify': 0.06,       # mm past contact at least for locate's tap: past the first-touch crosstalk
             'press': 0.3,           # mm below contact for the XY taps, at most, when nothing else says
                                     # (ext/limn: the pen's own press, pens.toml; PRESS=)
             'prior_margin': 0.4,    # mm below an expected contact z the search may go
@@ -132,7 +133,11 @@ BEDS = {
             # pen parks at `park`, over the paper and clear of the holders, until
             # presses on `wipe_cells` cells are seen and then `quiet` s without any.
             'clean': {'park': (60, 100), 'wipe_cells': 3, 'quiet': 2.0, 'timeout': 600},
-            'resolution': 0.02,     # mm, edge search stops here
+            # The edges: taps `sweep[0]` apart over three cells' width, then `sweep[1]` apart
+            # within `sweep[2]` of the border they show (fsr.py, find_edge and border)
+            'sweep': (0.25, 0.05, 0.4),     # (0.5, ...): ~30 taps a pen fewer, less sure on a patchy sheet
+            'off_cell': 0.02,       # mm less sure of a contact z another cell answered first for
+            'max_sigma': 0.15,      # mm: a pen measured less sure than this gets no tag (probe_tool)
             'repeats': 3,           # z measurements, median
         },
     },

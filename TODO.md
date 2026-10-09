@@ -2,6 +2,12 @@
 
 ## BED_5's new FSR sheet: to calibrated pens (2026-10-07, in progress)
 - **Read `notebooks/act-8-fsr-checkpoint.md` first**: what went wrong on 2026-10-07/08 and the plan (Z from the paper, XY from ratio-fitted borders at a force target, hardware first). The items below are from before it; check them against it.
+- **2026-10-09, the rework (`notebooks/act-9-fsr-rework.md`)**: contact is the sheet's rise whichever cell, the edges are tap sweeps judged by the two cells' share, unsure measurements write no tag. Not on the plotter yet.
+  - [ ] Deploy, then `LRT_FSR_MEASURE CLEAN=0 VERBOSE=1` x3 with the Stabilo: do X, Y and z repeat within their ±, how many taps vote wrong, how long a pen takes (~100 taps).
+  - [ ] `LRT_CALIBRATE` again before any pen: contact z is the onset now (60 over the air), not 150, so the old profile's dz doesn't compare.
+  - [ ] `fsr_pull_down` (act-6's experiment, never run): `mcu.py send 'diag()'`, then `"fsr_pull_down": true` in nodes/fsr.json, a ladder and a scan (`fsr_manual.py`) against manual.jsonl #0 and #1. Floating sense rows would explain the column crosstalk on both sheets, row 3 hearing the head, the drift. Then maybe row 3's `x 0.8` and `crosstalk_rows` can go.
+  - [ ] If a pen takes too long: `sweep: (0.5, 0.05, 0.4)` in beds.py, ~30 taps fewer (as good at ±50% patchiness in the simulation, one 0.1 mm error at ±70%).
+  - [ ] Record raw frames of a real `LRT_FSR_MEASURE` (all 32 cells per tap, not the top 6) as test fixtures: `border()` is tested against #30 only.
 - [ ] `LRT_FSR_MAP TIP=2.0,2.13`: the origin (refined by edge searches) and pitch, which cells answer. The first run (2026-10-07 23:27) 'touched' 4 mm up on (3, 0)'s preload and mapped nothing: fixed (descents go by their rise over the air), to run again. Set `origin` in ext/limn/beds.py from it; `faulty_cols` if whole columns stay silent.
 - [ ] Columns 4-7 answered as (3, 0) on the first hand map, and (3, 0) has a resting preload of 80-130 since the sheet was handled (was <=16): the ribbon and the (3, 0) corner, before trusting those columns.
 - [ ] `LRT_FSR_SURVEY` (the reference Stabilo in holder 45): faulty/weak cells, `early`, the aim. Its warnings say whether `z_cell` (1, 1) and the edges (1, 1)|(2, 1), (1, 1)|(1, 2) suit this sheet.
@@ -32,7 +38,7 @@
   - [ ] The page-background guess (full-page rect, painted first, something over it): watch for drawings whose first shape is a real full-page fill.
   - [ ] Ordering: emit's travel order for thousands of dashes (dither); a serpentine order per row might beat it.
 - [ ] FSR and fine tips (2026-10-07): the FSR feels a fine tip only ~0.2mm in (simulated: `gain=700`), so a fineliner's contact is already deep and its taps go ~0.45-0.5mm past first touch even with the press_max cap (a felt tip: ~0.07). Done 2026-10-07: the floor at rest is <=6 (col 4 ~24), so coarse descents stop at `early` 60 and the rest is in fine steps; two Stabilo measurements agreed to 0.05mm (X), 0.01 (Y), 0.03 (z). Still to try: a lower `respond` (150) for fine pens, with a working fineliner (the test one is bent). The taps already press only the pen's own `press` (0.1 for fineliners); the ~0.2mm before the FSR feels a fine tip at all is what is left.
-  - [ ] `locate()` varies: the Stabilo's Y came out 1.6, 1.68 and 3.87 (the edges: 2.13), X 1.37 and 1.52 (2.00). The measurement aims again when it lands a cell off, but why? Taps at 0.15 (the Stabilo's own press) vs 0.1, row crosstalk at the col 4/5 border, column 4's preload. Log `last_response`'s points in locate on the plotter.
+  - [x] Superseded 2026-10-09 (act-9: `locate()` only names the cell now, the sweeps reach a cell and a half). Was: `locate()` varies: the Stabilo's Y came out 1.6, 1.68 and 3.87 (the edges: 2.13), X 1.37 and 1.52 (2.00). The measurement aims again when it lands a cell off, but why? Taps at 0.15 (the Stabilo's own press) vs 0.1, row crosstalk at the col 4/5 border, column 4's preload. Log `last_response`'s points in locate on the plotter.
   - [ ] **The new sheet's columns 4-7 don't answer** (2026-10-07, a light-tap map: `~/limn-shot/fsr-2026-10-07-new-sheet-map.png`, data in `fsr-2026-10-07-manual.jsonl`): presses there read as (3, 0), below Y ~42 nothing. Rows 0-3 and columns 0-2 answer, column 3 partly. The old sheet's cols 4-7 worked, so the board is fine: check the ribbon (seated, square in its connector, the tail's traces). Then: the origin (the map puts the sheet ~1mm further +X, ~0.15mm +Y: ~(112.0, 59.75)), LRT_FSR_SURVEY, LRT_CALIBRATE.
   - New sheet, measured: at rest ≤16; first touch on (1, 0) at z ~3.49, 304 0.02mm in, 469 at 0.04 (twice the old sheet's (1, 1)); up its column rows 0-2 ~0.15, row 3 ~0.35; row 3 answers (230-490) like the others, reads 30-50 with the pen over the sheet. `dead_rows` is empty now, the tests' fresh model fitted to these.
   - [ ] New FSR sheet on BED_5 (2026-10-07: the old one is damaged). Then: `origin` if it sits elsewhere, LRT_FSR_MATRIX at rest, LRT_FSR_SURVEY, LRT_CALIBRATE, pens. Compare its survey with the old sheet's ladders (`~/limn-shot/fsr-2026-10-07-manual.*`), refit `frame_bed5`'s fresh model to it.
@@ -151,13 +157,50 @@ An FSR behind the key would see the key's preload less the pen's push, and FSRs 
 - [ ] The Pololu MOSFET switch: reverse voltage protection, but check for a current limit. If none, a PTC fuse on the 5V for a pogo pin sliding onto the wrong pad; a soft start for a camera's inrush.
 - [ ] A ground pogo next to the data pins, for their return path.
 - [ ] TVS and small series resistors on the data pins: every hot plug is an ESD event.
-- [ ] Tool type on one pin instead of the foil: a resistor to GND per tool type, read on an ADC (presence and type). Or a 1-Wire EEPROM (DS2431) that could carry the tool's offsets too, a tag without the reader.
+- [ ] Tool type on one pin instead of the foil: a resistor to GND per tool type, read on an ADC (presence and type; worked out below, *Tool presence and type*). Or a 1-Wire EEPROM (DS2431) that could carry the tool's offsets too, a tag without the reader.
 - [ ] A camera tool, wired (the user keeps everything wired together):
   - USB through the pogo pins: full speed (12Mbps) is fine for stills and film scans. High speed (480Mbps, what most UVC cameras want) needs D+/D- on a matched pair of pins, the shortest paths and a ground pin next to them: worth a try, but fragile.
   - A Pi Zero on the tool with its CSI camera (the HQ camera), reached as a USB network device (gadget mode) through the pogo pins at full speed. Stitching and focus stacking stay on the tool.
   - Wi-Fi (an ESP32-S3 camera, 5V and GND only) as the fallback.
 - [ ] A BLTouch tool: two data pins (servo, endstop) to a Klipper MCU pin; keep the endstop line clean, its timing matters.
 - Pins: ID 1, BLTouch 2, 2 spare (I2C for tool sensors).
+
+### Tool presence and type: an ID resistor, like the beds (2026-10-08)
+
+The coupling's third contact to GND through a resistor in the tool, a pull-up on the toolhead side, read on an ADC. The same as the bed's DETECT (`micropython/lrt_dock_mcu.py`, `BEDS`), but with more types: 16 types + "bare bridge" + "no tool" (the beds have 6).
+
+- **Pull-up to the ADC's own 3.3 V, never 5 V**: the reading is then a ratio (R / (R + Rpu)), the supply drops out. The RP2040's ADC pins (GPIO 26-29) aren't 5 V tolerant.
+- **Bands equal in counts, not resistors on a log scale.** 18 bands over the 12-bit range, 241 counts each, resistor picked as `Rpu * x / (1 - x)` and rounded to E96 (1%). Rpu = 10k 1%:
+
+  | Type | R (1%) | Counts | Band |
+  |---|---|---|---|
+  | 0 bare bridge | 0 | 0 | 0-120 |
+  | 1 | 619 | 239 | 120-361 |
+  | 2 | 1.33k | 481 | 361-602 |
+  | 3 | 2.15k | 725 | 602-843 |
+  | 4 | 3.09k | 967 | 843-1084 |
+  | 5 | 4.12k | 1195 | 1084-1325 |
+  | 6 | 5.49k | 1451 | 1325-1566 |
+  | 7 | 6.98k | 1683 | 1566-1807 |
+  | 8 | 8.87k | 1925 | 1807-2048 |
+  | 9 | 11.3k | 2172 | 2048-2288 |
+  | 10 | 14.3k | 2410 | 2288-2529 |
+  | 11 | 18.2k | 2643 | 2529-2770 |
+  | 12 | 24.3k | 2901 | 2770-3011 |
+  | 13 | 32.4k | 3129 | 3011-3252 |
+  | 14 | 46.4k | 3369 | 3252-3493 |
+  | 15 | 75k | 3613 | 3493-3734 |
+  | 16 | 162k | 3857 | 3734-3975 |
+  | none (open) | ∞ | 4095 | 3975-4095 |
+
+  Every value sits ≥ 110 counts inside its band. Worst error from two 1% resistors: ±20 counts (mid-scale); the RP2040 ADC's noise (~9 effective bits) and its DNL steps (at 512, 1536, 2560, 3584) a few more: average 16+ samples. 24 types (~170 counts a band) would still fit; past ~32 the margin goes.
+- **Contact resistance** (pogo, a dirty ball): 0.1-1 Ω against 619 Ω or more. Doesn't matter. The 162k and a 10k pull-up: keep the ID wire away from the stepper wires, or a 100 nF on the ADC pin (time constant ~1 ms at 10k, fine).
+- **Settle, then believe it.** The contacts chatter while the balls seat: accept a type only after it reads the same band for ~100 ms, after the key is locked. A value between bands for long = a fault, not a type.
+- **"Bare bridge" as the default is ambiguous**: if the coupling's metal is the ground path, an ID contact touching the frame also reads 0 Ω. Better: the default tool gets a resistor too (type 1), and 0 Ω means "check the toolhead".
+- **No tool and a broken wire both read open.** Cross-check with the holder switches (MCP23017): a tool on the head ⇔ its holder empty. A mismatch stops the tool change.
+- [ ] Which MCU reads it: the Klipper RP2040 (`rpi`, GPIO 26-28 free) is the better choice. The tool change runs in Klipper macros, so a small `ext/limn` module reading the pin with Klipper's `adc` (like `adc_scaled`) gives `printer.limn.tool_id` straight to `_DOCK_TOOL`. The Dock (GP26-28 free) would work too, through `!LRT>>` lines, but it's the bed's MCU and its loop is time-critical.
+- [ ] If the third contact is the 1-Wire line (electronics.md: 3 V, GND, 1-Wire): a resistor to GND kills 1-Wire (it idles high through ~4.7k). One or the other on that pin: the resistor gives presence + type; the DS2431 gives type + offsets, but no presence until it answers.
+- [ ] More than ~24 types: a second ID pin (16 × 16), or combine with the tag (the resistor says "a pen", the tag says which).
 
 ### Power budget of the 5V through the coupling (2026-09-30)
 

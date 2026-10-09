@@ -3,18 +3,23 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
-# Z: the tool is jogged down onto a cell, coarse then fine steps, until the
-#    array feels it. The FSR is too slow for the probe endstop, so we move
-#    and look ourselves, with a floor below which we never go.
-# XY: between two cells there is a dead zone (<0.5mm) where neither responds.
-#    Taps find the last point where cell A still responds and the last point
-#    where cell B does; the edge is halfway, so the gap width cancels out.
-#    An edge between cols gives one axis, an edge between rows the other.
-# Where the tip is: first contact at the array's `aim`, where any cell may
-#    respond. That cell, and how far the tip goes before leaving it, give the
-#    tip to a few tenths; every search after aims that much off, so a tool
-#    a few mm off still lands on the cells it measures. Off the array
-#    nothing responds: down to the floor, up, and stop.
+# The sheet answers how hard, and in which column, well: a tap again on one spot
+#    reads the same to 2%, deeper always reads more. Which cell of a row or a
+#    column is pressed it answers badly: crosstalk up the column and along the
+#    row, a cell's reading halving within a mm. So no decision here hangs on one
+#    reading of one cell against a threshold (notebooks/act-9-fsr-rework.md).
+# Z: the tool is jogged down, coarse then fine steps, until the sheet rises
+#    under it, whichever cell, and goes on rising (not a reading in the air).
+#    The FSR is too slow for the probe endstop, so we move and look ourselves,
+#    with a floor below which we never go.
+# XY: taps across the border of two cells, each judged by the second cell's
+#    share of the two; the border is where the fewest taps disagree, with how
+#    sure that is. An edge between cols gives one axis, between rows the other.
+# Where the tip is: first contact at the array's `aim`, and the cell pressed
+#    there: the tip to half a cell, which the edges' sweeps reach either way.
+#    Off the array nothing responds: down to the floor, up, and stop.
+# A measurement too unsure (sigma over `max_sigma`) writes no tag: better none
+# than a wrong one.
 # A tool is compared with the reference tool (T4) on the same cells, so the
 # array positions only need to be roughly right.
 #
@@ -32,13 +37,6 @@ from .machine import JOG_SPEED, lifted_on_error
 
 class FsrError(RuntimeError):
     pass
-
-
-class WrongCell(FsrError):
-    '''The tip came down on another cell than the one aimed at, surely (twice over `sure`).'''
-    def __init__(self, msg, hop, cell, found):
-        super().__init__(msg)
-        self.hop, self.cell, self.found = hop, tuple(cell), tuple(found)
 
 
 HIGH_AT_REST = 40      # a cell this far over the sheet's median at rest, untouched, is faulty (BED_5's col 3: 75-100)
@@ -93,6 +91,48 @@ def judge_survey(result, cfg, hop):
             'warnings': warnings, 'shift': shift, 'aim': aim}
 
 
+def border(taps, floor, lead=0.9):
+    '''taps: {t: (a, b, top)}, the rise of two neighbouring cells and of the strongest cell at
+    points t (mm) along a line from a into b -> (t0, gap, sigma, wrong, ends), or None without a
+    clear border. A tap is on b's side when b has more than half of a + b. It votes only when
+    a + b reaches `floor` (in the dead zone between the cells neither does) and one of them is
+    at least `lead` of the strongest: the tip is on one of them, not on a third cell lifting
+    both (rows 0-1 pressed lift row 3 over row 2, 2026-10-07; a row lifted by 0.73 of its
+    pressed cell, 2026-09-29, makes the two even), and the two are more than (1 - lead) apart:
+    two even cells say nothing of which side the tip is on (lifted alike by a pressed cell that
+    isn't read, BED_5's old column 3; or a tip right on the border). A tap that doesn't vote is
+    lost, not counted wrong. The border splits the votes leaving the fewest on the wrong side (`wrong`), at most
+    a quarter of them, at least two on each side.
+    t0 is halfway between where a's side ends and b's begins, each known to lie between a
+    voting tap and the next tap; gap is how far apart they are. sigma: from those two spans,
+    the spread of equally good splits, and the taps on the wrong side, each as far off as it
+    lies from t0. ends: the two spans, ((from, to) of a's end, of b's), for taps to narrow them.'''
+    ts = sorted(taps)
+    floor = max(floor, 0.3 * max((a + b for a, b, _ in taps.values()), default=0.0))
+    votes = [(t, b / (a + b)) for t, (a, b, top) in sorted(taps.items())
+             if a + b >= floor and max(a, b) >= lead * top and abs(a - b) >= (1 - lead) * max(a, b)]
+    sides = [r > 0.5 for _, r in votes]
+    n = len(votes)
+    if sum(sides) < 2 or n - sum(sides) < 2:
+        return None
+    costs = [sum(sides[:k]) + sides[k:].count(False) for k in range(1, n)]
+    best = min(costs)
+    if best > 0.25 * n:
+        return None
+    ks = [k for k, c in zip(range(1, n), costs) if c == best]
+    k = ks[len(ks) // 2]
+    last_a, first_b = votes[k - 1][0], votes[k][0]
+    end_a = (last_a, ts[ts.index(last_a) + 1])          # a's side ends after its last vote, before the next tap
+    end_b = (ts[ts.index(first_b) - 1], first_b)
+    lo, hi = sum(end_a) / 2, sum(end_b) / 2
+    t0 = (lo + hi) / 2
+    var = ((end_a[1] - end_a[0]) ** 2 + (end_b[1] - end_b[0]) ** 2) / 48
+    var += ((votes[ks[-1]][0] - votes[ks[0] - 1][0]) / 2) ** 2 / 3 if len(ks) > 1 else 0.0
+    wrong = [t for (t, _), on_b in zip(votes, sides) if on_b != (t > t0)]
+    var += sum((t - t0) ** 2 for t in wrong) / n
+    return t0, hi - lo, float(np.sqrt(var)), len(wrong), (end_a, end_b)
+
+
 class Fsr:
 
     def __init__(self, machine, dock, samples, cfg):
@@ -139,7 +179,7 @@ class Fsr:
             aim = at + tip
             z = self._back_off(hop, z + cfg['back_off'])
             # its first touch (a clear rise), not where a cell responds: the spots start from it
-            z0, _ = self._descend(hop, None, z, cfg['fine_step'], floor, early=True)
+            z0, _ = self._descend(hop, z, cfg['fine_step'], floor, early=True)
             self.machine.say(f"[LRT][Map] the sheet at X{aim[0]:.3f} Y{aim[1]:.3f}: z={z0:.3f}")
             ys = np.arange(hi[1], lo[1] - 1e-9, -step)
             xs = np.arange(lo[0], hi[0] + 1e-9, step)
@@ -209,7 +249,7 @@ class Fsr:
             for edge in edges:
                 _, a, b = edge
                 z = float(np.median(answered[a]))
-                point, gap = self.find_edge(edge, z, shift)
+                point, gap, _ = self.find_edge(edge, z, shift)
                 tip_point = point + np.asarray(tip, float)
                 found.append((edge, tip_point.round(3).tolist(), round(gap, 3)))
                 # the border between a and b: origin + pitch * ((col + 0.5) col_dir + (row + 0.5) row_dir) +- pitch/2
@@ -323,11 +363,11 @@ class Fsr:
             raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window ({self.top(here)})")
         self.air = here
 
-    def responds(self, strengths, cell):
-        '''Over `respond`, and close to the strongest cell: a press also lifts
+    def responds(self, strengths, cell, level=None):
+        '''Over `respond` (or `level`), and close to the strongest cell: a press also lifts
         the other rows of its column a little (crosstalk), row 3 a lot.'''
         s = strengths.get(tuple(cell), 0)
-        return s >= self.cfg['respond'] and s >= self.cfg['dominance'] * max(strengths.values(), default=0)
+        return s >= (level or self.cfg['respond']) and s >= self.cfg['dominance'] * max(strengths.values(), default=0)
 
     def top(self, strengths, n=3):
         '''The strongest cells, for messages.'''
@@ -346,7 +386,10 @@ class Fsr:
         return floor, top
 
     def contact_z(self, hop, row, col, bed_z, shift=(0, 0), top=None, prior=None):
-        '''z where the tool starts to press on (row, col), median of `repeats`.
+        '''z where the tool starts to press on the sheet over (row, col) -> (z, sigma): the
+        median of `repeats`, sigma half their spread (0.01 at least), `off_cell` more when
+        another cell answered first: the tip touched all the same, only that cell's gain
+        differs (a few hundredths in where it crosses `respond`, the ladders of 2026-10-07).
         bed_z: BLTouch z at that cell; the search stays within tool_z of it.
         shift: where the tip sits off the toolhead, as far as we know (locate).
         top: start there instead of above the window. prior: see window().'''
@@ -354,7 +397,7 @@ class Fsr:
         x, y = self.array(hop).center(row, col) - np.asarray(shift)
         floor, z = self.window(bed_z, prior)
         z = z if top is None else top
-        found = []
+        found, on = [], []
         with lifted_on_error(self.machine, cfg['z_park']):
             self.machine.move(z=cfg['z_park'])
             self.machine.move(float(x), float(y))
@@ -366,67 +409,71 @@ class Fsr:
             # repeats' coarse descents pressed the pen in for nothing).
             for i in range(cfg['repeats']):
                 if i == 0 and top is None:
-                    z, _ = self._descend(hop, (row, col), z, cfg['step'], floor, early=True)
-                    z = self._back_off(hop, z + cfg['back_off'], (row, col))
-                z, _ = self._descend(hop, (row, col), z, cfg['fine_step'], floor)
+                    z, _ = self._descend(hop, z, cfg['step'], floor, early=True)
+                    z = self._back_off(hop, z + cfg['back_off'])
+                z, touched = self._descend(hop, z, cfg['fine_step'], floor)
                 found.append(z)
-                self.machine.say(f"[LRT] contact {i + 1}/{cfg['repeats']} on {(row, col)} at X{x:.3f} Y{y:.3f}: "
-                                 f"z={z:.3f}")
-                z = self._back_off(hop, z + cfg['back_off'], (row, col))
+                on.append(touched[0])
+                self.machine.say(f"[LRT] contact {i + 1}/{cfg['repeats']} over {(row, col)} at X{x:.3f} Y{y:.3f}: "
+                                 f"z={z:.3f}" + ("" if touched[0] == (row, col) else f", {touched[0]} first"))
+                z = self._back_off(hop, z + cfg['back_off'])
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         z = float(np.median(found))
-        self.machine.say(f"[LRT] contact on {(row, col)}: z={z:.3f} (median, spread {max(found) - min(found):.3f})")
-        return z
+        sigma = max((max(found) - min(found)) / 2, 0.01)
+        if any(c != (row, col) for c in on):
+            sigma += cfg.get('off_cell', 0.02)
+        self.machine.say(f"[LRT] contact over {(row, col)}: z={z:.3f} ±{sigma:.3f} (median, spread "
+                         f"{max(found) - min(found):.3f})")
+        return z, sigma
 
-    def touched(self, strengths, hop):
-        '''The cells that respond, strongest first. A cell in one of the array's
+    def touched(self, strengths, hop, level=None):
+        '''The cells that respond (see responds()), strongest first. A cell in one of the array's
         crosstalk_rows only when no other row of its column responds, or when
         it is a real press: a press elsewhere in the column lifts it too.'''
-        cells = [c for c in strengths if self.responds(strengths, c)]
+        cells = [c for c in strengths if self.responds(strengths, c, level)]
         crosstalk = self.arrays[hop].get('crosstalk_rows', ())
         cells = [c for c in cells if c[0] not in crosstalk or strengths[c] >= self.cfg['sure']
                  or not any(o[1] == c[1] and o[0] != c[0] for o in cells)]
         return sorted(cells, key=lambda c: -strengths[c])
 
-    def _descend(self, hop, cell, z, step, floor, early=False):
-        '''Down until `cell` responds (None: any cell) -> (z, the cells that do).
-        early (the coarse steps): back as soon as any cell reads `early`, well over the
-        sheet's noise and well before `respond`: a fine tip registers late, and a coarse
-        step on to `respond` pressed it in deeper than the taps ever do (2026-10-07).
-        Another cell responding: on down only `wrong_depth` mm more (crosstalk can lead
-        at first touch), then stop: the tip is pressing elsewhere, and going on down to
-        the floor would dig it in (a fineliner off by a cell, LRT_FSR_Z, 2026-10-07).'''
+    def _descend(self, hop, z, step, floor, early=False):
+        '''Down until the tip presses on the sheet -> (z, the cells that answer there, strongest
+        first). Its onset: the first step any cell rises `early` over the air, well over the
+        sheet's noise. Not `respond`: where a cell gets there depends on its gain, BED_5's weak
+        (2, 4) ~0.07mm past first touch, a strong cell ~0.015, and a contact found on one and
+        used on another pressed the taps that much deeper; `early` is ~0.01 on either. Whichever
+        cell: which one lights up first is the sheet's business (a column's crosstalk leads at
+        first touch, a neighbour of a tip near its border), that the tip touched is not.
+        Confirmed `confirm` fine steps on: a press grows as it goes deeper (every ladder on
+        BED_5, 2026-10-07), a reading in the air doesn't (a bent liner, 2026-09-30), and then
+        it goes on down. z is where it rose `early`, between the step before and the first over
+        it as their readings say: a step late, every press past contact was that much deeper.
+        early (the coarse steps): back at once, unconfirmed: the fine steps find where.'''
         cfg = self.cfg
-        elsewhere = None                # z where another cell first responded
+        onset = cfg.get('early', cfg['respond'])
+        before = 0.0                    # the rise one step up
         while True:
             z -= step
             if z < floor:
                 raise FsrError(f"[LRT] no contact down to z={floor:.2f}: is the tool over the array at hop {hop}?")
             self.machine.move(z=z, speed=JOG_SPEED)
             strengths = self.read(hop)
-            touched = self.touched(strengths, hop)
-            if touched and (cell is None or tuple(cell) in touched):
-                return z, touched
-            if early and self.rise(strengths) >= cfg.get('early', cfg['respond']):
-                return z, touched       # coarse: something presses, the fine steps find where
-            # At first touch the crosstalk can lead the pressed cell: only a
-            # real press elsewhere means the tip is not over `cell`.
-            if touched and strengths[touched[0]] >= cfg['sure']:
-                # One reading isn't enough to stop on: read again where it is
+            level = self.rise(strengths)
+            if level < onset:
+                before = level
+                continue
+            if early:
+                return z, self.touched(strengths, hop)
+            first = z + step * (level - onset) / max(level - before, 1e-9)
+            for _ in range(cfg.get('confirm', 2)):
+                z -= cfg['fine_step']
+                self.machine.move(z=z, speed=JOG_SPEED)
                 strengths = self.read(hop)
-                touched = self.touched(strengths, hop)
-                if touched and tuple(cell) in touched:
-                    return z, touched
-                if touched and strengths[touched[0]] >= cfg['sure']:
-                    raise WrongCell(f"[LRT] cell {touched[0]} of hop {hop} responds instead of {cell} "
-                                    f"({self.top(strengths)}): check the array origin", hop, cell, touched[0])
-            if touched:
-                elsewhere = z if elsewhere is None else elsewhere
-                if elsewhere - z >= cfg.get('wrong_depth', 0.2) - 1e-9:
-                    raise FsrError(f"[LRT] cell {touched[0]} of hop {hop} responds, not {cell} ({self.top(strengths)}): "
-                                   f"the tip is over another cell, stopped {elsewhere - z:.2f}mm past its first "
-                                   f"touch. LRT_FSR_MEASURE finds where the tip is first")
+            if self.rise(strengths) >= level + 0.1 * cfg['respond']:
+                return first, self.touched(strengths, hop, onset) or sorted(strengths, key=lambda c: -strengths[c])[:1]
+            self.machine.say(f"[LRT] the sheet rose at z={first:.3f} but no more deeper ({self.top(strengths)}): "
+                             f"in the air, going on down")
 
     def _back_off(self, hop, z, cell=None):
         '''Up to z, where nothing may press any more: `cell`, or with none any cell
@@ -441,9 +488,9 @@ class Fsr:
 
     # Where the tip is
     def locate(self, hop, bed_z, prior=None):
-        '''Down at the array's `aim` until any cell responds, then along the
-        cols and the rows to where that cell stops -> (shift, z): the tip's
-        offset from the toolhead to a few tenths, and a z just above contact.
+        '''Down at the array's `aim` until any cell responds, and which cell that is, pressed
+        in -> (shift, z, at): the tip's offset from the toolhead to half a cell (that cell's
+        centre), the contact z there, and where the toolhead was (at).
         prior['tip']: where the tip is thought to be, so it comes down on the aim.'''
         cfg = self.cfg
         array = self.array(hop)
@@ -469,15 +516,19 @@ class Fsr:
             z, aim = self._descend_spots(hop, spots, z, cfg['step'], floor)
             while True:
                 z = self._back_off(hop, z + cfg['back_off'])
-                z, first = self._descend(hop, None, z, cfg['fine_step'], floor)
+                z, first = self._descend(hop, z, cfg['fine_step'], floor)
                 self.machine.say(f"[LRT] first contact at X{aim[0]:.3f} Y{aim[1]:.3f}: z={z:.3f} on {first[:3]}")
                 # Only enough to tell which cell: a weak one (BED_5's (2, 4) tops out at ~220)
                 # went the whole press for press_strength, 0.16mm past first touch (simulated)
-                self.depth[hop] = self.press_depth(hop, None, z, cfg.get('locate_strength'))
+                # At least `identify` in: at first touch a row's or a column's crosstalk is ~0.95 of
+                # the pressed cell (2026-10-07), and seven cells of a row tie (simulated, 0.02 in)
+                self.depth[hop] = max(self.press_depth(hop, None, z, cfg.get('locate_strength')),
+                                      min(cfg.get('identify', 0.06), self.press_cap or cfg['press']))
                 z_press, z_lift = z - self.depth[hop], z + 1.0
-                # Which cell: pressed in, where the crosstalk has fallen behind.
+                # Which cell: pressed in, where the crosstalk has fallen behind. Pressed is a rise
+                # of `early`, as contact is: a fine tip only `press_cap` past its onset is ~130
                 strengths = self.tap(hop, aim, z_press, z_lift, aim)
-                touched = self.touched(strengths, hop)
+                touched = self.touched(strengths, hop, cfg.get('early'))
                 if touched:
                     break
                 # A reading in the air (a bent 0.05 liner, 2026-09-30): the tip isn't
@@ -486,42 +537,17 @@ class Fsr:
                                  f"({self.top(strengths)}): going on down")
                 z = z_press
                 self.machine.move(z=z, speed=JOG_SPEED)
-                z, _ = self._descend(hop, None, z, cfg['step'], floor, early=True)
-            # Along each axis the tip leaves the strongest cell where it reaches
-            # the cell's far side, within two cells. On an edge, that is the edge.
-            # (Two cells responding is no edge to go by: the column's crosstalk
-            # can come close to a tip split between two cells, 2026-09-28.)
-            # Not towards a dead row: pressed, it lifts its column's other rows, so the
-            # cell seems to go on responding over it (BED_5's row 3: locate put the tip
-            # 1.3mm too far in X, 2026-09-29 and 10-07). Then towards the near side.
-            # The search reaches up to two cells over: both must read (in the array, not a
-            # dead row or a faulty column), or it goes the other way.
-            cell = touched[0]
-            shift = np.zeros(2)
-            spec = self.arrays[hop]
-            cells_bad = {tuple(c) for c in spec.get('faulty_cells', ())}
-            for axis, direction in ((1, array.col_dir), (0, array.row_dir)):
-                n = array.rows if axis == 0 else array.cols
-                bad = spec.get('dead_rows', ()) if axis == 0 else spec.get('faulty_cols', ())
-
-                def blocked(i, axis=axis, n=n, bad=bad):
-                    other = list(cell)
-                    other[axis] = i
-                    return not 0 <= i < n or i in bad or tuple(other) in cells_bad
-                # Two cells over (the aim may be anywhere in its cell), else one: never onto a
-                # line that isn't read, where crosstalk passes for the cell (col 4, 2026-10-07)
-                sign, span = next(((s, k) for k in (2, 1) for s in (1, -1)
-                                   if not any(blocked(cell[axis] + s * j) for j in range(1, k + 1))), (1, 1))
-                last = self.last_response(hop, cell, aim, aim + sign * span * array.pitch * direction,
-                                          z_press, z_lift, resolution=0.1, at=aim)
-                edge = (cell[axis] + 1) * array.pitch if sign > 0 else cell[axis] * array.pitch
-                tip = edge - np.dot(last - aim, direction)
-                shift += (tip - np.dot(aim - array.origin, direction)) * direction
+                z, _ = self._descend(hop, z, cfg['step'], floor, early=True)
+            # The tip is somewhere on that cell: its centre is good to half a cell, which is
+            # all the edge sweeps need (they reach a cell either way). Bounding it here by where
+            # the cell stops answering was a threshold search on one reading a tap, and gave up
+            # or went 1-2mm out with the sheet's ripple and crosstalk (2026-10-07).
+            shift = np.asarray(array.center(*touched[0]), float) - aim
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
-        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead (cells {touched}), "
-                         f"taps press {self.depth[hop]:.2f}mm")
-        return shift, z + cfg['back_off']
+        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead, on {touched[0]} "
+                         f"(cells {touched}), taps press {self.depth[hop]:.2f}mm")
+        return shift, z, aim
 
     def _descend_spots(self, hop, points, z, step, floor):
         '''Coarse steps down, at each of `points` by turns, lifted between: -> (z, the point
@@ -562,16 +588,16 @@ class Fsr:
                 break
         return depth
 
-    def depth_on(self, hop, cell, z, shift=(0, 0)):
-        '''press_depth() with the tip over `cell`, from its contact z.'''
-        x, y = self.array(hop).center(*cell) - np.asarray(shift)
+    def depth_on(self, hop, xy, z):
+        '''press_depth() with the toolhead at xy, from its contact z there: the strongest cell,
+        whichever it is (the tip is only known to half a cell yet).'''
         with lifted_on_error(self.machine, self.cfg['z_park']):
             self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
-            self.machine.move(float(x), float(y))
+            self.machine.move(float(xy[0]), float(xy[1]))
             self.machine.move(z=z, speed=JOG_SPEED)
-            depth = self.press_depth(hop, cell, z)
+            depth = self.press_depth(hop, None, z)
             self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
-        self.machine.say(f"[LRT] on {cell} the taps press {depth:.2f}mm")
+        self.machine.say(f"[LRT] at X{xy[0]:.3f} Y{xy[1]:.3f} the taps press {depth:.2f}mm")
         return depth
 
     # The sheet, cell by cell (LRT_FSR_SURVEY): after a swap, what the config can't know
@@ -680,60 +706,97 @@ class Fsr:
         self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
         return strengths
 
-    def last_response(self, hop, cell, start, end, z_press, z_lift, resolution=None, at=None):
-        '''The last point from `start` (centre of `cell`) towards `end` (centre
-        of its neighbour) where `cell` still responds.'''
-        resolution = resolution or self.cfg['resolution']
-        start, end = np.array(start, dtype=float), np.array(end, dtype=float)
-        s = self.tap(hop, start, z_press, z_lift, at)
-        if not self.responds(s, cell):
-            raise FsrError(f"[LRT] cell {cell} of hop {hop} does not respond at its centre {start.round(2)} "
-                           f"({self.top(s) or 'nothing'}): check the array origin")
-        s = self.tap(hop, end, z_press, z_lift, at)
-        if self.responds(s, cell):
-            raise FsrError(f"[LRT] cell {cell} of hop {hop} responds at its neighbour's centre {end.round(2)} "
-                           f"({self.top(s)}): check the array origin")
-        lo, hi = 0.0, 1.0
-        length = float(np.linalg.norm(end - start))
-        taps = 2
-        while (hi - lo) * length > resolution:
-            mid = (lo + hi) / 2
-            p = start + mid * (end - start)
-            s = self.tap(hop, p, z_press, z_lift, at)
-            taps += 1
-            if self.verbose:
-                self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: {self.top(s)}"
-                                 f"{' (in)' if self.responds(s, cell) else ''}")
-            if self.responds(s, cell):
-                lo = mid
-            else:
-                hi = mid
-        last = start + (lo + hi) / 2 * (end - start)
-        self.machine.say(f"[LRT] {cell} from X{start[0]:.3f} Y{start[1]:.3f} towards X{end[0]:.3f} Y{end[1]:.3f}: "
-                         f"responds to X{last[0]:.3f} Y{last[1]:.3f} ({taps} taps at z={z_press:.3f})")
-        return last
-
-    def find_edge(self, edge, z_contact, shift=(0, 0)):
-        '''edge: (hop, (row, col) of cell a, (row, col) of its neighbour b)
-        -> (edge point, gap width). shift: as for contact_z.'''
+    def find_edge(self, edge, z_contact, shift=(0, 0), at=None):
+        '''edge: (hop, (row, col) of cell a, (row, col) of its neighbour b) -> (edge point, gap,
+        sigma): where the toolhead is when the tip is on the border from a to b, the dead
+        zone's width there, and how sure that point is (mm, one sigma).
+        Taps along the line through the two centres, each judged by b's share of the two
+        cells' rise alone: the sheet's ripple (a cell read 208 to 784 within a mm, 2026-10-07),
+        its cells' gains and a column's crosstalk move both cells' readings, much less their
+        share, and the other 30 cells (row 3, a leaking column) don't vote at all. The border
+        is where the fewest taps fall on the wrong side (border()): a stray tap is one vote,
+        not a search sent the wrong way. Coarse first, a cell and a half either side (the tip is
+        known to half a cell), as far as the array goes; then finer over the border; then a tap
+        in the middle of where each side ends, twice. A line that finds no border (along the dead
+        zone beside the two cells, or beyond them: locate a cell off across it) is swept again
+        to either side, up to most of a cell.
+        z_contact: contact z with the toolhead at `at` (default: over a's centre).'''
+        cfg = self.cfg
         hop, cell_a, cell_b = edge
+        cell_a, cell_b = tuple(cell_a), tuple(cell_b)
         array = self.array(hop)
-        a = array.center(*cell_a) - np.asarray(shift)
-        b = array.center(*cell_b) - np.asarray(shift)
+        a = np.asarray(array.center(*cell_a), float) - np.asarray(shift, float)
+        b = np.asarray(array.center(*cell_b), float) - np.asarray(shift, float)
+        u = (b - a) / np.linalg.norm(b - a)
+        across = np.array([-u[1], u[0]])
+        at = a if at is None else np.asarray(at, float)
         z_lift = z_contact + 1.0
-        with lifted_on_error(self.machine, self.cfg['z_park']):
-            self.machine.move(z=self.cfg['z_park'])
+        coarse, fine, span = cfg.get('sweep', (0.25, 0.05, 0.4))
+        onset = cfg.get('early', cfg['respond'])          # a tap presses: see _descend
+        reach = 1.5 * array.pitch
+
+        spec = self.arrays[hop]
+        unread = {tuple(c) for c in spec.get('faulty_cells', ())}
+
+        def inside(p, margin=0.25):
+            '''The tip, as far as we know where it is, on a cell that is read: never a tap beyond
+            the cells, nor on a dead row or a faulty column (pressed, it lifts its line's other
+            cells evenly, a and b alike: a coin toss for a vote, BED_5's old row 3).'''
+            local = p + np.asarray(shift, float) - array.origin
+            u_, v_ = np.dot(local, array.col_dir), np.dot(local, array.row_dir)
+            if not (margin <= u_ <= array.cols * array.pitch - margin and margin <= v_ <= array.rows * array.pitch - margin):
+                return False
+            row, col = int(v_ // array.pitch), int(u_ // array.pitch)
+            return row not in spec.get('dead_rows', ()) and col not in spec.get('faulty_cols', ()) and (row, col) not in unread
+        found, taps = None, {}
+        with lifted_on_error(self.machine, cfg['z_park']):
+            self.machine.move(z=cfg['z_park'])
             self.machine.move(float(a[0]), float(a[1]))
-            if hop not in self.depth:       # no locate() before (LRT_FSR_EDGE): find it on cell a
+            if hop not in self.depth:       # no measure() before (LRT_FSR_EDGE): find it on cell a
                 self.machine.move(z=z_lift)
                 self.machine.move(z=z_contact, speed=JOG_SPEED)
-                self.depth[hop] = self.press_depth(hop, tuple(cell_a), z_contact)
+                self.depth[hop] = self.press_depth(hop, None, z_contact)
             z_press = z_contact - self.depth[hop]
-            a_off = self.last_response(hop, tuple(cell_a), a, b, z_press, z_lift, at=a)
-            b_on = self.last_response(hop, tuple(cell_b), b, a, z_press, z_lift, at=a)
-            self.machine.move(z=self.cfg['z_park'])
+            self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
+            self.baseline(hop, z_lift)              # in the air over a: what the taps rise from
+            for side in np.array([0.0, 0.4, -0.4, 0.8, -0.8]) * array.pitch:
+                line, taps = (a + b) / 2 + side * across, {}
+
+                def sweep(ts):
+                    for t in ts:
+                        t = round(float(t), 4)
+                        p = line + t * u
+                        if t in taps or abs(t) > reach + 1e-9 or not inside(p):
+                            continue
+                        s = self.tap(hop, p, z_press, z_lift, at)
+                        taps[t] = (s.get(cell_a, 0.0), s.get(cell_b, 0.0), max(s.values(), default=0.0))
+                        if self.verbose:
+                            self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: "
+                                             f"{cell_a}={taps[t][0]:.0f} {cell_b}={taps[t][1]:.0f} ({self.top(s)})")
+                sweep(np.arange(-reach, reach + 1e-9, coarse))
+                found = border(taps, onset, cfg['dominance'])
+                if found is not None:
+                    sweep(np.arange(found[0] - span, found[0] + span + 1e-9, fine))
+                    found = border(taps, onset, cfg['dominance'])
+                for _ in range(2 if found is not None else 0):    # each end's span halved, twice
+                    sweep([sum(end) / 2 for end in found[4]])
+                    found = border(taps, onset, cfg['dominance']) or found
+                if found is not None:
+                    break
+                self.machine.say(f"[LRT] no border from {cell_a} to {cell_b} {side:+.2f}mm across: "
+                                 f"{sum(a_ + b_ >= onset for a_, b_, _ in taps.values())} of {len(taps)} taps "
+                                 f"answered, again beside it")
+            self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
-        return (a_off + b_on) / 2, float(np.linalg.norm(b_on - a_off))
+        if found is None:
+            raise FsrError(f"[LRT] no border from {cell_a} to {cell_b} of hop {hop} on five lines across it: "
+                           f"is the tip over these cells (check the array origin), do they answer (LRT_FSR_SURVEY)?")
+        t0, gap, sigma, wrong, _ = found
+        point = line + t0 * u
+        self.machine.say(f"[LRT] {cell_a}|{cell_b} at X{point[0]:.3f} Y{point[1]:.3f} ±{sigma:.3f} "
+                         f"(gap {gap:.2f}, {len(taps)} taps at z={z_press:.3f}"
+                         + (f", {wrong} on the wrong side)" if wrong else ")"))
+        return point, gap, sigma
 
     # Whole measurements
     def z_cells(self):
@@ -757,67 +820,80 @@ class Fsr:
         return float(result.test_z)
 
     def measure(self, bed_z, prior=None):
-        '''The docked tool: contact z on the z cell, and the X and Y edges.
+        '''The docked tool: the X and Y edges, and contact z on the z cell -> {'x', 'y', 'z',
+        'gaps', 'tip', 'sigma': {'x', 'y', 'z'}}, sigma how sure each is (mm).
         bed_z: {cell: BLTouch z} for z_cells(). prior: what is known of the
-        tool already, {'tip': (x, y), 'z': contact z}, see locate() and window().'''
+        tool already, {'tip': (x, y), 'z': contact z}, see locate() and window().
+        locate() gives the tip to half a cell and where it touched; the edges are swept from
+        there (z along the sheet's mesh), and each puts the tip exactly across its border;
+        then contact z mid cell, where the tip is now known to be.'''
         cfg = self.cfg
-        shift, contact = {}, {}
+        found = {}                  # hop -> {'shift', 'z', 'at'}: the tip, a contact z, and where
         self.depth = {}             # this tool's, found again
         self.surface = self.machine.mesh_profile(cfg['surface_mesh']) if cfg.get('surface_mesh') else None
         if cfg.get('surface_mesh') and self.surface is None:
             self.machine.say(f"[LRT] no {cfg['surface_mesh']} mesh: the taps take the sheet as flat")
+        z_hop, z_row, z_col = cfg['z_cell']
 
-        def on(hop, row, col):
-            '''The tip found on this array, and its contact z on (row, col).'''
-            if hop not in contact:
-                shift[hop], top = self.locate(hop, bed_z[(hop, row, col)], prior)
-                # top is just above contact at the aim: where the sheet is higher, higher
-                array = self.array(hop)
-                top += max(self.follow(array.center(row, col), array.point(*self.arrays[hop]['aim'])), 0.0)
-                # locate's tip is a few tenths, now and then a mm or two off (2026-10-07: Y 3.87
-                # for 2.13): came down on a neighbour instead, the tip is that much further
-                # over. Aim again, twice at most.
-                for tries in range(3):
-                    try:
-                        contact[hop] = self.contact_z(hop, row, col, bed_z[(hop, row, col)], shift[hop], top, prior)
-                        # The taps' depth again, on this cell: locate's first cell may be a weak one
-                        # (BED_5's (2, 4) tops out at ~220, never press_strength: the taps all went
-                        # the whole press; (1, 1) has 450 ~0.07mm past first touch, 2026-10-07)
-                        self.depth[hop] = self.depth_on(hop, (row, col), contact[hop], shift[hop])
-                        break
-                    except WrongCell as e:
-                        if tries == 2:
-                            raise
-                        moved = array.center(*e.found) - array.center(row, col)
-                        shift[hop] = np.asarray(shift[hop], float) + moved
-                        self.machine.say(f"[LRT] came down on {e.found}, not {(row, col)}: the tip is about "
-                                         f"{shift[hop].round(2).tolist()} from the toolhead, aiming again")
-            return contact[hop]
+        def over(hop, cell):
+            '''-> (contact z, toolhead xy) over a cell's centre: the tip found on this array
+            first, and the taps' depth there.'''
+            if hop not in found:
+                shift, z, at = self.locate(hop, next(v for c, v in bed_z.items() if c[0] == hop), prior)
+                found[hop] = {'shift': shift, 'z': z, 'at': at}
+                # The taps' depth on the z cell, or where it touched when that doesn't get there
+                # (the tip half a cell off it yet): either may be a weak cell (BED_5's (2, 4) tops
+                # out at ~220, never press_strength: the taps all went the whole press)
+                z_at, xy = over(hop, self.z_cell_of(hop))
+                self.depth[hop] = self.depth_on(hop, xy, z_at)
+                if self.depth[hop] >= (self.press_cap or cfg['press']) - 1e-9:
+                    self.depth[hop] = min(self.depth[hop], self.depth_on(hop, at, z))
+            f = found[hop]
+            xy = np.asarray(self.array(hop).center(*cell), float) - f['shift']
+            return f['z'] + self.follow(xy, f['at']), xy
 
         if self.before_measure:
             self.before_measure()
         self.matrix(True)
         try:
-            z = on(*cfg['z_cell'])
-            points, gaps = {'x': [], 'y': []}, []
+            points, gaps, sigmas = {'x': [], 'y': []}, [], {'x': [], 'y': []}
             for axis, edges in (('x', cfg['x_edges']), ('y', cfg['y_edges'])):
                 for edge in edges:
-                    e_hop, cell_a, _ = edge
-                    point, gap = self.find_edge(edge, on(e_hop, *cell_a), shift[e_hop])
+                    hop, cell_a, cell_b = edge
+                    z_a, xy_a = over(hop, cell_a)
+                    point, gap, sigma = self.find_edge(edge, z_a, found[hop]['shift'], at=xy_a)
                     points[axis].append(point[0 if axis == 'x' else 1])
                     gaps.append(gap)
-                    self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} gap={gap:.3f}")
+                    sigmas[axis].append(sigma)
+                    # The tip is on that border with the toolhead at `point`: its offset across
+                    # the border, exactly, for what comes next
+                    array = self.array(hop)
+                    ca, cb = (np.asarray(array.center(*c), float) for c in (cell_a, cell_b))
+                    u = (cb - ca) / np.linalg.norm(cb - ca)
+                    s = found[hop]['shift']
+                    found[hop]['shift'] = s + (np.dot((ca + cb) / 2 - point, u) - np.dot(s, u)) * u
+                    self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} ±{sigma:.3f} gap={gap:.3f}")
+            z_top, _ = over(z_hop, (z_row, z_col))
+            z, sigma_z = self.contact_z(z_hop, z_row, z_col, bed_z[tuple(cfg['z_cell'])], found[z_hop]['shift'],
+                                        z_top + cfg['back_off'], prior)
         finally:
             self.matrix(False)
             if self.after_measure:
                 self.after_measure()        # it touched the sheet, even when it stopped
+        mean = lambda v: float(np.sqrt(np.mean(np.square(v))) / np.sqrt(len(v)))
         return {
             'z': z,
             'x': float(np.mean(points['x'])),
             'y': float(np.mean(points['y'])),
             'gaps': gaps,
-            'tip': [float(v) for v in shift[cfg['z_cell'][0]]],
+            'tip': [float(v) for v in found[z_hop]['shift']],
+            'sigma': {'x': mean(sigmas['x']), 'y': mean(sigmas['y']), 'z': sigma_z},
         }
+
+    def z_cell_of(self, hop):
+        '''The cell the taps' depth is found on, on this array: the z cell, or its array's aim.'''
+        h, row, col = self.cfg['z_cell']
+        return (row, col) if h == hop else tuple(int(v) for v in self.arrays[hop]['aim'])
 
     # Between pens
     def wait_clean(self):
@@ -876,6 +952,9 @@ class Fsr:
         '''The reference tool on the carriage, bed_z just probed -> profile.'''
         ref = self.measure(bed_z)
         tool_z = round(ref['z'] - bed_z[tuple(self.cfg['z_cell'])], 3)
+        if max(ref['sigma'].values()) > self.cfg.get('max_sigma', 0.15):
+            self.machine.say(f"[LRT] the reference is unsure: ±{ref['sigma']}; every pen measured against it "
+                             f"will be as unsure")
         self.machine.gcode_run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f} REFERENCE=1")
         ref['bed_z'] = [[*cell, z] for cell, z in bed_z.items()]
         return {'fsr_ref': ref}
@@ -883,7 +962,9 @@ class Fsr:
     def probe_tool(self, profile):
         '''The docked tool against the reference -> (dx, dy, dz).
         The edges give where the tool was *sent* when it met them, so a tool
-        tip that sits +0.5mm off meets them 0.5mm early: dx = tool - reference.'''
+        tip that sits +0.5mm off meets them 0.5mm early: dx = tool - reference.
+        Each is as sure as both measurements together; one less sure than `max_sigma`
+        stops, the values in the message (better no tag than a wrong one).'''
         ref = profile['fsr_ref']
         bed_z = {tuple(c[:3]): c[3] for c in ref['bed_z']}
         self.machine.gcode_run("_CLEAR_OFFSETS")
@@ -891,5 +972,11 @@ class Fsr:
         dx = round(m['x'] - ref['x'], 3)
         dy = round(m['y'] - ref['y'], 3)
         dz = round(m['z'] - bed_z[tuple(self.cfg['z_cell'])], 3)
-        self.machine.say(f"[LRT] offsets dx={dx} dy={dy} dz={dz} gaps={[round(g, 3) for g in m['gaps']]}")
+        ref_sigma = ref.get('sigma', {})
+        sigma = {k: float(np.hypot(m['sigma'][k], ref_sigma.get(k, 0.0))) for k in ('x', 'y', 'z')}
+        said = (f"dx={dx} ±{sigma['x']:.3f} dy={dy} ±{sigma['y']:.3f} dz={dz} ±{sigma['z']:.3f} "
+                f"gaps={[round(g, 3) for g in m['gaps']]}")
+        if max(sigma.values()) > self.cfg.get('max_sigma', 0.15):
+            raise FsrError(f"[LRT] too unsure to write the tag: {said}. Again, or WRITE_TOOL_TAG by hand")
+        self.machine.say(f"[LRT] offsets {said}")
         return dx, dy, dz
