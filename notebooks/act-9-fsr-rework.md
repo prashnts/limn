@@ -83,6 +83,8 @@ Safety stops are unchanged: too hard, no frames, the floor, still touching after
 
 ## Handoff (2026-10-09 evening, for whoever continues)
 
+*(Steps 1–5 and 7 below were done the same evening: see *With the loads, on the plotter* after this section.)*
+
 The user is fitting 47k load resistors from each FSR sense row to GND tonight. This session ends there: the measurement code is reworked and committed, and the firmware change for the resistors is written but not yet flashed.
 
 **State:**
@@ -129,3 +131,56 @@ The user is fitting 47k load resistors from each FSR sense row to GND tonight. T
 - fix the estimator rather than patching thresholds;
 - test against recorded real data where there is any (`test_the_border_from_real_taps` is the one fixture so far; record raw 32-cell frames when you can);
 - every image goes in `~/limn-shot`.
+
+## With the loads, on the plotter (2026-10-09 evening)
+
+The user fitted the 47k loads and flashed `"fsr_load": 47000` (`5868a30`). Then, with the Stabilo (stb-88) as reference, they ran a survey, three `LRT_CALIBRATE`s while tuning `DZ_TRIM`, two `LRT_FSR_MEASURE`s, and `LRT_PROBE_TOOL` on three Micron 01s. Read from the Klipper console (Moonraker's gcode store), 16:36–19:51.
+
+**What the loads fixed:**
+- **At rest, every cell reads 0**, in the air above the sheet too. Before, the cells rested at ≤ 6 to 130 ((3, 0)'s preload), drifted by tens, and row 3 read 30–50 with the head over the sheet.
+- **Row 3 is an ordinary row.** It answers like the others (98–237 at 0.08 mm in), and the survey finds no faulty cell on the sheet.
+- **No more give-ups:** before the loads, one `LRT_CALIBRATE` of five runs stopped with "no border from (1, 1) to (1, 2)". After, none in eight.
+
+**What they cost: the signal is about 3× smaller.** The survey (`early` 30 from a noise of 0):
+- 0.08 mm past first touch the median cell reads 134 (the bare sheet read ~470 at 0.04 mm);
+- weak cells: (0, 2) and (1, 2) (34–56). The survey warns that the Y edge uses (1, 2);
+- `press_strength` (450) is never reached now, so every tap goes to the press cap (0.10 mm);
+- `respond` (150) is over the median cell.
+
+**Contact z needs `early` from the survey.** The first runs after the loads, still on the config's `early` (60), put contact 0.3–0.4 mm low, with a spread of 0.24–0.29 mm within one run. The reference's tag got dz 0.23 from one of them. With the survey's 30, three of five runs repeated within 0.01 mm; two spread 0.23 and 0.07 within the run (the median kept them in line).
+
+**Repeatability**, the reference over five runs before the loads and five after:
+
+| | X edge | Y edge | contact z |
+|---|---|---|---|
+| Before the loads | 114.756–114.931 (0.175; 0.050 without the run that stopped) | 52.569–52.700 (0.131) | 3.517–3.534 (0.017) |
+| After, with the survey | 114.645–114.817 (0.172) | 52.613–52.675 (0.062) | 3.464–3.541 (0.077) |
+
+- **Y halved; X didn't change.** Three of the X runs had their sweep on the same line (Y 54.475) and still spread 0.17. So it isn't the sheet sitting at an angle. The Z play, the tip squashing, or what the taps press is next to look at.
+- **Each run still claims ±0.002–0.013** for X and Y: the sigma doesn't see this run-to-run scatter, so `max_sigma` can't catch it.
+- **Gaps:** the Y border's dead zone is 0.8–1.0 mm in every run (X: 0–0.38), more than the 0.4 the simulation assumes.
+
+**dz_trim:**
+- **The reference:** at `DZ_TRIM=0.1` (dz 0.59) and 0.4 (dz 0.18) its marks drew. The user settled on `DZ_TRIM=0.3`: the reference touches 0.610 over the BLTouch z, tag dz 0.31.
+- **The pens got the default.** `beds.py`'s `dz_trim` is still 0.1, and the Microns were probed without `DZ_TRIM=`. Each tag is written on its own, so they sit 0.2 mm higher, relative to their touch, than the reference does. Their marks (4–6) drew, and the user found the results good. Either set `dz_trim` to 0.3 and probe them again, or keep it: a fine tip wants less press than a felt one, and then this belongs per pen (its `press`, pens.toml) rather than in one number.
+
+**The pens** (`LRT_PROBE_TOOL`, trim 0.1):
+
+| Holder | Pen | dx | dy | dz | ± x, y, z |
+|---|---|---|---|---|---|
+| 41 | Micron 01 Blue | −1.819 | −0.083 | 1.785 | 0.004, 0.014, 0.043 |
+| 42 | Micron 01 Red | 1.925 | 0.711 | 1.726 | 0.004, 0.012, 0.036 |
+| 43 | Micron 01 Purple | −1.603 | 0.423 | 2.376 | 0.005, 0.012, 0.036 |
+
+Fine tips: the taps pressed 0.08–0.10 mm, every contact repeated within 0.005–0.053 mm, and nothing stopped. Their old tags (−4.44, −0.27, 2.25 and so on) were against an older reference, so they don't compare.
+
+**Next:**
+1. **`dz_trim`:** decide one value or per pen (above); then `beds.py`, and probe the pens again if it changes.
+2. **Retune to the loaded scale**, against a ladder:
+   - `respond` (150), `press_strength` (450), `locate_strength` (180) and `sure` (450) are all over or near what a cell reads now;
+   - set `early` in the config (the survey's 30), so a run without the survey doesn't find contact 0.3 mm low;
+   - more signal: a bigger load (100k, see pinout.md's table) is the hardware way.
+3. **X scatter (0.17 mm run to run):** log the taps (`VERBOSE=1`) of a few runs and compare where the votes flip. Do the same with a lower press (`PRESS=0.06`).
+4. **An honest sigma:** fold the run-to-run scatter in (both directions of a sweep, or a repeat), so `max_sigma` means something.
+5. **The Y edge's weak (1, 2):** move the Y edge to a strong pair (the survey names (3, 7), (1, 6), (3, 4), (1, 3)), or check whether column 2 is the sheet or the ribbon.
+
