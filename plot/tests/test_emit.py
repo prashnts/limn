@@ -462,3 +462,19 @@ def test_priming_is_asked_of_each_pen(write_svg, job_of):
     job.machine_overrides = {'prime': True}
     r, _ = plot(job)
     assert 'TOOL_PREPARE CALIBRATE=auto PRIME=1' in r.gcode and next(s for s in r.plan if s['kind'] == 'tool')['prime']
+
+
+def test_light_inks_plot_first_unless_the_order_is_asked_for(write_svg, job_of):
+    # A light green fill with black text over it (a line font: it cuts nothing): the felt green
+    # must go down first, or it smears the black
+    from plot.job import PlanPen
+    job = plan_job(job_of, write_svg, {'T5': PlanPen(pen='mic-01', color='#1b1b1b', holder=41),
+                                       'T7': PlanPen(pen='stb-88', color='#8ccc3c', holder=42)},
+                   **{'#1e7b45': 'T7', '#c8102e': 'T5', '#e8651a': 'T0', '#1f4aa9': 'T1'})
+    r, _ = plot(job, tags=TAGS)
+    tools = [s['tool'] for s in r.plan if s['kind'] == 'tool']
+    assert tools.index('T7') < tools.index('T5')
+    job.tool_order = ['T5', 'T7', 'T0', 'T1']               # asked for: the swaps still wait for their holders
+    r, _ = plot(job, tags=TAGS)
+    tools = [s['tool'] for s in r.plan if s['kind'] == 'tool']
+    assert tools.index('T5') < tools.index('T7') and tools.index('T0') < tools.index('T5')

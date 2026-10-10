@@ -726,6 +726,7 @@ def test_clear_all_takes_two_presses(page, base, drawing):
     page.wait_for_selector('#objects li[data-id]')
     page.click('#clear-objects')
     assert page.locator('#clear-objects.armed').count() == 1                  # yellow: nothing done yet
+    assert page.inner_text('#clear-objects') == 'Press again'
     assert len(requests.get(base + '/api/state').json()['job']['objects']) == 1
     page.click('#clear-objects')
     page.wait_for_function('() => !document.querySelector("#objects li[data-id]")')
@@ -735,8 +736,9 @@ def test_clear_all_takes_two_presses(page, base, drawing):
     page.reload()
     page.wait_for_selector('#objects li[data-id]')
     page.click('#clear-objects')
-    time.sleep(2.2)
+    time.sleep(4.2)
     assert page.locator('#clear-objects.armed').count() == 0
+    assert page.inner_text('#clear-objects') == 'Clear all'                    # its label back
     page.click('#clear-objects')
     assert len(requests.get(base + '/api/state').json()['job']['objects']) == 1    # armed again, not cleared
 

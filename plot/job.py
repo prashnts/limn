@@ -124,6 +124,7 @@ class Obj(BaseModel):
     sets: list[ShapeSet] = []       # shapes grouped by hand; the later set wins for a shape in two
     group: str | None = None        # drawings of one group move and hide together (the UI)
     raster: RasterSpec = Field(default_factory=RasterSpec)  # its <image>s: left out, or made into lines
+    images: dict[str, RasterSpec] = {}  # but these, by image index: their own (raster.spec_of)
     text: TextSpec = Field(default_factory=TextSpec)     # every <text>,
     texts: dict[str, TextSpec] = {}     # but these, by index
     placement: Placement = Field(default_factory=Placement)

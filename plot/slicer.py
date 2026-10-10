@@ -44,7 +44,7 @@ from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
 from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
 from .job import Group, Obj
-from .raster import drawn, keys as raster_keys, raster_shapes
+from .raster import drawn, object_keys, raster_shapes
 from .surface import make
 
 WIDE = 1.5      # auto: strokes this many tool widths wide or more fill their area
@@ -153,7 +153,7 @@ def nearest_tool(colour, tools):
 
 def image_keys(drawing, obj, tools):
     '''The colour keys of the inks its images are made into (none when it leaves them out).'''
-    return raster_keys(obj.raster, tools, drawing.images) if obj is not None and drawn(obj, drawing) else []
+    return object_keys(obj, drawing, tools) if obj is not None else []
 
 
 def default_groups(drawing, tools, obj=None):

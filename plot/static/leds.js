@@ -102,7 +102,7 @@ function renderLeds() {
     paint('.dockstrip rect.led', ledData.dock);
   }
   const legend = ledLegend(ledData.states), box = $('.ledlegend-box', P);
-  if (box.dataset.was !== legend) { box.dataset.was = legend; box.innerHTML = legend; }
+  if (box && box.dataset.was !== legend) { box.dataset.was = legend; box.innerHTML = legend; }
 }
 
 function ledsShown() {

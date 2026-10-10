@@ -485,3 +485,27 @@ def test_an_images_lines_are_drawn_as_lines_and_a_move_keeps_their_order(tmp_pat
     job.objects[0].raster.gamma = 2
     plot(job, cache)
     assert cache.slices == 2 and len(calls) == 1
+
+
+def test_each_image_can_have_its_own_settings(tmp_path, tools):
+    from plot import raster
+    from plot.job import RasterSpec
+    from plot.svg import load as load_svg
+    one = colour_svg()
+    i = one.index('<image')
+    j = one.index('/>', i) + 2
+    p = tmp_path / 'two.svg'
+    p.write_text(one[:j] + one[i:j].replace('y="5"', 'y="28"') + one[j:])     # the same picture, lower too
+    d = load_svg(p)
+    top, low = d.images
+    xs = lambda s: np.vstack([q for ps in s.paths.values() for q in ps])
+    # The drawing's: both as lines. The lower one left out on its own
+    o = Obj(id='d', svg=str(p), raster=RasterSpec(mode='lines'))
+    assert xs(slice_object(o, tools))[:, 1].min() < 50 - 28 - 10
+    o = o.model_copy(update={'images': {str(low.index): RasterSpec(mode='skip')}})
+    assert xs(slice_object(o, tools))[:, 1].min() > 50 - 25 - 1             # only the top one (y up)
+    # Only the lower one, dithered in its own colour: its ink is a layer of its own
+    o = o.model_copy(update={'raster': RasterSpec(mode='skip'),
+                             'images': {str(low.index): RasterSpec(mode='dither', colour='#ff0000')}})
+    assert raster.object_keys(o, d, tools) == ['stroke #ff0000']
+    assert xs(slice_object(o, tools))[:, 1].max() < 50 - 28 + 1

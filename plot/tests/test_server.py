@@ -395,3 +395,24 @@ def test_camera_docked_by_hand(client, monkeypatch):
     assert cams['manual']['webcam'].endswith('/capture.jpg')
     w = {c['name']: c for c in client.get('/api/webcams').json()['webcams']}
     assert w['Pi HQ']['stream_url'] == 'http://limn-picam.local:4250/stream.mjpg'
+
+
+def test_a_job_saved_as_a_file_opens_again_here_or_elsewhere(client, tmp_path):
+    add(client)
+    oid = client.get('/api/state').json()['job']['objects'][0]['id']
+    client.patch(f'/api/objects/{oid}', json={'placement': {'x': 33, 'y': 44, 'rotate': 0}})
+    client.patch('/api/job', json={'tool_order': ['T3', 'T0']})
+    r = client.get('/api/job/file')
+    assert r.status_code == 200 and '.limnplot.json' in r.headers['content-disposition']
+    saved = r.content
+    client.delete('/api/objects')
+    st = client.post('/api/job/file', files={'file': ('a.limnplot.json', saved, 'application/json')}).json()['state']
+    assert st['job']['tool_order'] == ['T3', 'T0'] and st['job']['objects'][0]['placement']['x'] == 33
+    # On another machine: the SVG comes with it. A different SVG of the same name there stays
+    other = TestClient(server.create_app(tmp_path / 'other'))
+    add(other, METRO.replace('</svg>', '<circle cx="5" cy="5" r="2" fill="#ff0000"/></svg>'))
+    st = other.post('/api/job/file', files={'file': ('a.limnplot.json', saved, 'application/json')}).json()['state']
+    svgs = [o['svg'] for o in st['job']['objects']]
+    assert len(svgs) == 1 and svgs[0] != 'uploads/metro.svg' and (tmp_path / 'other' / svgs[0]).exists()
+    assert other.post('/api/undo').json()['changed']             # one step back: its own drawing again
+    assert other.post('/api/job/file', files={'file': ('x.json', b'{"a": 1}', 'application/json')}).status_code == 400

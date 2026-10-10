@@ -9,6 +9,7 @@
 # placement changed. Plots go to Klipper through Moonraker.
 #
 #   uv run python -m plot serve [--port 4220] [--data plot-data]
+import base64
 import json
 import os
 import re
@@ -37,7 +38,7 @@ STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
 MANUAL_HOLDER = 90      # printer.limn.tools' key of the tool docked by hand (MANUAL_TOOL in ext/limn)
 OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'sets', 'group', 'text', 'texts', 'surface',
-            'masks', 'raster'}
+            'masks', 'raster', 'images'}
 SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
             'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
 
@@ -437,6 +438,75 @@ def create_app(data=None):
             ws.job = new
             ws.save()
             return ws.state()
+
+    # The job as one file to keep or take elsewhere: the job, its drawings' SVGs and the fonts
+    # uploaded (texts find them by name or by family), base64. Opened again: one step for undo,
+    # a different file of the same name kept, the opened one beside it.
+    JOB_FILE = 'limn-plot-job'
+
+    @app.get('/api/job/file')
+    def save_job_file():
+        with ws.lock:
+            job = ws.job.model_dump(mode='json')
+            files = {}
+            for o in ws.job.objects:
+                p = ws.data / o.svg
+                if p.exists():
+                    files[o.svg] = base64.b64encode(p.read_bytes()).decode()
+            fonts = {p.name: base64.b64encode(p.read_bytes()).decode() for p in sorted(ws.fonts.folder.iterdir()) if p.is_file()}
+        body = json.dumps({'format': JOB_FILE, 'version': 1, 'saved': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                           'job': job, 'files': files, 'fonts': fonts})
+        name = re.sub(r'[^\w.-]', '_', ws.job.objects[0].id if len(ws.job.objects) == 1 else 'plot') + time.strftime('-%Y%m%d-%H%M')
+        return Response(body, media_type='application/json',
+                        headers={'Content-Disposition': f'attachment; filename="{name}.limnplot.json"'})
+
+    @app.post('/api/job/file')
+    async def open_job_file(file: UploadFile = File(...)):
+        try:
+            got = json.loads(await file.read())
+        except ValueError:
+            raise HTTPException(400, 'not a saved job (not JSON)')
+        if not isinstance(got, dict) or got.get('format') != JOB_FILE:
+            raise HTTPException(400, 'not a saved job (Save job makes them)')
+        try:
+            job = Job.model_validate(got['job'])
+            files = {k: base64.b64decode(v) for k, v in (got.get('files') or {}).items()}
+            fonts = {k: base64.b64decode(v) for k, v in (got.get('fonts') or {}).items()}
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, f'a broken saved job: {e}')
+        notes = []
+        with ws.lock:
+            where = {}                              # its path in the file -> where it is kept here
+            for src, data in files.items():
+                name = re.sub(r'[^\w.\- ]', '_', Path(src).name) or 'drawing.svg'
+                dst, n = ws.uploads / name, 1
+                while dst.exists() and dst.read_bytes() != data:
+                    dst, n = ws.uploads / f'{Path(name).stem}-{n}{Path(name).suffix}', n + 1
+                if not dst.exists():
+                    dst.write_bytes(data)
+                where[src] = f'uploads/{dst.name}'
+            missing = [o.id for o in job.objects if o.svg not in where and not (ws.data / o.svg).exists()]
+            if missing:
+                raise HTTPException(400, f'the saved job lacks the SVG of {", ".join(missing)}')
+            job.objects = [o.model_copy(update={'svg': where.get(o.svg, o.svg)}) for o in job.objects]
+            for name, data in fonts.items():
+                have = ws.fonts.path(name)
+                if have is None:
+                    try:
+                        ws.fonts.add(name, data)
+                    except ValueError as e:
+                        notes.append(str(e))
+                elif have.read_bytes() != data:
+                    notes.append(f'{name}: a different font of that name is here already, kept')
+            job._root = ws.data
+            try:
+                load(job, ws.tags)
+            except ValueError as e:
+                raise HTTPException(400, f'the saved job does not fit this machine: {e}')
+            ws.remember()
+            ws.job = job
+            ws.save()
+            return {'state': ws.state(), 'notes': notes}
 
     @app.post('/api/undo')
     def undo():

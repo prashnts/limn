@@ -30,7 +30,10 @@
 #
 # `pitch` and `cell` are mm as plotted (the drawing's scale is taken out).
 # Left empty they follow the pen that draws the ink (its colour's layer):
-# pitch its fill spacing, so black is solid; cell 6 of its lines, 0.5 to 3 mm.
+# pitch its fill spacing, so black is solid; cell 4 of its lines, 0.5 to 2 mm
+# (6, to 3 mm, made dots too big to read as tone: 2.4 mm for a 0.4 felt tip).
+# With `palette` a colour drawn by a pen of another colour is as dark as the
+# colour, not solid: a light grey drawn in blue is a quarter covered.
 # A fine pen (a 0.05 fineliner) would make millions of cells: the grid is
 # coarsened to MAX_CELLS (MAX_DOTS for halftone), and the problems say so.
 # A halftone's points go as its inked area / (pitch x chord), whatever the dot
@@ -130,9 +133,30 @@ def keys(spec: RasterSpec, tools=None, images=None):
     return [f'stroke {c}' for c, _ in inks(spec, tools, images)]
 
 
+def spec_of(obj, img):
+    '''How one of its images is drawn: its own settings (obj.images, by index), else the drawing's.'''
+    return obj.images.get(str(img.index)) or obj.raster
+
+
+def peers(obj, d, spec):
+    '''The images whose inks `palette` takes together with this spec's: the ones of the same palette.'''
+    return [im for im in d.images if (s := spec_of(obj, im)).mode != 'skip' and s.separate == 'palette'
+            and (s.colours, s.invert) == (spec.colours, spec.invert)]
+
+
+def object_keys(obj, d, tools=None):
+    '''The colour keys of all its images' inks, each once: a layer each.'''
+    out = []
+    for img in d.images:
+        spec = spec_of(obj, img)
+        if spec.mode != 'skip':
+            out += [k for k in keys(spec, tools, peers(obj, d, spec)) if k not in out]
+    return out
+
+
 def drawn(obj, d):
-    '''Whether the object's images are made into lines.'''
-    return obj.raster.mode != 'skip' and bool(d.images)
+    '''Whether any of the object's images is made into lines.'''
+    return any(spec_of(obj, im).mode != 'skip' for im in d.images)
 
 
 def unmix(rgb, colours):
@@ -255,20 +279,22 @@ def auto(spec: RasterSpec, pen):
     '''(pitch, cell) as plotted: the spec's, else from the pen that draws the ink.'''
     width = pen.width if pen is not None else 0.5
     spacing = pen.spacing if pen is not None else 0.45
-    return spec.pitch or spacing, spec.cell or min(3.0, max(0.5, 6 * width))
+    return spec.pitch or spacing, spec.cell or min(2.0, max(0.5, 4 * width))
 
 
 def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tools=None, problems=None):
     '''One ink of the image as lines, drawing mm (y down, the drawing's scale not applied).'''
     colour = colour or spec.colour.lower()
     pitch, cell = auto(spec, pen)
-    k = (spec.model_dump_json(exclude={'pens'}), scale, colour, angle, pitch, cell)
+    k = (spec.model_dump_json(exclude={'pens'}), scale, colour, angle, pitch, cell, pen.color if pen is not None else None)
     if k in img.cache:
         out, note = img.cache[k]
         if note and problems is not None:
             problems.append(note)
         return out
     plane = planes(img, spec, tools)[colour]
+    if spec.separate == 'palette' and pen is not None:     # as dark as its colour, in the pen's ink
+        plane = np.clip(plane * ((1 - float(_lum(_rgb(colour)))) / max(0.05, 1 - float(_lum(_rgb(pen.color))))), 0, 1)
     out, note = [], None
     if spec.mode in ('dither', 'lines'):
         us, vs, t, world, step = grid(img, plane, pitch / scale, angle, MAX_CELLS if spec.mode == 'dither' else MAX_ROWS_CELLS)
@@ -294,7 +320,7 @@ def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tool
         for i, v in enumerate(vs):
             for j, u in enumerate(us):
                 r = step * 0.6 * math.sqrt(t[i, j])         # pi (0.6 cell)^2 ~ the cell's area at full
-                if r >= p / 4:
+                if r >= p * 0.35:                   # less: a dot the pen's width, far darker than asked
                     out.append(spiral(*world(u + (step / 2 if i % 2 else 0), v), r, p, chord / scale))
         frame = Polygon(img.corners())          # dots at the edge are cut by the picture's frame
         shapely.prepare(frame)
@@ -312,13 +338,16 @@ def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tool
 
 
 def raster_shapes(d, obj, tools=None, pen_of=None, problems=None):
-    '''The drawing's images as shapes of lines, one for each ink, as obj.raster says (none
-    when it skips them). pen_of(colour): the tool that draws that ink, None: not drawn.'''
+    '''The drawing's images as shapes of lines, one for each ink, as each image's spec says
+    (spec_of; none for one it skips). pen_of(colour): the tool that draws that ink, None: not drawn.'''
     if not drawn(obj, d):
         return []
-    spec, out = obj.raster, []
+    out = []
     for img in d.images:
-        for colour, angle in inks(spec, tools, d.images):
+        spec = spec_of(obj, img)
+        if spec.mode == 'skip':
+            continue
+        for colour, angle in inks(spec, tools, peers(obj, d, spec)):
             pen = pen_of(colour) if pen_of else None
             if pen_of and pen is None:
                 continue                        # skipped or masked: no lines to make

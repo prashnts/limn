@@ -58,22 +58,59 @@ async function api(method, url, body) {
   return type.includes('json') ? r.json() : r.text();
 }
 
-// Instead of confirm(): a button acts only when pressed twice within 2 s. The first press turns it yellow
-// (.armed) and says what the second will do; nothing happens on one stray click, and no dialog is in the way.
-// Remembered by `key`, not by the element: a panel the printer poll redraws keeps the second press working.
-const armedAt = {};
+// Instead of confirm(): a button acts only when pressed twice within ARM_MS. The first press turns it
+// yellow (.armed) and its label to "Press again"; nothing happens on one stray click, and no dialog is
+// in the way. One armed at a time; it disarms by itself, its label back. Remembered by `key`, not by the
+// element: a panel redrawn meanwhile (the printer poll) shows it armed again (fill) and the second
+// press still works.
+const ARM_MS = 4000;
+const armed = new Map();        // key -> {at, btn, path, html, timer}
+function pathOf(el) {
+  const parts = [];
+  while (el && !el.id && el.parentElement) {
+    parts.unshift(`:nth-child(${[...el.parentElement.children].indexOf(el) + 1})`);
+    el = el.parentElement;
+  }
+  return el && el.id ? [`#${CSS.escape(el.id)}`, ...parts].join(' > ') : null;
+}
+function armedButtons(a) {
+  // its button, and the one drawn in its place since (the same place, the same label)
+  const now = a.path && document.querySelector(a.path);
+  return [a.btn, now].filter((b, i, all) => b && all.indexOf(b) === i && (b.classList.contains('armed') || b.innerHTML === a.html));
+}
+function showArmed(b, a, on) {
+  if (on && !b.classList.contains('armed')) {
+    b.style.minWidth = `${b.offsetWidth}px`;
+    b.classList.add('armed');
+    b.textContent = 'Press again';
+  } else if (!on && b.classList.contains('armed')) {
+    b.classList.remove('armed');
+    b.innerHTML = a.html;
+    b.style.minWidth = '';
+  }
+}
+function disarm(key) {
+  const a = armed.get(key);
+  if (!a) return;
+  clearTimeout(a.timer);
+  armed.delete(key);
+  for (const b of armedButtons(a)) showArmed(b, a, false);
+}
+function reArm() {              // after a redraw: the armed ones look armed again
+  for (const a of armed.values()) for (const b of armedButtons(a)) showArmed(b, a, true);
+}
 function twice(key, btn, what) {
-  const now = Date.now();
-  if (armedAt[key] && now - armedAt[key] < 2000) {
-    delete armedAt[key];
-    for (const b of $$('.armed')) b.classList.remove('armed');
+  btn = btn && btn.closest ? btn.closest('button, a, label.button') || btn : btn;      // not an icon in it
+  const a = armed.get(key);
+  if (a && Date.now() - a.at < ARM_MS) {
+    disarm(key);
     return true;
   }
-  armedAt[key] = now;
-  if (btn) {
-    btn.classList.add('armed');
-    setTimeout(() => { if (!armedAt[key] || Date.now() - armedAt[key] >= 2000) btn.classList.remove('armed'); }, 2050);
-  }
+  for (const k of [...armed.keys()]) disarm(k);
+  const rec = { at: Date.now(), btn, path: btn ? pathOf(btn) : null, html: btn ? btn.innerHTML : '' };
+  rec.timer = setTimeout(() => disarm(key), ARM_MS);
+  armed.set(key, rec);
+  if (btn) showArmed(btn, rec, true);
   toast(`${what}: press again to do it`);
   return false;
 }
@@ -103,6 +140,7 @@ function fill(el, html) {
   el.innerHTML = html;
   el._html = html;
   helpify(el);
+  if (armed.size) reArm();
 }
 
 // Tooltips for the fields the panels draw: by data-k / data-f / data-pf / data-p / id
@@ -1054,29 +1092,72 @@ function renderObjectList() {
   $('#group-objects').textContent = `Group ${multi.size}`;
   $('#ungroup-objects').hidden = !(o && o.group);
 }
-// Every pen's layer over all the drawings, with an eye: hidden ones aren't shown on the canvas nor in
-// the paths (they still plot). The scans pinned under the plot are listed under them (scan.js).
+// Every pen's layer over all the drawings, in the order they plot, with an eye: hidden ones aren't
+// shown on the canvas nor in the paths (they still plot). Drag a pen to plot it earlier or later
+// (job.tool_order; Auto: light first, the dark over it). The scans pinned under the plot are listed
+// under them (scan.js).
+const lum = (c) => { const n = parseInt((c || '#000000').slice(1), 16); return (0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255; };
+function plotOrder() {
+  const done = preview && preview.plan ? preview.plan.filter((x) => x.kind === 'tool').flatMap((x) => [x.tool, ...(x.aliases || [])]) : [];
+  const asked = S.job.tool_order || Object.keys(S.tools).sort((a, b) => lum(S.tools[b].color) - lum(S.tools[a].color));
+  return [...new Set([...done, ...asked, ...Object.keys(S.tools)])];
+}
 function renderLayers() {
   const count = {};
   for (const o of S.job.objects) for (const [to, ids] of Object.entries(layerShapes(o))) count[to] = (count[to] || 0) + ids.length;
-  const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mask', 'skip']
-    .filter((to) => count[to] || hiddenLayers.has(to));
+  const pens = plotOrder().filter((to) => S.tools[to] && S.tools[to].draws !== false && (count[to] || hiddenLayers.has(to)));
+  const tos = [...pens, ...['mask', 'skip'].filter((to) => count[to] || hiddenLayers.has(to))];
   const row = (to) => {
     const t = S.tools[to], off = hiddenLayers.has(to);
     const sw = t ? `<span class="swatch dot" style="background:${esc(t.color)}"></span>` : `<span class="swatch ${to}"></span>`;
     const via = t && t.source === 'plan' ? ` · ${t.alias ? `drawn by ${esc(t.alias)}` : 'swapped in'}` : '';
-    return `<li data-layer="${esc(to)}" class="${off ? 'hidden' : ''}">
+    return `<li data-layer="${esc(to)}" class="${off ? 'hidden' : ''}"${t ? ' draggable="true"' : ''}>
+      ${t ? `<span class="grip" title="Drag: plot it earlier or later">⋮⋮</span>` : '<span class="grip"></span>'}
       <button class="icon eye" data-act="eye" title="${off ? 'Hidden: show it' : 'Hide it from the canvas and the paths (it still plots)'}">${off ? '◌' : '◉'}</button>${sw}
       <span class="name">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}${via}</span>` : esc(LAYER_NAMES[to])}</span>
       <span class="note">${count[to] || 0}</span></li>`;
   };
   fill($('#layers-all'), tos.map(row).join('') || '<li class="note">Nothing on the bed yet.</li>');
   $('#layers-show').hidden = !hiddenLayers.size;
+  $('#layers-auto').hidden = !S.job.tool_order;
 }
 $('#layers-all').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-layer]');
   if (li && e.target.dataset.act === 'eye') setLayerHidden(li.dataset.layer, !hiddenLayers.has(li.dataset.layer));
 });
+let dragLayer = null;
+$('#layers-all').addEventListener('dragstart', (e) => {
+  const li = e.target.closest('li[draggable]');
+  if (!li) return;
+  e.stopPropagation();
+  dragLayer = li.dataset.layer;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragLayer);
+  li.classList.add('dragging');
+});
+$('#layers-all').addEventListener('dragover', (e) => {
+  const li = e.target.closest('li[draggable]');
+  if (!dragLayer || !li) return;
+  e.preventDefault();
+  const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+  for (const x of $('#layers-all').querySelectorAll('.drop-before, .drop-after')) x.classList.remove('drop-before', 'drop-after');
+  li.classList.add(after ? 'drop-after' : 'drop-before');
+});
+$('#layers-all').addEventListener('dragend', () => {
+  dragLayer = null;
+  for (const x of $('#layers-all').querySelectorAll('.dragging, .drop-before, .drop-after')) x.classList.remove('dragging', 'drop-before', 'drop-after');
+});
+$('#layers-all').addEventListener('drop', async (e) => {
+  const li = e.target.closest('li[draggable]'), from = dragLayer;
+  if (!from || !li) return;
+  e.preventDefault();
+  const after = li.classList.contains('drop-after');
+  const order = plotOrder().filter((t) => t !== from);
+  if (li.dataset.layer !== from) order.splice(order.indexOf(li.dataset.layer) + (after ? 1 : 0), 0, from);
+  else return;
+  setState(await api('PATCH', '/api/job', { tool_order: order }));
+});
+$('#layers-auto').addEventListener('click', async () => setState(await api('PATCH', '/api/job', { tool_order: null })));
 $('#layers-show').addEventListener('click', () => {
   hiddenLayers.clear(); store.set('hiddenLayers', []);
   renderObjects(); renderLayers(); renderObjectPanel();
@@ -1421,19 +1502,36 @@ const SEPARATIONS = [['one', 'One colour', 'Its darkness, in one colour'],
   ['palette', 'Its colours', 'The picture\'s own main colours, each drawn by the pen you give it'],
   ['pens', 'Onto the pens', 'Each pixel unmixed into the colours of the pens ticked, each on its own screen angle'],
   ['cmyk', 'CMYK', 'Cyan, magenta, yellow and black: give each a pen']];
+// Which of its images the settings below are for: 'all' (the drawing's raster) or an image's index,
+// whose own settings (o.images) win over the drawing's
+const imageSel = {};
+const imageKey = (o) => (imageSel[o.id] && (imageSel[o.id] === 'all' || o.images[imageSel[o.id]] !== undefined
+  || (info(o.id).images || []).some((im) => String(im.index) === imageSel[o.id])) ? imageSel[o.id] : 'all');
+const imageSpec = (o) => (imageKey(o) === 'all' ? o.raster : o.images[imageKey(o)] || o.raster);
+function rasterPatch(o, update) {
+  const k = imageKey(o);
+  if (k === 'all') return { raster: { ...o.raster, ...update } };
+  return { images: { ...o.images, [k]: { ...(o.images[k] || o.raster), ...update } } };
+}
 function imagesHtml(o, I) {
   const ims = I.images || [];
   if (!ims.length) return '';
-  const r = o.raster, on = r.mode !== 'skip';
+  const k = imageKey(o), own = k !== 'all' && o.images[k] !== undefined;
+  const r = imageSpec(o), on = r.mode !== 'skip';
+  const picker = ims.length > 1 || Object.keys(o.images).length ? `<div class="row wrap image-pick">
+      <button class="small${k === 'all' ? ' on' : ''}" data-img="all" title="The drawing's settings: every image without its own">All images</button>
+      ${ims.map((im) => `<button class="small${k === String(im.index) ? ' on' : ''}" data-img="${im.index}" title="${esc(im.id || 'image')}: ${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm${o.images[im.index] ? ', its own settings' : ', as all'}">${esc((im.id || 'image ' + im.index).slice(0, 14))}${o.images[im.index] ? ' •' : ''}</button>`).join('')}</div>
+      ${k === 'all' ? '' : own ? `<p class="note">Its own settings <button class="small" data-act="img-same" title="Draw it as all the others again">Same as all</button></p>`
+        : '<p class="note">As all images: change anything below to give it its own</p>'}` : '';
   const inks = I.groups.filter((x) => x.images != null);       // a layer for each ink (raster.inks)
   const pensUsed = inks.map((x) => S.tools[target(layerGroup(o, x.key))]).filter(Boolean);
   const auto = (f) => [...new Set(pensUsed.map(f))].map((v) => num(v)).join(' / ') || '—';     // as raster.auto
-  const pitch = auto((t) => t.spacing), cell = auto((t) => Math.min(3, Math.max(0.5, 6 * t.width)));
+  const pitch = auto((t) => t.spacing), cell = auto((t) => Math.min(2, Math.max(0.5, 4 * t.width)));
   const draws = Object.values(S.tools).filter((t) => t.draws !== false);
   const inkRows = inks.map((x) => `<div class="row ink" data-ink="${esc(x.key)}">${swatchOf('stroke', x.key.split(' ')[1])}
       <span class="mono">${esc(x.key.split(' ')[1])}</span><select data-ink="${esc(x.key)}" title="The pen that draws this ink">${pens(target(layerGroup(o, x.key)))}</select>
       <span class="note">${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'}</span></div>`).join('');
-  return sect('images', 'Images', `<div class="form raster">
+  return sect('images', 'Images', `${picker}<div class="form raster">
       <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
       ${on ? `<label for="r-sep">Inks</label><select id="r-sep" data-r="separate">
           ${SEPARATIONS.map(([v, l, t]) => `<option value="${v}" title="${esc(t)}"${v === r.separate ? ' selected' : ''}>${l}</option>`).join('')}</select>
@@ -1445,7 +1543,7 @@ function imagesHtml(o, I) {
         <label>Pens</label><div class="inks">${inkRows}</div>
         <label for="r-pitch">${r.mode === 'halftone' ? 'Line gap' : 'Pitch'}</label><div class="row"><input id="r-pitch" data-r="pitch" type="number" step="0.05" min="0.1" value="${num(r.pitch)}"
           placeholder="${pitch}" title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. Empty: each ink's pen's own line spacing (${pitch}), so black is solid"> <span class="note">mm${r.pitch == null ? ', the pen\'s' : ''}</span></div>
-        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.2" value="${num(r.cell)}" placeholder="${cell}" title="mm between dots, as plotted. Empty: from each ink's pen, 6 of its lines (0.5 to 3 mm): ${cell}"> <span class="note">mm${r.cell == null ? ', the pen\'s' : ''}</span></div>` : ''}
+        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.2" value="${num(r.cell)}" placeholder="${cell}" title="mm between dots, as plotted. Empty: from each ink's pen, 4 of its lines (0.5 to 2 mm): ${cell}"> <span class="note">mm${r.cell == null ? ', the pen\'s' : ''}</span></div>` : ''}
         <label for="r-gamma">Gamma</label><div class="row"><input id="r-gamma" data-r="gamma" type="number" step="0.1" min="0.2" max="4" value="${num(r.gamma)}" title="Over 1: lighter, more paper; under 1: darker"></div>
         <label for="r-paper">Paper up to</label><div class="row"><input id="r-paper" data-r="paper" type="number" step="5" min="0" max="95" value="${num(r.paper * 100, 0)}"
           title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span>
@@ -1466,15 +1564,15 @@ $('#object-panel').addEventListener('change', async (e) => {
   if (rk) {
     const v = rk === 'invert' ? t.checked : ['mode', 'colour', 'separate'].includes(rk) ? t.value : rk === 'paper' ? +t.value / 100
       : rk === 'colours' ? Math.max(1, Math.min(12, Math.round(+t.value || 4))) : t.value === '' ? null : +t.value;
-    return patchObj(o.id, { raster: { ...o.raster, [rk]: v } });
+    return patchObj(o.id, rasterPatch(o, { [rk]: v }));
   }
   if (t.dataset.ink) return setChip(o, [t.dataset.ink], (g) => toPen(g, t.value));      // an image's ink to a pen
   if (t.dataset.rpen) {
     const all = Object.values(S.tools).filter((x) => x.draws !== false).map((x) => x.id);
-    const cur = o.raster.pens.length ? o.raster.pens : all;
+    const r = imageSpec(o), cur = r.pens.length ? r.pens : all;
     const pens = t.checked ? [...cur, t.dataset.rpen] : cur.filter((x) => x !== t.dataset.rpen);
     if (!pens.length) { t.checked = true; return flash('At least one pen'); }
-    return patchObj(o.id, { raster: { ...o.raster, pens: pens.length === all.length ? [] : all.filter((x) => pens.includes(x)) } });
+    return patchObj(o.id, rasterPatch(o, { pens: pens.length === all.length ? [] : all.filter((x) => pens.includes(x)) }));
   }
   const cf = t.dataset.cf;
   if (cf) {
@@ -1535,7 +1633,14 @@ $('#object-panel').addEventListener('input', (e) => {
 $('#object-panel').addEventListener('click', async (e) => {
   const o = obj(sel); if (!o) return;
   const act = e.target.dataset.act, chip = e.target.closest('[data-chip]'), layer = e.target.closest('[data-layer]');
-  if (chip && chip.classList.contains('chip')) {
+  if (e.target.dataset.img) {                   // the settings below for all its images, or one
+    imageSel[o.id] = e.target.dataset.img;
+    renderObjectPanel();
+  } else if (act === 'img-same') {
+    const images = { ...o.images };
+    delete images[imageKey(o)];
+    patchObj(o.id, { images });
+  } else if (chip && chip.classList.contains('chip')) {
     const k = `${o.id}|${chip.dataset.chip}`;
     openChip = openChip === k ? null : k;
     renderObjectPanel();
@@ -1689,6 +1794,7 @@ function renderOutput() {
       <div>draw ${num(st.draw_mm / 1000, 2)} m · travel ${num(st.travel_mm / 1000, 2)} m</div>${tools}`;
   }
   $('#plan').innerHTML = planHtml();
+  if (S) renderLayers();                  // in the order the plan has them
   $('#problems').innerHTML = (preview ? preview.problems : []).map((p) => `<li>${esc(p)}</li>`).join('');
   for (const b of ['#upload', '#print']) {
     $(b).disabled = !st || !st.draw_mm || preview.unsafe;
@@ -2252,7 +2358,7 @@ async function pollPrinter() {
     pill.className = 'pill ' + (st === 'printing' ? 'busy' : st === 'error' ? 'bad' : 'ok');
     pill.title = printer.url;
     const bed = printer.bed && printer.bed !== 'NONE' ? printer.bed : '';
-    if (store.get('followBed', true) && S && printer.bed !== undefined && bed !== (S.machine.bed_id || '')
+    if (store.get('followBed', true) && S && printer.bed != null && bed !== (S.machine.bed_id || '')
         && (bed === '' || bed in S.beds)) {
       setState(await api('PATCH', '/api/job', { machine_overrides: { bed_id: bed || null } }), { quiet: true });
       toast(`Bed from Klipper: ${bed || 'none'}`);
@@ -2367,6 +2473,18 @@ function askImages(id, n) {
   });
 }
 $('#svg-input').addEventListener('change', (e) => { addSvgs([...e.target.files]); e.target.value = ''; });
+// A saved job (Save job, .limnplot.json): it replaces this one, one step for undo
+async function openJob(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const r = await fetch('/api/job/file', { method: 'POST', body: fd });
+  const got = await r.json().catch(() => ({}));
+  if (!r.ok) return toast(`${file.name}: ${got.detail || r.statusText}`);
+  sel = null;
+  setState(got.state);
+  toast(`Opened ${file.name} (Ctrl+Z: back to the one before)` + (got.notes.length ? `. ${got.notes.join('; ')}` : ''));
+}
+$('#job-input').addEventListener('change', (e) => { if (e.target.files[0]) openJob(e.target.files[0]); e.target.value = ''; });
 window.addEventListener('dragover', (e) => { e.preventDefault(); $('#drop').classList.add('over'); });
 window.addEventListener('dragleave', () => $('#drop').classList.remove('over'));
 window.addEventListener('drop', (e) => {
@@ -2375,6 +2493,8 @@ window.addEventListener('drop', (e) => {
   const files = [...e.dataTransfer.files];
   const svgs = files.filter((f) => /\.svg$/i.test(f.name) && !/font/i.test(f.name));
   const fonts = files.filter((f) => /\.(ttf|otf)$/i.test(f.name));
+  const saved = files.find((f) => /\.json$/i.test(f.name));
+  if (saved) return openJob(saved);
   if (fonts.length) uploadFonts(fonts);
   if (svgs.length) addSvgs(svgs, e.target.closest && e.target.closest('#canvas') ? worldPt(e) : null);
 });
@@ -2422,7 +2542,7 @@ const KEYS = [
     ['Shift+click', 'pick drawings together: they move together'], ['Ctrl+G  Ctrl+Shift+G', 'group, ungroup the picked drawings (shapes, with A)']]],
   ['Plot: view and plot', [['1  2  3', 'Original · Tools · Paths'], ['T', 'travels in the Paths view'], ['G', 'the G-code beside the canvas'],
     ['K', 'play the plot, pause'], [',  .', 'one G-code line back, on'], ['Shift+,  Shift+.', '100 lines back, on'], ['Home  End', 'the first line, the last'],
-    ['Ctrl+S', 'download the G-code'], ['Ctrl+Z  Ctrl+Shift+Z', 'undo, redo']]],
+    ['Ctrl+S', 'download the G-code'], ['Ctrl+Shift+S', 'save the job as a file (Open job, or drop it on the page, to open it)'], ['Ctrl+Z  Ctrl+Shift+Z', 'undo, redo']]],
   ['Scan', [['L', 'look: one shot where you click'], ['F', 'focus: sweep the height where you click'],
     ['← →', 'in the viewer: the tile before, after'], ['Esc', 'close the viewer']]],
   ['Canvas', [['wheel, pinch', 'zoom'], ['two fingers', 'pan (a trackpad, a touch screen)'], ['drag a corner', 'scale (Alt: about the middle)'],
@@ -2471,7 +2591,7 @@ window.addEventListener('keydown', async (e) => {
   const key = e.key.toLowerCase();
   if (mod && key === 'z') { e.preventDefault(); return undo(e.shiftKey); }
   if (mod && key === 'y') { e.preventDefault(); return undo(true); }
-  if (mod && key === 's') { e.preventDefault(); return $('#download').click(); }
+  if (mod && key === 's') { e.preventDefault(); return (e.shiftKey ? $('#job-save') : $('#download')).click(); }
   if (e.key === ' ') { spaceDown = true; svg.classList.add('pan-mode'); e.preventDefault(); return; }
   if (e.key === '?') return toggleKeys(true);
   if (e.key === 'Escape') {

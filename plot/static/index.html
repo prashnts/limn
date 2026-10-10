@@ -117,11 +117,14 @@
       <div class="row"><button id="clear-objects" class="small danger" title="Remove every drawing from the bed (press twice; Undo brings them back)">Clear all</button>
         <button id="group-objects" class="small" hidden title="Group the drawings picked (Shift-click): they move, hide and pick together (Ctrl+G)">Group</button>
         <button id="ungroup-objects" class="small" hidden title="Ungroup the selected drawing's group (Ctrl+Shift+G)">Ungroup</button></div>
+      <div class="row"><a id="job-save" class="button small" href="/api/job/file" title="Save the whole job as one file: the drawings, their painting, masks, image settings, the plan's pens and order (Ctrl+Shift+S)">Save job</a>
+        <label class="button small" title="Open a saved job (.limnplot.json, or drop it on the page): it replaces this one, Undo brings this back">Open job…<input type="file" id="job-input" accept=".json,application/json" hidden></label></div>
     </section>
     <section class="plot-only" data-panel="layers">
-      <h2 title="Each pen's layer over every drawing, and the scans under the plot: the eye hides one from view (it still plots)">Layers</h2>
+      <h2 title="Each pen's layer over every drawing, in the order they plot, and the scans under the plot: drag a pen to plot it earlier or later; the eye hides one from view (it still plots)">Layers</h2>
       <ul id="layers-all" class="list"></ul>
-      <div class="row"><button id="layers-show" class="small" hidden title="Show every layer again">Show all</button></div>
+      <div class="row"><button id="layers-auto" class="small" hidden title="Plot in the default order again: the lightest ink first, the dark over it">Auto order</button>
+        <button id="layers-show" class="small" hidden title="Show every layer again">Show all</button></div>
       <div id="unders-section" hidden>
         <h3 title="Scans pinned with 'Under the plot' (Scan tab's viewer): shown under the drawings, where they were taken">Scans under the plot</h3>
         <ul id="unders" class="list"></ul>

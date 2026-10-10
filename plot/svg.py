@@ -289,7 +289,7 @@ def load(src, tolerance=0.02) -> Drawing:
         pts = np.vstack([p for s in shapes for p in s.paths]) if shapes else np.zeros((1, 2))
         w, h = pts[:, 0].max() / MM, pts[:, 1].max() / MM
     # Only with something drawn over it: a lone square that fills its page is the drawing
-    over = len(shapes) + len(texts) + len(images) > 1
+    over = bool(shapes) and len(shapes) + len(texts) + len(images) > 1
     if over and _background(shapes[0], (w * MM, h * MM)) and not (texts and texts[0].index < shapes[0].index) \
             and not (images and images[0].index < shapes[0].index):
         shapes[0].background = True

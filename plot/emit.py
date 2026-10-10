@@ -378,11 +378,16 @@ def emit(job, machine, tools, sliced) -> Result:
             placed = _on_paper(machine, obj.id, tid, paths, obj.placement, problems)
             by_tool.setdefault(tools[tid].alias or tid, []).append(placed)     # a plan pen a holder has: its tool
 
-    first = job.tool_order or list(tools)
+    # The order asked for (the Layers panel; a plan pen a holder has: its tool), else light first:
+    # where inks overlap uncut (text in a line font over a fill) the dark goes over the light
     by_tool = {t: bs for t, bs in by_tool.items() if any(bs)}
+    if job.tool_order:
+        first = list(dict.fromkeys(tools[t].alias or t if t in tools else t for t in job.tool_order))
+    else:
+        first = sorted(tools, key=lambda t: -lightness(tools[t].color))
     used = [t for t in first if by_tool.get(t)] + [t for t in by_tool if t not in first]
     if any(tools[t].layers for t in used):
-        used.sort(key=lambda t: -lightness(tools[t].color))     # light first: the dark goes over it
+        used.sort(key=lambda t: -lightness(tools[t].color))     # light first: the slice drew it whole, under
     tools, used = swaps(machine, tools, used, problems)
     e = Emitter(machine, Planner(machine, obstacles))
     g = e.g
