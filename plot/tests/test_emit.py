@@ -32,7 +32,8 @@ def test_structure_and_heights(write_svg, job_of):
     r, _ = plot(job_of(p, groups=RED))
     g = r.gcode
     lines = [l for l in g.splitlines() if l and not l.startswith(';')]
-    assert lines[:5] == ['LAZY_HOME', 'PLOT_START EXT=3', '_CLEAR_OFFSETS HOME=1', 'T3', '_APPLY_OFFSETS HOME=1']
+    assert lines[:6] == ['LAZY_HOME', 'PLOT_START EXT=3', '_CLEAR_OFFSETS HOME=1', 'T3',
+                         'TOOL_PREPARE CALIBRATE=auto PRIME=0', '_APPLY_OFFSETS HOME=1']
     assert lines[-1] == 'PLOT_END'
     m, pen = load_machine(), load_tools()['T3']
     down = m.z_touch - pen.press
@@ -385,3 +386,79 @@ def test_many_paths_are_ordered_through_a_grid_as_through_all_of_them():
     fast = order.order(paths)
     assert order.GRID < len(paths)
     assert all(np.array_equal(a, b) for a, b in zip(exact, fast))
+
+
+# Pens of the plan (job.pens): T5 on, drawn by a holder's pen of the same kind and colour, or
+# swapped into a holder by hand once its own pen is done
+TAGS = {'41': {'name': 'Micron Green', 'pen': 'mic-01', 'color': '#1e7b45', 'dx': 0, 'dy': 0, 'dz': 1},
+        '42': {'name': 'Micron Red', 'pen': 'mic-01', 'color': '#c8102e', 'dx': 0, 'dy': 0, 'dz': 1},
+        '43': {'name': 'Micron Purple', 'pen': 'mic-01', 'color': '#6a2c8f', 'dx': 0, 'dy': 0, 'dz': 1},
+        '44': {'name': 'Micron Blue', 'pen': 'mic-01', 'color': '#1f4aa8', 'dx': 0, 'dy': 0, 'dz': 1},
+        '45': {'name': 'Stabilo Blue', 'pen': 'stb-88', 'color': '#3a4fb8', 'dx': 0, 'dy': 0, 'dz': 1}}
+FOUR = '''<path d="M10 10 H20" stroke="#1e7b45" stroke-width="0.3" fill="none"/>
+    <path d="M10 20 H20" stroke="#c8102e" stroke-width="0.3" fill="none"/>
+    <path d="M10 30 H20" stroke="#e8651a" stroke-width="0.3" fill="none"/>
+    <path d="M10 40 H20" stroke="#1f4aa9" stroke-width="0.3" fill="none"/>'''
+
+
+def plan_job(job_of, write_svg, pens, **groups):
+    job = job_of(write_svg(FOUR), groups={f'stroke {c}': Group(tool=t) for c, t in groups.items()})
+    job.pens = pens
+    return job
+
+
+def test_a_plan_pen_a_holder_has_is_drawn_by_it(write_svg, job_of):
+    from plot.job import PlanPen
+    job = plan_job(job_of, write_svg, {'T5': PlanPen(pen='mic-01', color='#1f4aa8')},
+                   **{'#1e7b45': 'T0', '#1f4aa9': 'T5', '#c8102e': 'skip', '#e8651a': 'skip'})
+    job.objects[0].groups = {k: (Group() if v.tool == 'skip' else v) for k, v in job.objects[0].groups.items()}
+    r, _ = plot(job, tags=TAGS)
+    assert [s['tool'] for s in r.plan if s['kind'] == 'tool'] == ['T0', 'T3']       # T5 is T3: no swap
+    assert next(s for s in r.plan if s.get('tool') == 'T3')['aliases'] == ['T5']
+    assert 'TOOL_SWAP' not in r.gcode and r.stats['swaps'] == 0
+
+
+def test_a_plan_pen_is_swapped_in_after_the_holders_pen(write_svg, job_of):
+    from plot.job import PlanPen
+    job = plan_job(job_of, write_svg, {'T5': PlanPen(pen='mic-01', color='#e8651a', holder=41)},
+                   **{'#1e7b45': 'T0', '#c8102e': 'T1', '#e8651a': 'T5', '#1f4aa9': 'T3'})
+    job.tool_order = ['T5', 'T0', 'T1', 'T3']               # asked first: it still waits for T0
+    r, _ = plot(job, tags=TAGS)
+    kinds = [(s['kind'], s.get('tool')) for s in r.plan]
+    assert kinds.index(('tool', 'T0')) < kinds.index(('swap', 'T5')) < kinds.index(('tool', 'T5'))
+    swap = next(s for s in r.plan if s['kind'] == 'swap')
+    assert (swap['holder'], swap['out']) == (41, 'T0')
+    lines = r.gcode.splitlines()
+    i = lines.index('TOOL_SWAP T=41 PEN=mic-01 COLOR=e8651a NAME="Micron 01 Orange"')
+    assert lines[i - 1] == 'UNDOCK' and 'T0' in lines[i + 1:i + 5]           # then picked up from holder 41
+    assert r.stats['swaps'] == 1 and set(r.stats['tools']) == {'T0', 'T1', 'T3', 'T5'}
+    sim = parse(r.gcode)
+    assert sim.tools[sim.tool[sim.kind == DRAW][-1]] in ('T5', 'T3')     # the preview tells T5 from T0
+
+
+def test_a_plan_pen_goes_into_a_holder_this_plot_doesnt_use(write_svg, job_of):
+    from plot.job import PlanPen
+    job = plan_job(job_of, write_svg, {'T5': PlanPen(pen='mic-01', color='#e8651a', calibrate=True)},
+                   **{'#1e7b45': 'T0', '#c8102e': 'T1', '#e8651a': 'T5', '#1f4aa9': 'T3'})
+    r, _ = plot(job, tags=TAGS)
+    swap = next(s for s in r.plan if s['kind'] == 'swap')
+    assert swap['holder'] == 43                             # T2's: not drawn here
+    assert 'CALIBRATE=1' in r.gcode and 'TOOL_PREPARE CALIBRATE=1 PRIME=0' in r.gcode
+
+
+def test_plan_pens_follow_the_holders(write_svg, job_of):
+    from plot.emit import load
+    from plot.job import Job, PlanPen
+    with pytest.raises(ValueError):
+        load(Job(pens={'T2': PlanPen(pen='mic-01')}))
+    m, tools = load(Job(pens={'T5': PlanPen(pen='mic-01', color='#e8651a')}))
+    t = tools['T5']
+    assert (t.name, t.width, t.source, t.alias, t.swap) == ('Micron 01 Orange', 0.25, 'plan', None, None)
+
+
+def test_priming_is_asked_of_each_pen(write_svg, job_of):
+    p = write_svg('<path d="M10 10 H20" stroke="#ff0000" stroke-width="0.5" fill="none"/>')
+    job = job_of(p, groups=RED)
+    job.machine_overrides = {'prime': True}
+    r, _ = plot(job)
+    assert 'TOOL_PREPARE CALIBRATE=auto PRIME=1' in r.gcode and next(s for s in r.plan if s['kind'] == 'tool')['prime']

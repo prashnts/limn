@@ -4,7 +4,7 @@ import collections
 from fakes import run_tests
 from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
-from limn.geometry import gen_mark_grid, mark_strokes
+from limn.geometry import gen_mark_grid, mark_strokes, wipe_slots, prime_strokes, plus_strokes
 from limn.beds import BEDS
 from limn import marks
 
@@ -533,6 +533,93 @@ def test_a_saved_survey_is_gone_by_until_cleared():
     assert fsr.cfg.get('early') == BEDS['BED_5']['fsr']['early'] and 'faulty_cells' not in fsr.arrays[1]
     p.run('LRT_FSR_SURVEY', CLEAR=1)
     assert 'BED_5' not in p.svv['lrt_fsr_survey'] and p.said('dropped for BED_5')
+
+
+# The wipe area: primes and the test marks of pens probed mid-plot, off the paper
+WIPE_ON = {**BEDS['BED_5']['wipe'], 'enabled': True}
+
+
+def wiping(carried=42, **kwargs):
+    '''A plotter on BED_5 with its wipe area switched on, meshed, the FSR calibrated.'''
+    p = plotter(carried=carried, bed=reply('BED_5'), **kwargs)
+    BEDS['BED_5']['wipe'] = WIPE_ON
+    p.ext.profile['fsr_ref'] = {'bed_z': []}
+    p.run('LRT_MESH_CALIBRATE')
+    p.svv['currently_docked_tool'] = carried
+    return p
+
+
+def unwipe():
+    BEDS['BED_5']['wipe'] = {**WIPE_ON, 'enabled': False}
+
+
+def test_wipe_slots_and_strokes_stay_inside():
+    w = BEDS['BED_5']['wipe']
+    slots = wipe_slots(**w)
+    assert len(slots) == w['nx'] * w['ny'] and slots[0][0] == tuple(w['origin'])
+    assert slots[1][0][0] > slots[0][0][0] and slots[1][0][1] == slots[0][0][1]    # across X first, then along Y
+    rect = (tuple(w['origin']), (w['origin'][0] + w['size'][0], w['origin'][1] + w['size'][1]))
+    mesh = ((0, 30), (93, 160))
+    for slot in slots:
+        for strokes in (prime_strokes(slot), plus_strokes(slot)):
+            assert marks.wipe_problems(strokes, (-2, 1, 1.0), rect, mesh) == []
+    assert 'past X' in marks.wipe_problems(prime_strokes(slots[-1]), (4.9, 0, 1.0), rect, mesh)[0]
+    assert 'off the wipe area' in marks.wipe_problems([[(50, 50), (60, 50)]], (0, 0, 1.0), rect, mesh)[0]
+    assert 'no lrt_paper' in marks.wipe_problems(prime_strokes(slots[0]), (0, 0, 1.0), rect, None)[0]
+
+
+def test_wipe_is_off_until_measured():
+    assert BEDS['BED_5']['wipe']['enabled'] is False
+    p = plotter(carried=42, bed=reply('BED_5'))
+    p.run('TOOL_PRIME')
+    assert p.said('switched off') and p.pen_downs() == []
+
+
+def test_primes_fill_the_wipe_area_then_ask_for_a_fresh_pad():
+    p = wiping()
+    try:
+        n = len(wipe_slots(**WIPE_ON))
+        for _ in range(n):
+            p.run('TOOL_PRIME')
+        assert p.svv['lrt_wipe']['next'] == n and p.said('the wipe area is full now')
+        downs = len(p.pen_downs())
+        p.run('TOOL_PRIME')
+        assert len(p.pen_downs()) == downs and p.said('LRT_WIPE RESET=1')
+        assert p.ext.get_status(0)['wipe']['full']
+        p.run('LRT_WIPE', RESET=1)
+        p.run('TOOL_PRIME')
+        assert p.svv['lrt_wipe']['next'] == 1 and not p.ext.get_status(0)['wipe']['full']
+        p.bed = reply('BED_5', placed=4)                    # the bed moved: a fresh start, as the marks
+        p.run('LRT_WIPE')
+        assert p.said('Next slot: 1 of')
+    finally:
+        unwipe()
+
+
+def test_prepare_probes_a_pen_without_offsets_and_marks_in_the_wipe_area():
+    p = wiping()
+    try:
+        p.ext.tag = {'ok': True, 'name': 'new pen', 'dx': 0.0, 'dy': 0.0, 'dz': 0.0, 'reference': False}
+        marks_before = p.svv.get('lrt_marks')
+        p.run('TOOL_PREPARE', CALIBRATE='auto', PRIME=1)
+        assert p.said('its tag has no offsets') and any(s.startswith('WRITE_TOOL_TAG DX=0.3') for s in p.gcode.scripts)
+        assert p.svv['lrt_wipe']['next'] == 2                # its test mark, then its prime
+        assert p.svv.get('lrt_marks') == marks_before        # nothing on the paper: it has the plot
+        # A pen with offsets: only primed
+        p.ext.tag = {'ok': True, 'name': 'old pen', 'dx': -1.0, 'dy': 0.2, 'dz': 1.1, 'reference': False}
+        n = sum(s.startswith('WRITE_TOOL_TAG') for s in p.gcode.scripts)
+        p.run('TOOL_PREPARE', CALIBRATE='auto', PRIME=1)
+        assert sum(s.startswith('WRITE_TOOL_TAG') for s in p.gcode.scripts) == n and p.svv['lrt_wipe']['next'] == 3
+    finally:
+        unwipe()
+
+
+def test_prepare_pauses_when_a_new_pen_cannot_be_measured():
+    p = plotter(carried=42, bed=reply('BED_5'))             # not calibrated
+    p.ext.tag = {'ok': True, 'name': 'new pen', 'dx': 0.0, 'dy': 0.0, 'dz': 0.0, 'reference': False}
+    p.run('TOOL_PREPARE', CALIBRATE='auto', PRIME=0)
+    assert p.said("isn't calibrated") and p.gcode.scripts[-1] == 'PAUSE'
+    assert not any(s.startswith('WRITE_TOOL_TAG') for s in p.gcode.scripts)
 
 
 if __name__ == '__main__':

@@ -65,7 +65,9 @@ class RasterSpec(BaseModel):
     '''What becomes of a drawing's <image>s (raster.py): left out, or made into lines.'''
     model_config = ConfigDict(extra='forbid')
     mode: Literal['skip', 'dither', 'lines', 'halftone'] = 'skip'
-    separate: Literal['one', 'cmyk', 'pens'] = 'one'    # one colour; cyan, magenta, yellow and black; the pens'
+    separate: Literal['one', 'cmyk', 'pens', 'palette'] = 'one'     # one colour; cyan, magenta, yellow and black;
+                                                    # the pens'; the picture's own colours (a pen each)
+    colours: int = Field(4, ge=1, le=12)            # palette: how many of the picture's colours
     pens: list[str] = []            # separate onto these tools; empty: every one that draws
     pitch: float | None = Field(None, gt=0.02)  # mm as plotted between lines, dither cells, a dot's turns; None: its pen's
     cell: float | None = Field(None, gt=0.1)    # halftone: mm between dots; None: from its pen's width
@@ -131,6 +133,22 @@ class Obj(BaseModel):
     masks: list[list[tuple[float, float]]] = []
 
 
+class PlanPen(BaseModel):
+    '''A pen the plot is planned with, scanned or not: T5, T6, .. (job.pens), painted like
+    the tools in the holders. When the plot is made it goes to the plotter as a tool in a
+    holder of the same pen and colour, or is swapped into a holder by hand mid-plot, once
+    that holder's own pen is done (profile.plan_pens).'''
+    model_config = ConfigDict(extra='forbid')
+    pen: str | None = None          # the pen library's key (pens.toml); None: a plain pen of `width`
+    color: str = Field('#000000', pattern=r'^#[0-9a-fA-F]{6}$')
+    name: str = ''                  # '': the library's short name and the colour's
+    width: float | None = Field(None, gt=0)     # instead of the library's
+    use: str | None = None          # drawn by this tool in a holder as it is (T2): no swap
+    holder: int | None = None       # swapped into this holder; None (and no `use`): a holder of the
+                                    # same pen and colour, else swapped into one whose pen is done first
+    calibrate: bool = False         # probed on the bed's sensor once it is in, whatever its tag says
+
+
 class Job(BaseModel):
     model_config = ConfigDict(extra='forbid')
     machine: str = 'limn'
@@ -140,6 +158,7 @@ class Job(BaseModel):
     draw: dict = {}                 # how every tool draws (tools.DRAW), e.g. {"feed": 2000, "bleed": 0.3};
                                     # a tool's tool_overrides win
     tool_order: list[str] | None = None
+    pens: dict[str, PlanPen] = {}   # the plan's own pens, by tool id: T5, T6, .. (after the holders')
     objects: list[Obj] = []
     _root: Path = PrivateAttr(default_factory=lambda: Path('.'))
 

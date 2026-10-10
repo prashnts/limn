@@ -74,6 +74,14 @@ def parse(text, z_draw=1.5, arc_step=0.2) -> Sim:
     absolute, feed, tool, laser = True, 0.0, -1, None
     ours = '; limn-plot' in text[:500]
     for n, raw in enumerate(text.splitlines(), 1):
+        if ours and raw.startswith('; tool T') and ':' not in raw:
+            # ours: the tool drawing from here, whatever macro picked it up (a plan pen
+            # swapped into a holder is picked up by that holder's macro)
+            name = raw[7:].strip()
+            if name not in tools:
+                tools.append(name)
+            tool = tools.index(name)
+            continue
         line = raw.split(';', 1)[0].strip()
         if not line:
             continue
@@ -157,8 +165,11 @@ def stats(sim, machine, tools=None):
     # trapezoid, from and to standstill: short moves never reach v
     t = np.where(lengths > v * v / a, lengths / v + v / a, 2 * np.sqrt(lengths / a))
     changes = sum(1 for _, c in sim.events if TOOL.match(c.split()[0].upper()))
+    swaps = sum(1 for _, c in sim.events if c.split()[0].upper() == 'TOOL_SWAP')     # a pen swapped by hand
     out = {'draw_mm': float(lengths[sim.kind == DRAW].sum()), 'travel_mm': float(lengths[sim.kind == TRAVEL].sum()),
-           'tool_changes': changes, 'time_s': float(t.sum() + changes * machine.toolchange_time), 'tools': {}}
+           'tool_changes': changes, 'swaps': swaps,
+           'time_s': float(t.sum() + changes * machine.toolchange_time + swaps * getattr(machine, 'swap_time', 60)),
+           'tools': {}}
     drawn = sim.kind == DRAW
     if drawn.any():
         xy = np.vstack([d[drawn][:, [0, 1]], d[drawn][:, [3, 4]]])
@@ -166,8 +177,13 @@ def stats(sim, machine, tools=None):
     runs = sim.runs()
     for i, name in enumerate(sim.tools):
         mine = sim.tool == i
-        out['tools'][name] = {'draw_mm': float(lengths[mine & drawn].sum()),
-                              'strokes': sum(1 for k, t_, _, _ in runs if k == DRAW and t_ == i)}
+        if not mine.any() and name in out['tools']:
+            continue
+        cur = out['tools'].get(name, {'draw_mm': 0.0, 'strokes': 0, 'time_s': 0.0})
+        out['tools'][name] = {'draw_mm': cur['draw_mm'] + float(lengths[mine & drawn].sum()),
+                              'strokes': cur['strokes'] + sum(1 for k, t_, _, _ in runs if k == DRAW and t_ == i),
+                              'time_s': cur['time_s'] + float(t[mine].sum())}
+    out['tools'] = {k: v for k, v in out['tools'].items() if v['draw_mm'] > 0 or not sim.ours}
     return out
 
 

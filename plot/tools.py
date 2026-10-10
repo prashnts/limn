@@ -83,7 +83,15 @@ class Tool(BaseModel):
     link: float | None = None   # stays down across gaps up to this; default half its width
     pen: str | None = None      # the pen library's key (pens.toml), from the tool's tag
     holder: int | None = None   # the holder it is in, when its tag says what it is
-    source: str = 'profile'     # profile: tools.toml; tag: its tag; stale: a tag from before a hand was there
+    source: str = 'profile'     # profile: tools.toml; tag: its tag; stale: a tag from before a hand was there;
+                                # plan: a pen of the job's plan (job.pens), T5 on: in no holder yet
+    # A pen of the plan goes to the plotter one of two ways (profile.plan_pens): drawn by a tool
+    # in a holder as it is (alias: the holder's tool id, a pen of the same kind and colour is
+    # there), or swapped into a holder by hand mid-plot (swap: the holder), when that holder's
+    # own pen is done.
+    alias: str | None = None
+    swap: int | None = None
+    calibrate: bool = False     # swapped in: probed on the bed's sensor whatever its tag says
     press: float | None = None      # mm past first touch (machine.z_touch); None: z_down as it is
     press_max: float | None = None  # never more, whatever a job asks: fineliners are delicate
     # How it draws, whatever the pen: the job's `draw` sets them for every tool, its

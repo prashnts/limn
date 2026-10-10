@@ -13,6 +13,9 @@
 # Z2.5 between the strokes (all on the paper), and Z7 before it leaves the paper.
 # Off the paper it is never under Z5 (safe_z of plot/profiles/limn.toml). The
 # caller checks the mesh is of this bed; problems() the rest.
+#
+# The wipe area (beds.py `wipe`) is drawn the same way: a pen primed there before
+# it plots, the test mark of a pen probed mid-plot (wipe_problems()).
 from .beds import PANEL_ZHOME, MARKS_MAX_X, TOOL_MAX_DXY, TOOL_DZ
 
 DRAW_FEED = 2000
@@ -37,6 +40,29 @@ def problems(strokes, offsets, bounds):
             if not (x0 <= px <= x1 and y0 <= py <= y1) or px > MARKS_MAX_X:
                 why.append(f"({px:.1f}, {py:.1f}) is off the paper mesh or past X{MARKS_MAX_X}")
                 return why
+    return why
+
+
+def wipe_problems(strokes, offsets, rect, mesh):
+    '''Why these strokes can't be drawn in the wipe area `rect` ((x0, y0), (x1, y1)) with a
+    tool of `offsets`; mesh: the bounds of lrt_paper, whose heights it is drawn with (None:
+    there is none). [] when they can.'''
+    dx, dy, dz = offsets
+    why = []
+    if mesh is None:
+        why.append("there is no lrt_paper mesh to draw it with")
+    if abs(dx) > TOOL_MAX_DXY or abs(dy) > TOOL_MAX_DXY:
+        why.append(f"the tool's offsets dx={dx} dy={dy} are over {TOOL_MAX_DXY}mm")
+    if not TOOL_DZ[0] <= dz <= TOOL_DZ[1]:
+        why.append(f"the tool's dz={dz} is outside {TOOL_DZ}")
+    (x0, y0), (x1, y1) = rect
+    for x, y in (p for stroke in strokes for p in stroke):
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            why.append(f"({x:.1f}, {y:.1f}) is off the wipe area")
+            return why
+        if max(x, x + dx) > MARKS_MAX_X:
+            why.append(f"({x:.1f}, {y:.1f}) with dx={dx} is past X{MARKS_MAX_X}, in the holders' way")
+            return why
     return why
 
 

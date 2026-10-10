@@ -29,7 +29,7 @@
 # geometry.py  calibration math
 # beds.py      what is on each bed, and where
 # placement.py what stays true about the bed on the plotter: its meshes, the next test mark
-# marks.py     the test marks on the paper
+# marks.py     the test marks on the paper, and the wipe area off it
 # rtp.py       tool alignment on the resistive panel (BED_3)
 # fsr.py       tool alignment on the FSR array (BED_5)
 # i2c.py       the Pi's I2C bus: MCP23017 and PN532
@@ -44,8 +44,8 @@ import time
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
 from .machine import Machine
-from .geometry import ProbeValue, gen_mark_grid, mark_strokes
-from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL
+from .geometry import ProbeValue, gen_mark_grid, mark_strokes, wipe_slots, prime_strokes, plus_strokes
+from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL, PANEL_ZHOME
 from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
 from . import marks
 from .rtp import Rtp
@@ -82,6 +82,9 @@ TAP_PRESS = 0.1     # mm the FSR taps press past contact at most (less for a pen
 # Deeper spreads a felt tip over the cells' border: at 0.15 the Stabilo's locate went a cell off
 # in Y (3.87, 3.79 for ~2.1), an edge search failed and its contact came out 0.14 low (2026-10-07).
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
+# A pen swapped into a holder by hand mid-plot (TOOL_SWAP): the empty carriage waits over the
+# paper, clear of the holders, the print paused until that pen is scanned and in its holder.
+SWAP_PARK = (60.0, 100.0)
 CARRIAGE_VARS = {'currently_docked_tool': 0, 'tool_offset_x': 0, 'tool_offset_y': 0,
                  'tool_offset_z': 0, 'tool_name': ''}
 
@@ -149,6 +152,8 @@ class Limn:
         # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press}) of the pen library
         self._pens = (None, {}, set(), {})
         self.manual = None          # the tool docked by hand: its tool_tags entry, None: none
+        self.swap = None            # TOOL_SWAP waiting: {holder, pen, color, name, calibrate, since}
+        self._calibrate_next = set()    # holders whose pen is probed once picked up (TOOL_PREPARE)
         self.manual_window, self.manual_x_max = MANUAL_WINDOW, MANUAL_X_MAX
         self._manual_timer = None   # looks at the key's switch after a scan, while the carriage is empty
         self._key_closed_seen = False
@@ -180,6 +185,7 @@ class Limn:
             ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE,
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
             ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
+            ('LRT_WIPE', self.cmd_WIPE, "LRT_WIPE [RESET=1]: the wipe area's next slot, RESET: a fresh pad"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE,
              "LRT_CALIBRATE [PRESS=] [DZ_TRIM=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm "
              "the FSR taps press at most; DZ_TRIM: mm off the dz written (FSR, beds.py dz_trim); MESH=1: new "
@@ -218,6 +224,13 @@ class Limn:
             ('DOCK_MANUAL', self.cmd_DOCK_MANUAL,
              "Dock a tool by hand: hold its tag to the reader, then push it onto the carriage"),
             ('DOCK_CLEAR', self.cmd_DOCK_CLEAR, "The tool docked by hand is off the carriage: the dock is free again"),
+            ('TOOL_SWAP', self.cmd_TOOL_SWAP,
+             "TOOL_SWAP T=41 [PEN=] [COLOR=rrggbb] [NAME=] [CALIBRATE=1]: a pen by hand into a holder mid-plot: "
+             "pauses until it is scanned and in, then resumes"),
+            ('TOOL_PREPARE', self.cmd_TOOL_PREPARE,
+             "TOOL_PREPARE [CALIBRATE=auto|0|1] [PRIME=0|1]: the carried pen before it plots: probed when its tag "
+             "has no offsets, primed in the wipe area"),
+            ('TOOL_PRIME', self.cmd_TOOL_PRIME, "TOOL_PRIME: the carried pen draws a zigzag in the wipe area"),
         ):
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
@@ -591,6 +604,206 @@ class Limn:
         self._save_vars({'lrt_marks': {'placement': self.placement, 'next': i + 1}})
         gcmd.respond_info(f"[LRT][Mark] Mark {i + 1} of {len(points) - 1} drawn at {points[i]} -> {points[i + 1]}")
 
+    # The wipe area (beds.py `wipe`): slots used one after another, per placement of the bed
+    def _wipe(self):
+        bed = BEDS.get(self.bed) or {}
+        return bed.get('wipe')
+
+    def _wipe_status(self):
+        w = self._wipe()
+        if not w:
+            return None
+        n = len(wipe_slots(**w))
+        i = next_mark(self._vars().get('lrt_wipe'), self.placement)
+        return {'bed': self.bed, 'enabled': bool(w.get('enabled')), 'next': i, 'slots': n, 'full': i >= n}
+
+    def _draw_wipe(self, gcmd, what):
+        '''One slot of the wipe area with the carried tool: a prime (zigzag) or a test mark (+).
+        Never stops a plot: says why not, and goes on.'''
+        w = self._wipe()
+        if not w or not w.get('enabled'):
+            gcmd.respond_info(f"[Wipe] No {what} drawn: bed {self.bed} has "
+                              f"{'no wipe area' if not w else 'its wipe area switched off (beds.py, not measured)'}")
+            return False
+        slots = wipe_slots(**w)
+        i = next_mark(self._vars().get('lrt_wipe'), self.placement)
+        why = []
+        if self.placement is None:
+            why.append("the bed's placement isn't known")
+        if i >= len(slots):
+            why.append(f"the wipe area is full ({len(slots)} slots): put a fresh pad there, then LRT_WIPE RESET=1")
+        if not self._carried():
+            why.append("no tool on the carriage")
+        why += self._stale_meshes(['lrt_paper'])
+        strokes = None
+        if not why:
+            strokes = prime_strokes(slots[i]) if what == 'prime' else plus_strokes(slots[i])
+            svv = self._vars()
+            offsets = tuple(float(svv.get(k, 0) or 0) for k in ('tool_offset_x', 'tool_offset_y', 'tool_offset_z'))
+            paper = self._mesh_profiles().get('lrt_paper')
+            why += marks.wipe_problems(strokes, offsets, (tuple(w['origin']), (w['origin'][0] + w['size'][0],
+                                                                              w['origin'][1] + w['size'][1])),
+                                       mesh_bounds(paper) if paper else None)
+        if why:
+            gcmd.respond_info(f"[Wipe] No {what} drawn: {'; '.join(why)}")
+            if i >= len(slots):
+                self._beep("_BUZZ_RFID_ERR")
+            return False
+        marks.draw(Machine(self.printer, gcmd), strokes)
+        self._save_vars({'lrt_wipe': {'placement': self.placement, 'next': i + 1}})
+        left = len(slots) - i - 1
+        gcmd.respond_info(f"[Wipe] {what.capitalize()} in slot {i + 1} of {len(slots)}"
+                          + ('' if left else ': the wipe area is full now, a fresh pad and LRT_WIPE RESET=1'))
+        return True
+
+    def cmd_WIPE(self, gcmd):
+        if gcmd.get_int('RESET', 0):
+            self._save_vars({'lrt_wipe': {'placement': None, 'next': 0}})
+            gcmd.respond_info("[Wipe] The next prime goes in the wipe area's first slot")
+            return
+        self._read_bed_id(gcmd)
+        st = self._wipe_status()
+        if not st:
+            gcmd.respond_info(f"[Wipe] No wipe area on bed {self.bed}")
+            return
+        where = 'Full' if st['full'] else f"Next slot: {st['next'] + 1}"
+        gcmd.respond_info(f"[Wipe] {where} of {st['slots']} on {self.bed}"
+                          f"{'' if st['enabled'] else ' (switched off in beds.py)'}")
+
+    def cmd_TOOL_PRIME(self, gcmd):
+        self._read_bed_id(gcmd)
+        self._draw_wipe(gcmd, 'prime')
+
+    # A pen swapped into a holder by hand mid-plot, then probed when new (plot: pens of the plan)
+    def _pause(self):
+        handlers = getattr(self.gcode, 'ready_gcode_handlers', None) or getattr(self.gcode, 'commands', {})
+        # pause_resume's own: Fluidd's PAUSE macro parks at its custom spot, over the holders here
+        self.gcode.run_script_from_command('PAUSE_BASE' if 'PAUSE_BASE' in handlers else 'PAUSE')
+
+    def _resume(self):
+        def run(eventtime):
+            handlers = getattr(self.gcode, 'ready_gcode_handlers', None) or getattr(self.gcode, 'commands', {})
+            try:
+                self.gcode.run_script('RESUME_BASE' if 'RESUME_BASE' in handlers else 'RESUME')
+            except Exception:
+                logging.exception("[Swap] resume")
+        self.reactor.register_callback(run)
+
+    @staticmethod
+    def _swap_matches(tag, want):
+        '''Whether a tag (tool_tags' or a Tag) is the pen a swap waits for: its pen and colour.'''
+        get = (lambda k: tag.get(k)) if isinstance(tag, dict) else (lambda k: getattr(tag, k, None))
+        if want['pen'] and (get('pen') or '') != want['pen']:
+            return False
+        return not want['color'] or (get('color') or '').lower() == want['color']
+
+    def _check_swap(self, holder, tag):
+        '''A tool scanned into `holder` by hand while TOOL_SWAP waits: the one asked for resumes the plot.'''
+        want = self.swap
+        if not want:
+            return
+        name = getattr(tag, 'name', None) or '?'
+        if holder != want['holder']:
+            self.gcode.respond_info(f"[Swap] {name} went into holder {holder}: the plot waits for {want['name']} "
+                                    f"in holder {want['holder']}")
+            self._beep("_BUZZ_RFID_ERR")
+            return
+        if not self._swap_matches(tag, want):
+            got = ' '.join(v for v in (getattr(tag, 'pen', None), getattr(tag, 'color', None)) if v) or 'no pen on its tag'
+            self.gcode.respond_info(f"[Swap] Holder {holder} has {name} ({got}): the plot waits for {want['name']} "
+                                    f"({' '.join(v for v in (want['pen'], want['color']) if v)}). RESUME takes it anyway")
+            self._beep("_BUZZ_RFID_ERR")
+            return
+        self.swap = None
+        if want['calibrate']:
+            self._calibrate_next.add(holder)
+        self.gcode.respond_info(f"[Swap] Holder {holder} has {name}: going on")
+        self._resume()
+
+    def cmd_TOOL_SWAP(self, gcmd):
+        self._require_holder(gcmd)
+        holder = gcmd.get_int('T')
+        if holder not in self.holder.tools:
+            raise gcmd.error(f"[Swap] no holder {holder}")
+        if self._carried():
+            raise gcmd.error(f"[Swap] tool {self._carried()} is on the carriage: UNDOCK first")
+        color = (gcmd.get('COLOR', '') or '').strip().lstrip('#').lower()
+        want = {'holder': holder, 'pen': (gcmd.get('PEN', '') or '').strip().lower() or None,
+                'color': '#' + color if color else None, 'calibrate': bool(gcmd.get_int('CALIBRATE', 0)),
+                'since': round(time.time())}
+        want['name'] = gcmd.get('NAME', '') or ' '.join(v for v in (want['pen'], want['color']) if v) or 'the pen'
+        tag = self._tags().get(str(holder))
+        if tag and not tag.get('stale') and self._swap_matches(tag, want) and holder in (self.holder.occupied or ()):
+            gcmd.respond_info(f"[Swap] Holder {holder} has {want['name']} already: going on")
+            if want['calibrate']:
+                self._calibrate_next.add(holder)
+            return
+        now = self.reactor.monotonic()
+        self.swap = want
+        out = (tag or {}).get('name')
+        gcmd.respond_info(f"[Swap] Holder {holder}: {f'take {out} out, ' if out else ''}hold {want['name']} to the reader "
+                          f"until it beeps and put it into holder {holder}. The plot goes on by itself (RESUME: with "
+                          f"whatever is in it)")
+        m = Machine(self.printer, gcmd)
+        m.move(z=max(m.position()[2], PANEL_ZHOME))
+        m.move(x=SWAP_PARK[0])                  # out of the dock first, then along it
+        m.move(y=SWAP_PARK[1])
+        if self.leds:
+            self.leds.hand('listening', now, now + 3600)
+        self._awake_until = now + 3600          # listening fast until it is in
+        self._request_leds()
+        self._beep("_BUZZ_DOOP")
+        self._pause()
+
+    def cmd_TOOL_PREPARE(self, gcmd):
+        '''The carried pen before it plots (plot's tool_begin, {prepare}): probed on the bed's sensor
+        when its tag has no offsets (never calibrated) or it was swapped in to be (CALIBRATE=1 too),
+        its test mark in the wipe area (the paper has the plot); then primed there with PRIME=1.
+        A pen that needs probing on a bed that can't: paused, to calibrate it by hand.'''
+        carried = self._carried()
+        if self.swap and self.swap['holder'] == carried:
+            self.swap = None                    # RESUMEd by hand: whatever is in it
+        self._awake_until = 0.0
+        if not carried or self.manual:
+            gcmd.respond_info("[Tool] Nothing to prepare: no tool from a holder on the carriage")
+            return
+        how = (gcmd.get('CALIBRATE', 'auto') or 'auto').lower()
+        tag = self.tag if self.tag.get('ok') else None
+        blank = bool(tag) and not tag.get('reference') and not any(tag.get(k) for k in ('dx', 'dy', 'dz'))
+        need = how in ('1', 'yes') or (how == 'auto' and (blank or carried in self._calibrate_next))
+        bed = None
+        try:
+            bed = self._read_bed_id(gcmd)
+        except self.gcode.error as e:
+            if need:
+                gcmd.respond_info(f"[Tool] {e}")
+        if need:
+            why = None
+            if bed not in BEDS:
+                why = f"bed {bed} has no sensor to measure it on"
+            elif not self.calibrated(BEDS[bed]['sensor']):
+                why = f"bed {bed} isn't calibrated (LIMN_SENSOR_CALIBRATE)"
+            if why is None:
+                gcmd.respond_info(f"[Tool] {carried}: {'its tag has no offsets' if blank else 'swapped in'}, "
+                                  f"measuring it on the {BEDS[bed]['sensor'].upper()} first")
+                try:
+                    self._ensure_meshes(gcmd)
+                    dx, dy, dz = self._routine(gcmd, BEDS[bed]).probe_tool(self.profile)
+                except (self.gcode.error,) + ROUTINE_ERRORS as e:
+                    why = f"measuring it failed: {e}"
+                else:
+                    self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={dx} DY={dy} DZ={dz}")
+                    self._calibrate_next.discard(carried)
+                    self._draw_wipe(gcmd, 'test mark')
+            if why is not None:
+                gcmd.respond_info(f"[Tool] {carried} has no offsets on its tag and {why}: paused. "
+                                  f"LIMN_TOOL_CALIBRATE T={carried} (or write them), then RESUME")
+                self._beep("_BUZZ_RFID_ERR")
+                self._pause()
+                return
+        if gcmd.get_int('PRIME', 0):
+            self._draw_wipe(gcmd, 'prime')
+
     # Commands
     def cmd_CONNECT(self, gcmd):
         self.dock.connect()
@@ -959,6 +1172,11 @@ class Limn:
                     holder, tag = scanned
                     tags[str(holder)] = self._tag_entry(tag, 'hand')
                 self._save_vars({'tool_tags': tags})
+            if scanned and self.swap:
+                self._check_swap(*scanned)
+            elif self.swap and self.swap['holder'] in added and not scanned:
+                self.gcode.respond_info(f"[Swap] Holder {self.swap['holder']} has a tool, but it wasn't scanned: "
+                                        f"take it out, hold it to the reader until it beeps, put it back")
             self.leds.manual(manual, now)
             self._wake(now)
             if not self.holder.busy():
@@ -1201,7 +1419,7 @@ class Limn:
         if self._at_reader_now or self.holder.busy() or (self.leds and self.leds.phase in CHANGE_PHASES):
             return None
         now = self.reactor.monotonic()
-        if now < self._awake_until or (self.scan and now - self.scan['seen'] < SCAN_WINDOW):
+        if now < self._awake_until or self.swap or (self.scan and now - self.scan['seen'] < SCAN_WINDOW):
             return SCAN_FAST
         return (self.scan_printing if self._printing() else self.scan_idle) or None
 
@@ -1329,6 +1547,15 @@ class Limn:
                          f"dx={t['dx']} dy={t['dy']} dz={t['dz']}{', scanned by hand' if t.get('by') == 'hand' else ''}"
                          f"{', STALE: rescan' if t.get('stale') else ''}")
         gcmd.respond_info("[Tag] " + "\n".join(lines))
+
+    def _swap_status(self):
+        '''The swap waiting, while the print is paused for it (a cancelled one forgets it).'''
+        if self.swap:
+            stats = self.printer.lookup_object('print_stats', None)
+            state = stats.get_status(self.reactor.monotonic()).get('state') if stats is not None else 'paused'
+            if state not in ('paused', 'printing'):
+                self.swap = None
+        return dict(self.swap) if self.swap else None
 
     def _scan_status(self, eventtime):
         '''The tag held to the reader last, while a holder can still take it.'''
@@ -1580,6 +1807,8 @@ class Limn:
             'drying': self.drying.status(self.clock(), self._printing()) if self.drying else {},
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
             'manual': self.manual,      # the tool docked by hand (its tags entry; also tools['90']), None: none
+            'swap': self._swap_status(),    # TOOL_SWAP waiting for a pen by hand, None: not
+            'wipe': self._wipe_status(),
             'leds': {k: v for k, v in self._led_states.items() if v},     # what the UI and dock LEDs show (leds.py)
         }
 

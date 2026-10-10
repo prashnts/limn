@@ -238,6 +238,9 @@ def load(src, tolerance=0.02) -> Drawing:
     index = 0
     for e in svg.elements():
         if isinstance(e, S.Text):
+            if not (e.text or '').strip():      # the whitespace between <tspan>s: nothing to draw
+                index += 1                      # (its index kept: the shapes after it keep theirs)
+                continue
             fill, _ = paint(e.fill, _opacity(e.values, 'opacity', 'fill-opacity'))
             stroke, _ = paint(e.stroke, _opacity(e.values, 'opacity', 'stroke-opacity'))
             m = e.transform

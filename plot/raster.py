@@ -10,6 +10,10 @@
 #   pens  the colours of the pens there are: each pixel unmixed into how much
 #         of each ink, as inks multiply (absorbance: -log of the colour),
 #         0..1 each, least squares
+#   palette  the picture's own main colours (`colours` of them, median cut over
+#         all the drawing's pictures, the paper-light ones left out): each pixel
+#         goes to the nearest, as dark as it is next to that colour (the colour
+#         itself solid). Each is a layer: give each a pen, any pen
 #
 # Each ink is then sampled on its own grid, turned to its own angle (the
 # screen angles of print: its dots and rows don't line up with the others'
@@ -59,13 +63,60 @@ def _rgb(hexc):
     return np.array([int(hexc[i:i + 2], 16) for i in (1, 3, 5)], float) / 255
 
 
-def inks(spec: RasterSpec, tools=None):
-    '''[(colour, angle)]: the inks the image is separated into, on their screen angles.'''
+PAPER_LIGHT = 0.92          # palette: colours this light are the paper, not an ink
+
+
+def _lum(rgb):
+    return rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+
+
+def palette(images, n, invert=False):
+    '''The main colours of the pictures, '#rrggbb' darkest first: median cut over all of
+    them together (so every picture has the same inks), the paper-light ones left out.'''
+    if not images:
+        return []
+    k = ('palette', n, invert, tuple(id(im) for im in images))
+    first = images[0].cache
+    if k in first:
+        return first[k]
+    px = []
+    for im in images:
+        rgb = 255 - im.rgb if invert else im.rgb
+        flat = rgb.reshape(-1, 3)
+        step = max(1, len(flat) // 200_000)
+        px.append(flat[::step])
+    px = np.vstack(px).astype(np.uint8)
+    q = Image.fromarray(px.reshape(1, -1, 3), 'RGB').quantize(colors=min(256, n + 4), method=Image.Quantize.MEDIANCUT)
+    pal = np.array(q.getpalette()[:3 * (min(256, n + 4))], float).reshape(-1, 3)
+    counts = np.bincount(np.asarray(q).ravel(), minlength=len(pal))
+    keep = [(int(counts[i]), pal[i]) for i in range(len(pal)) if counts[i] and _lum(pal[i] / 255) < PAPER_LIGHT]
+    keep.sort(key=lambda x: -x[0])
+    out = []
+    for _, c in keep:
+        hexc = '#' + ''.join(f'{int(round(v)):02x}' for v in c)
+        if hexc not in out:
+            out.append(hexc)
+        if len(out) == n:
+            break
+    out.sort(key=lambda c: float(_lum(_rgb(c))))
+    first[k] = out
+    for im in images[1:]:
+        im.cache[('palette', n, invert)] = out
+    first[('palette', n, invert)] = out
+    return out
+
+
+def inks(spec: RasterSpec, tools=None, images=None):
+    '''[(colour, angle)]: the inks the image is separated into, on their screen angles.
+    images: the drawing's pictures, for `palette` (their colours).'''
     one = 45 if spec.mode == 'halftone' else 0
     if spec.separate == 'one':
         return [(spec.colour.lower(), one)]
     if spec.separate == 'cmyk':
         return list(CMYK)
+    if spec.separate == 'palette':
+        cols = palette(images, spec.colours, spec.invert) if images else []
+        return [(c, ANGLES[i % len(ANGLES)]) for i, c in enumerate(cols)] or [('#000000', one)]
     colours = []
     for t in (tools or {}).values():
         c = t.color.lower()
@@ -74,9 +125,9 @@ def inks(spec: RasterSpec, tools=None):
     return [(c, ANGLES[i % len(ANGLES)]) for i, c in enumerate(colours)] or [('#000000', one)]
 
 
-def keys(spec: RasterSpec, tools=None):
+def keys(spec: RasterSpec, tools=None, images=None):
     '''The colour keys its lines are painted by: one layer for each ink.'''
-    return [f'stroke {c}' for c, _ in inks(spec, tools)]
+    return [f'stroke {c}' for c, _ in inks(spec, tools, images)]
 
 
 def drawn(obj, d):
@@ -104,13 +155,23 @@ def unmix(rgb, colours):
 
 def planes(img, spec: RasterSpec, tools=None):
     '''{colour: (h, w) 0..1}: how much of each ink, before the paper and gamma.'''
-    ink = inks(spec, tools)
+    ink = inks(spec, tools, [img]) if spec.separate != 'palette' else \
+        [(c, 0) for c in img.cache.get(('palette', spec.colours, spec.invert), [])]
     k = ('planes', spec.separate, tuple(c for c, _ in ink), spec.invert)
     if k in img.cache:
         return img.cache[k]
     rgb = 255 - img.rgb if spec.invert else img.rgb
     if spec.separate == 'one':
         out = {ink[0][0]: 1 - (rgb @ np.array([0.2126, 0.7152, 0.0722], np.float32)) / 255}
+    elif spec.separate == 'palette':
+        # each pixel to the nearest of the palette and the paper; as dark next to its colour
+        cols = [c for c, _ in ink]
+        ref = np.array([_rgb(c) for c in cols] + [[1.0, 1.0, 1.0]], np.float32)
+        f = rgb.astype(np.float32) / 255
+        near = np.argmin(((f[..., None, :] - ref[None, None]) ** 2).sum(axis=3), axis=2)
+        dark = 1 - _lum(f)
+        out = {c: np.where(near == i, np.clip(dark / max(1e-3, 1 - float(_lum(ref[i]))), 0, 1), 0).astype(np.float32)
+               for i, c in enumerate(cols)}
     elif spec.separate == 'cmyk':
         f = rgb.astype(np.float32) / 255
         black = 1 - f.max(axis=2)
@@ -257,7 +318,7 @@ def raster_shapes(d, obj, tools=None, pen_of=None, problems=None):
         return []
     spec, out = obj.raster, []
     for img in d.images:
-        for colour, angle in inks(spec, tools):
+        for colour, angle in inks(spec, tools, d.images):
             pen = pen_of(colour) if pen_of else None
             if pen_of and pen is None:
                 continue                        # skipped or masked: no lines to make

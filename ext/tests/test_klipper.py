@@ -791,5 +791,74 @@ def test_dock_by_hand_stays_over_a_restart_until_dock_clear():
     assert gcode.said[-1] == '[Dock] No tool docked by hand'
 
 
+# A pen swapped into a holder by hand mid-plot (TOOL_SWAP): paused until it is scanned and in
+def pen_pages(pen='mic-01', color='#e8651a', name='Micron Orange', **kw):
+    from limn.tool_holder import encode_pen, encode_color, PAGE_PEN, PAGE_COLOR
+    pages = tag_pages(name=name, **kw)
+    data = encode_pen(pen)
+    pages[PAGE_PEN], pages[PAGE_PEN + 1] = data[:4], data[4:]
+    pages[PAGE_COLOR] = encode_color(color)
+    return pages
+
+class FakePrintStats:
+    def __init__(self, state='printing'):
+        self.state = state
+
+    def get_status(self, eventtime):
+        return {'state': self.state}
+
+def swapping(low=(15, 14, 13, 12, 11), **kw):
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(low=low, **kw)
+    printer.objects['print_stats'] = FakePrintStats()
+    printer.objects['probe'] = object()
+    printer.objects['toolhead'].get_position = lambda: [130.0, 5.0, 3.0, 0.0]
+    gcode.commands['PAUSE_BASE'] = lambda gcmd: None    # Fluidd's client.cfg renamed pause_resume's
+    gcode.commands['RESUME_BASE'] = lambda gcmd: None
+    return ext, printer, mcp, gcode, svv, leds
+
+def test_swap_pauses_then_resumes_once_the_pen_is_in():
+    ext, printer, mcp, gcode, svv, leds = swapping()
+    gcode.run('TOOL_SWAP', T=41, PEN='mic-01', COLOR='e8651a', NAME='Micron 01 Orange')
+    assert gcode.scripts[-1] == 'PAUSE_BASE' and ext.get_status(0)['swap']['holder'] == 41
+    moves = printer.objects['toolhead'].moves
+    assert moves[-1][0][:2] == [None, 100.0] and moves[-2][0][0] == 60.0      # out of the dock, over the paper
+    assert moves[-3][0][2] >= 9                                                   # up first
+    mcp.low.discard(15)                                 # the old pen out
+    wait(printer, 1)
+    nfc = _nfc(ext)
+    nfc.pages = pen_pages(color='#1e7b45', name='Micron Green')     # the wrong one first
+    wait(printer, 1.5)
+    nfc.pages = None
+    mcp.low.add(15)
+    wait(printer, 1)
+    assert any('waits for Micron 01 Orange' in m for m in gcode.said) and 'RESUME_BASE' not in gcode.scripts
+    mcp.low.discard(15)
+    wait(printer, 1)
+    nfc.pages = pen_pages()                             # the right one
+    wait(printer, 1.5)
+    nfc.pages = None
+    mcp.low.add(15)
+    wait(printer, 1)
+    assert 'RESUME_BASE' in gcode.scripts and ext.get_status(0)['swap'] is None
+    assert svv['tool_tags']['41']['pen'] == 'mic-01' and svv['tool_tags']['41']['color'] == '#e8651a'
+
+def test_swap_goes_on_when_the_pen_is_there_already():
+    ext, printer, mcp, gcode, svv, leds = swapping()
+    svv['tool_tags'] = {'41': {'name': 'Micron Orange', 'pen': 'mic-01', 'color': '#e8651a', 'stale': False,
+                              'dx': 1, 'dy': 0, 'dz': 1}}
+    ext._holder_tags = None
+    gcode.run('TOOL_SWAP', T=41, PEN='mic-01', COLOR='e8651a', CALIBRATE=1)
+    assert 'PAUSE_BASE' not in gcode.scripts and ext.swap is None and 41 in ext._calibrate_next
+
+def test_swap_needs_an_empty_carriage_and_is_forgotten_when_cancelled():
+    ext, printer, mcp, gcode, svv, leds = swapping(carried=42, low=(15, 13, 12, 11))
+    assert 'UNDOCK first' in raises(lambda: gcode.run('TOOL_SWAP', T=41, PEN='mic-01'))
+    svv['currently_docked_tool'] = 0
+    gcode.run('TOOL_SWAP', T=41, PEN='mic-01')
+    assert ext.get_status(0)['swap']
+    printer.objects['print_stats'].state = 'cancelled'
+    assert ext.get_status(0)['swap'] is None
+
+
 if __name__ == '__main__':
     run_tests(globals())

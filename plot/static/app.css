@@ -569,6 +569,9 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px s
 .layer .lhead { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .layer .lname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer .lhead .note { margin: 0; }
+.layer .lhead .eye { padding: 0 2px; color: var(--accent); }
+.layer.off .lhead .eye { color: var(--muted); }
+.layer.off .lname, .layer.off .chips { opacity: .45; }
 .swatch.mask { background: var(--paper, #fff); background-image: linear-gradient(45deg, transparent 45%, var(--bad) 45% 55%, transparent 55%); }
 .swatch.skip { background: transparent; border-style: dashed; }
 .chips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
@@ -596,3 +599,31 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px s
 .ask .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .inks div { display: flex; align-items: center; gap: 4px; }
 .pens-pick { flex-wrap: wrap; gap: 6px; }
+
+/* The selected drawing's sections fold */
+details.sect { border-top: 1px solid var(--line); padding: 2px 0; }
+details.sect > summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 6px 0; list-style-position: inside; }
+details.sect details.sect { border-top: none; margin-left: 4px; }
+details.sect details.sect > summary { font-weight: 500; color: var(--muted); }
+.text-style { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 6px; margin: 4px 0; }
+.text-style .row b { font-size: 12px; }
+.text-style .meta { margin: 2px 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grow { flex: 1; }
+.raster .inks { display: flex; flex-direction: column; gap: 3px; }
+.raster .ink { gap: 6px; font-size: 12px; }
+.raster .ink select { flex: 1; min-width: 0; font-size: 12px; }
+.tools .plan-head { margin: 12px 0 4px; font-size: 13px; }
+.tools .plan-pen .assign select[data-pp="route"] { grid-column: 1 / -1; }
+ol.plan { list-style: none; margin: 4px 0 8px; padding: 0; font-size: 12px; max-height: 240px; overflow: auto; }
+ol.plan li { display: flex; gap: 8px; padding: 3px 4px; border-radius: 4px; cursor: pointer; align-items: baseline; }
+ol.plan li:hover { background: var(--bg); }
+ol.plan li .when { color: var(--muted); flex: none; width: 34px; }
+ol.plan li .what { flex: 1; }
+ol.plan li .note { margin: 0; }
+ol.plan li.swap { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+#plan h3 { margin: 8px 0 2px; font-size: 13px; }
+.swap-now { margin: 6px 0; padding: 6px 8px; border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border: 1px solid var(--warn); font-size: 13px; }
+#bed-layer .wipe rect { fill: none; stroke: var(--accent); stroke-width: 0.15; stroke-dasharray: 0.6 0.4; }
+#bed-layer .wipe rect.used { fill: color-mix(in srgb, var(--muted) 35%, transparent); }
+#bed-layer .wipe.off rect { stroke: var(--muted); opacity: .5; }

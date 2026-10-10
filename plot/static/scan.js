@@ -800,10 +800,9 @@ window.scanKey = (e) => {
     return true;
   }
   if (key === 'z') { fitRegion(); return true; }
-  const modes = { r: 'region', h: 'pan', l: 'look', k: 'focus' };
+  const modes = { v: 'region', h: 'pan', l: 'look', f: 'focus' };      // as the Plot tab: V its own tool, H pan
   if (modes[key]) { setSmode(modes[key]); return true; }
-  if (key === 'f') { fit(); return true; }
-  return ['v', 'p', 'd', 'delete', 'backspace', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key);
+  return ['a', 'p', 'm', 'r', 'd', 'k', 'delete', 'backspace', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(key);
 };
 
 setSmode('region');

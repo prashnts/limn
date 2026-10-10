@@ -35,6 +35,8 @@ accel = 3000
 accel_z = 100       # [printer] max_z_accel, for the estimate
 order_time = 0.25   # s spent shortening the travels, per tool (most of it is in the first 0.25)
 toolchange_time = 30    # s, for the estimate
+swap_time = 60          # s for a pen swapped by hand mid-plot (a pen of the plan, T5 on), for the estimate
+prime = false           # prime each pen in the bed's wipe area before it draws (beds.py `wipe`, TOOL_PREPARE)
 
 mesh = ""               # MESH= for _APPLY_OFFSETS with no bed; "" loads the last profile
 park = [42, 123, 7]     # where _APPLY_OFFSETS HOME=1 leaves the head
@@ -44,7 +46,11 @@ fluidd = ""             # Fluidd and its cameras for the browser (LIMN_FLUIDD wi
 holders = [41, 42, 43, 44, 45]          # T0, T1, ..: limn.cfg's T0 is DOCK T=41
 
 # {index}: the first tool's number, {tool.call}: its macro (T0 -> DOCK T=41),
-# {mesh}: " MESH=<mesh>" or "".
+# {mesh}: " MESH=<mesh>" or "". {prepare}: TOOL_PREPARE (ext/limn), once the tool is
+# picked up: a pen whose tag has no offsets (or swapped in to be) is probed on the
+# bed's sensor first, and with `prime` each pen draws a mark in the wipe area.
+# A pen of the plan swapped into a holder mid-plot: UNDOCK and TOOL_SWAP before
+# tool_begin (the plot waits, paused, until it is scanned and in its holder).
 start = """
 LAZY_HOME
 PLOT_START EXT={index}
@@ -52,6 +58,7 @@ PLOT_START EXT={index}
 tool_begin = """
 _CLEAR_OFFSETS HOME=1
 {tool.call}
+{prepare}
 _APPLY_OFFSETS HOME=1{mesh}
 """
 tool_end = ""
@@ -139,6 +146,19 @@ label = "Clear"
 gcode = "BED_MESH_CLEAR"
 group = "Bed mesh"
 title = "No mesh"
+confirm = false
+
+[[macros]]
+label = "Prime"
+gcode = "TOOL_PRIME"
+group = "Wipe"
+title = "The carried pen draws a zigzag in the wipe area"
+
+[[macros]]
+label = "New pad"
+gcode = "LRT_WIPE RESET=1"
+group = "Wipe"
+title = "A fresh pad on the wipe area: the next prime goes in its first slot"
 confirm = false
 
 [[macros]]

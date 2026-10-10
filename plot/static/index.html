@@ -13,7 +13,7 @@
   <div class="ruler-corner"></div>
   <div id="cursor" class="cursor mono"></div>
   <nav id="scan-rail" class="rail scan-only" aria-label="Scan tools">
-    <button data-smode="region" class="on" title="Region (R): drag on the bed to mark what to scan; drag its edges to resize it, inside it to move it">
+    <button data-smode="region" class="on" title="Region (V): drag on the bed to mark what to scan; drag its edges to resize it, inside it to move it">
       <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-dasharray="3 2"/></svg></button>
     <button data-smode="pan" title="Pan (H, or hold Space)">
       <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
@@ -23,7 +23,7 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg></button>
     <hr>
     <button data-sact="region" title="Zoom to the region (Z)"><svg viewBox="0 0 24 24"><path d="M7 7h10v10H7z" stroke-dasharray="3 2"/><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg></button>
-    <button data-sact="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    <button data-sact="fit" title="Fit the bed (0)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
   </nav>
   <nav id="rail" class="rail plot-only" aria-label="Tools">
     <button data-mode="select" class="on" title="Select, move, scale, rotate (V)">
@@ -32,7 +32,7 @@
       <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 1.5L10 19z"/><path d="M15 15h6v6h-6z" stroke-dasharray="2 1.5"/></svg></button>
     <button data-mode="pan" title="Pan (H, or hold Space)">
       <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg></button>
-    <button data-mode="paint" title="Paint with a tool (P)">
+    <button data-mode="paint" title="Paint with a pen (P; Shift+0-9: with T0-T9)">
       <svg viewBox="0 0 24 24"><path d="M14 4l6 6-9 9H5v-6z M12 6l6 6"/></svg></button>
     <button data-mode="mask" title="Mask (M): drag over the selected drawing where it isn't to be drawn, eg. over what is printed there">
       <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 12l8-8M4 20L20 4M12 20l8-8"/></svg></button>
@@ -40,7 +40,7 @@
     <button data-act="undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4 12h11a5 5 0 010 10h-3"/></svg></button>
     <button data-act="redo" title="Redo (Ctrl+Shift+Z)"><svg viewBox="0 0 24 24"><path d="M15 7l5 5-5 5M20 12H9a5 5 0 000 10h3"/></svg></button>
     <hr>
-    <button data-act="fit" title="Fit the bed (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+    <button data-act="fit" title="Fit the bed (0)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
     <button data-act="keys" title="Keyboard shortcuts (?)"><svg viewBox="0 0 24 24"><path d="M3 7h18v11H3z"/><path d="M7 11h1M11 11h1M15 11h1M7 14h10"/></svg></button>
   </nav>
   <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
@@ -58,7 +58,7 @@
   </svg>
   <div id="hint" class="hint"></div>
   <div class="zoom">
-    <button id="zoom-fit" title="Fit the bed (F)">Fit</button>
+    <button id="zoom-fit" title="Fit the bed (0)">Fit</button>
     <button id="zoom-in" title="Zoom in (+)">+</button>
     <button id="zoom-out" title="Zoom out (−)">−</button>
   </div>
@@ -118,9 +118,14 @@
         <button id="group-objects" class="small" hidden title="Group the drawings picked (Shift-click): they move, hide and pick together (Ctrl+G)">Group</button>
         <button id="ungroup-objects" class="small" hidden title="Ungroup the selected drawing's group (Ctrl+Shift+G)">Ungroup</button></div>
     </section>
-    <section id="unders-section" class="plot-only" data-panel="unders" hidden>
-      <h2 title="Scans pinned with 'Under the plot' (Scan tab's viewer): shown under the drawings, where they were taken">Scans under the plot</h2>
-      <ul id="unders" class="list"></ul>
+    <section class="plot-only" data-panel="layers">
+      <h2 title="Each pen's layer over every drawing, and the scans under the plot: the eye hides one from view (it still plots)">Layers</h2>
+      <ul id="layers-all" class="list"></ul>
+      <div class="row"><button id="layers-show" class="small" hidden title="Show every layer again">Show all</button></div>
+      <div id="unders-section" hidden>
+        <h3 title="Scans pinned with 'Under the plot' (Scan tab's viewer): shown under the drawings, where they were taken">Scans under the plot</h3>
+        <ul id="unders" class="list"></ul>
+      </div>
     </section>
     <section class="plot-only" data-panel="drawing">
       <h2 title="The selected drawing: where it is, its colours and tools, its texts">Selected drawing</h2>
@@ -169,6 +174,8 @@
     <section class="plot-only" data-panel="output">
       <h2 title="What the plot will take, what may go wrong, and sending it to Klipper">Output</h2>
       <div id="stats" class="stats"></div>
+      <div id="swap-now" class="swap-now" hidden></div>
+      <div id="plan"></div>
       <ul id="problems" class="problems"></ul>
       <div class="buttons">
         <a id="download" class="button" href="/api/gcode" title="Save the G-code to this computer">Download</a>

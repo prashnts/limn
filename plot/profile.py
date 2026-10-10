@@ -98,6 +98,8 @@ class Machine(BaseModel):
     accel_z: float = 100
     order_time: float = 0.25
     toolchange_time: float = 30
+    swap_time: float = 60           # s for a pen swapped by hand mid-plot, for the estimate
+    prime: bool = False             # prime each pen in the bed's wipe area first ({prepare} in tool_begin)
     mesh: str = ''
     park: tuple[float, float, float] = (42, 123, 7)
     moonraker: str = 'http://localhost:7125'
@@ -167,6 +169,21 @@ def bed_papers(machine) -> dict[str, Rect]:
     return out
 
 
+def bed_wipe(machine):
+    '''The wipe area of the bed placed (beds.py `wipe`): {rect, enabled, slots}, None: it has none.
+    Pens are primed there, and the test marks of pens probed mid-plot go there (ext/limn).'''
+    if not machine.beds or not Path(machine.beds).exists() or not machine.bed_id:
+        return None
+    spec = importlib.util.spec_from_file_location('limn_plot_beds', machine.beds)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    w = (getattr(module, 'BEDS', {}).get(machine.bed_id) or {}).get('wipe')
+    if not w:
+        return None
+    (x, y), (sw, sh) = w['origin'], w['size']
+    return {'rect': [x, y, x + sw, y + sh], 'enabled': bool(w.get('enabled')), 'nx': w['nx'], 'ny': w['ny']}
+
+
 def load_tools(name='tools') -> dict[str, Tool]:
     path = _path(name)
     data = tomllib.loads(path.read_text())
@@ -183,6 +200,63 @@ def load_pens(name=None) -> dict[str, dict]:
     '''The pen library: key -> {name, colors, and tool keys}.'''
     path = _path(name) if name else PENS
     return tomllib.loads(path.read_text()) if path.exists() else {}
+
+
+def _redmean(a, b):
+    p, q = (tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in (a, b))
+    r = (p[0] + q[0]) / 2
+    d = [x - y for x, y in zip(p, q)]
+    return ((2 + r / 256) * d[0] ** 2 + 4 * d[1] ** 2 + (2 + (255 - r) / 256) * d[2] ** 2) ** 0.5
+
+
+SAME_INK = 40       # redmean under which a tag's colour is the plan pen's (the library's colours are exact)
+
+
+def holder_tools(tools, holders):
+    '''The tools in the holders: T0 .. T<n-1>, holder -> tool id.'''
+    return {h: f'T{i}' for i, h in enumerate(holders) if f'T{i}' in tools}
+
+
+def matching(spec, tools, holders):
+    '''The tool in a holder that is the plan pen `spec` (job.PlanPen): its tag names the same
+    pen of the library in the same colour. None: none is.'''
+    if not spec.pen:
+        return None
+    for tid in holder_tools(tools, holders).values():
+        t = tools[tid]
+        if t.draws and t.source in ('tag', 'stale') and t.pen == spec.pen and _redmean(t.color, spec.color) < SAME_INK:
+            return tid
+    return None
+
+
+def plan_pens(tools, pens, plan, holders) -> dict[str, Tool]:
+    '''The job's own pens (job.pens, T5 on) as tools. One the user gave a tool to draw it
+    (`use`), or that a holder has (same pen, same colour), is that tool as it is (alias).
+    The rest are swapped into a holder by hand mid-plot: `holder`, or one emit picks (swap
+    None: its pen done first). They draw as their pen of the library, in their colour.'''
+    out = dict(tools)
+    real = holder_tools(tools, holders)
+    for pid, spec in plan.items():
+        if pid in real.values():
+            raise ValueError(f'{pid} is a holder\'s tool: plan pens go after them (T{len(holders)} on)')
+        alias = spec.use if spec.use in real.values() else matching(spec, tools, holders)
+        if alias:
+            t = tools[alias]
+            out[pid] = type(t)(**{**t.model_dump(), 'id': pid, 'alias': alias, 'source': 'plan'})
+            continue
+        pen = pens.get(spec.pen or '') or {}
+        lib = {k: v for k, v in pen.items() if k not in ('name', 'short', 'colors', 'dry')}
+        kind = lib.pop('kind', 'pen')
+        if spec.width is not None:
+            lib['width'] = spec.width
+        colours = {v.lower(): k for k, v in (pen.get('colors') or {}).items()}
+        name = spec.name or ' '.join(x for x in (pen.get('short') or pen.get('name') or 'Pen',
+                                                  colours.get(spec.color.lower(), '').title()) if x)
+        swap = spec.holder if spec.holder in real else None
+        out[pid] = resolve(kind)(id=pid, kind=kind, **lib, name=name, color=spec.color.lower(), pen=spec.pen,
+                                 holder=swap, swap=swap, calibrate=spec.calibrate, source='plan',
+                                 macro=tools[real[swap]].call if swap else None)
+    return out
 
 
 def with_tags(tools, pens, tags, holders) -> dict[str, Tool]:

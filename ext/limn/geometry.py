@@ -27,6 +27,29 @@ def gen_mark_grid(*, nx, ny, xrange, yrange, **_):
     return [(round(float(x), 2), round(float(y), 2))
             for y in np.linspace(*yrange, ny) for x in np.linspace(*xrange, nx)]
 
+def wipe_slots(*, origin, size, nx, ny, **_):
+    '''The wipe area's slots, in the order they are used: ((x0, y0), (x1, y1)) each, row by
+    row along Y from its origin.'''
+    (ox, oy), (w, h) = origin, size
+    sw, sh = w / nx, h / ny
+    return [((round(ox + i * sw, 2), round(oy + j * sh, 2)), (round(ox + (i + 1) * sw, 2), round(oy + (j + 1) * sh, 2)))
+            for j in range(ny) for i in range(nx)]
+
+def prime_strokes(slot, margin=1.0, turns=3):
+    '''A pen primed in a slot of the wipe area: one zigzag across it, `turns` times there
+    and back, inside `margin`.'''
+    (x0, y0), (x1, y1) = slot
+    x0, y0, x1, y1 = x0 + margin, y0 + margin, x1 - margin, y1 - margin
+    n = 2 * turns
+    return [[(round(x0 if k % 2 == 0 else x1, 2), round(y0 + (y1 - y0) * k / n, 2)) for k in range(n + 1)]]
+
+def plus_strokes(slot, margin=1.0):
+    '''A test mark in a slot of the wipe area: a + in its middle, as wide as it leaves.'''
+    (x0, y0), (x1, y1) = slot
+    cx, cy = round((x0 + x1) / 2, 2), round((y0 + y1) / 2, 2)
+    arm = round(min(x1 - x0, y1 - y0) / 2 - margin, 2)
+    return [[(cx - arm, cy), (cx + arm, cy)], [(cx, cy - arm), (cx, cy + arm)]]
+
 def mark_strokes(at, to, arm):
     '''One test mark, two strokes through their corner: └ at `at`, which with the
     previous tool's ┐ there makes a +, and ┐ at `to`, for the next tool.'''

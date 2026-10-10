@@ -18,7 +18,7 @@ BARE = re.compile(r'[A-Za-z0-9_-]+')
 HEX = re.compile(r'#[0-9a-fA-F]{6}')
 OWN = ('short', 'name', 'kind', 'dry')     # the library's own keys go first, then the tool's
 NOT_TUNABLE = {'id', 'kind', 'name', 'color', 'macro', 'begin', 'end', 'pen', 'holder', 'source',
-               'angle', 'bleed'}     # how it draws (tools.DRAW): the job's, not the pen's
+               'alias', 'swap', 'calibrate', 'angle', 'bleed'}     # how it draws (tools.DRAW): the job's, not the pen's
 
 
 def kinds():

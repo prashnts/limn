@@ -57,6 +57,15 @@ BEDS = {
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
         'marks': {'nx': 5, 'ny': 3, 'xrange': (15, 80), 'yrange': (120, 150), 'arm': 4},
+        # The wipe area (marks.py): off the paper towards the dock, where a pen is primed (a
+        # short zigzag, TOOL_PREPARE PRIME=1 and TOOL_PRIME) before it plots, and where the test
+        # mark of a pen probed mid-plot goes (the paper has the plot on it). Slots `nx` across X
+        # and `ny` along Y, used one after another and remembered per placement of the bed like
+        # the test marks (lrt_wipe); full, LRT_WIPE RESET=1 once it has a fresh pad. Drawn as the
+        # marks are: the pen at Z1 with the lrt_paper mesh, which holds its edge's heights past
+        # X93: the pad has to sit level with the paper's edge. A placeholder (2026-10-10), not
+        # measured on the plotter yet: `enabled` once it is.
+        'wipe': {'enabled': False, 'origin': (96, 40), 'size': (12, 120), 'nx': 2, 'ny': 15},
         'fsr': {
             'z_park': PANEL_ZHOME,
             # origin: outer corner of cell (row 0, col 0); col_dir / row_dir:

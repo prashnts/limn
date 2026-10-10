@@ -27,9 +27,9 @@ from . import pens as pen_library
 from . import profile, svg
 from .emit import load, plot
 from .fonts import HERSHEY, FontStore
-from .job import Group, Job, Obj, Placement, ShapePaint
+from .job import Group, Job, Obj, PlanPen, Placement, ShapePaint
 from .preview import parse
-from .profile import bed_papers, load_pens, reach
+from .profile import bed_papers, bed_wipe, load_pens, reach
 from .slicer import Cache, default_groups, fillable, image_keys, image_shapes, text_shapes
 from .tools import DRAW, Tool
 
@@ -161,6 +161,7 @@ class Workspace:
         draw = {k: Tool.model_fields[k].default for k in DRAW if k in Tool.model_fields}
         draw['plunge_feed'] = None
         return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine), 'draw': draw,
+                'wipe': bed_wipe(machine),
                 'tools': {k: {**t.model_dump(), 'spacing': t.spacing, 'draws': t.draws} for k, t in tools.items()},
                 'pens': pens, 'kinds': pen_library.kinds(), 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
@@ -198,6 +199,7 @@ class Workspace:
                 bounds[o.id] = [*c[:, :2].min(axis=0).tolist(), *c[:, :2].max(axis=0).tolist()]
         self.unsafe = result.unsafe
         return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
+                'plan': result.plan,
                 'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
                 'small': {o.id: sliced[o.id].small for o in self.job.objects if sliced[o.id].small},
                 'ms': round((time.monotonic() - t0) * 1000)}
@@ -393,9 +395,22 @@ def create_app(data=None):
     @app.patch('/api/job')
     def patch_job(body: dict = Body(...)):
         '''{machine_overrides: {key: value|null}, tool_overrides: {tool: {key: value|null}},
-        draw: {key: value|null} (every tool, tools.DRAW), tool_order}'''
+        draw: {key: value|null} (every tool, tools.DRAW), tool_order, pens: {T5: plan pen|null}}'''
         with ws.lock:
             job = ws.job
+            plan = dict(job.pens)
+            machine, _ = load(job)
+            for pid, spec in (body.get('pens') or {}).items():
+                m = re.fullmatch(r'T(\d+)', pid or '')
+                if not m or int(m.group(1)) < len(machine.holders):
+                    raise HTTPException(400, f'{pid!r}: plan pens are T{len(machine.holders)} on (after the holders\' tools)')
+                if spec is None:
+                    plan.pop(pid, None)
+                    continue
+                try:
+                    plan[pid] = PlanPen(**{**(plan[pid].model_dump() if pid in plan else {}), **spec})
+                except ValueError as e:
+                    raise HTTPException(400, f'{pid}: {e}')
             mo, draw = dict(job.machine_overrides), dict(job.draw)
             for cur, key in ((mo, 'machine_overrides'), (draw, 'draw')):
                 for k, v in (body.get(key) or {}).items():
@@ -412,7 +427,7 @@ def create_app(data=None):
                     else:
                         cur[k] = v
             new = job.model_copy(update={'machine_overrides': mo, 'draw': draw, 'tool_overrides': {k: v for k, v in to.items() if v},
-                                         'tool_order': body.get('tool_order', job.tool_order)})
+                                         'tool_order': body.get('tool_order', job.tool_order), 'pens': plan})
             new._root = ws.data
             try:
                 load(new, ws.tags)
@@ -491,7 +506,8 @@ def create_app(data=None):
                 'progress': (st.get('virtual_sdcard') or {}).get('progress'),
                 'homed': (st.get('toolhead') or {}).get('homed_axes'),
                 'bed': limn.get('bed'), 'occupied': holder.get('occupied'), 'tag': limn.get('tag'),
-                'scan': limn.get('scan'), 'drying': limn.get('drying') or {}}
+                'scan': limn.get('scan'), 'drying': limn.get('drying') or {},
+                'swap': limn.get('swap'), 'wipe': limn.get('wipe'), 'paused': ps.get('state') == 'paused'}
 
     def run_on_printer(what, script):
         '''A script that moves the machine for a while (a scan, a tag write), in the

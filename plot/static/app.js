@@ -33,6 +33,14 @@ function setHidden(id, hide) {
   store.set('hiddenObjs', [...hiddenObjs]);
   renderObjectList(); renderObjects();
 }
+// Pens' layers not shown (T0.., mask, skip): on the canvas and in the Paths view. They still plot
+const hiddenLayers = new Set(store.get('hiddenLayers', []));
+function setLayerHidden(to, hide) {
+  hide ? hiddenLayers.add(to) : hiddenLayers.delete(to);
+  store.set('hiddenLayers', [...hiddenLayers]);
+  renderObjects(); renderLayers(); renderObjectPanel();
+  if (preview) scrubTo(+$('#scrubber').value);
+}
 
 // --- server ---------------------------------------------------------------
 async function api(method, url, body) {
@@ -705,9 +713,14 @@ function svgEl(tag, attrs = {}, parent) {
 const rect = (r, cls, parent) => svgEl('rect', { x: r[0], y: r[1], width: r[2] - r[0], height: r[3] - r[1], class: cls }, parent);
 
 let bedSig = null;
+// The wipe area's slots used so far (Klipper's, for this bed), -1: not known
+function wipeUsed() {
+  const w = printer && printer.wipe;
+  return w && w.bed === S.machine.bed_id ? w.next : -1;
+}
 function renderBed() {
   const m = S.machine;
-  const sig = JSON.stringify([m.bed, m.bed_art, m.draw_area, m.zones, $('#show-art').checked]);
+  const sig = JSON.stringify([m.bed, m.bed_art, m.draw_area, m.zones, $('#show-art').checked, S.wipe, wipeUsed()]);
   if (sig === bedSig) return;
   bedSig = sig;
   const L = $('#bed-layer');
@@ -722,6 +735,17 @@ function renderBed() {
     svgEl('title', {}, r).textContent = z.name + (z.z === null ? ' (keep out)' : ` (top z ${z.z})`);
   }
   rect(m.draw_area, 'draw-area', L);
+  const w = S.wipe;
+  if (w) {                                  // where pens are primed (and the test marks of pens probed mid-plot)
+    const [x0, y0, x1, y1] = w.rect, used = wipeUsed(), g = svgEl('g', { class: 'wipe' + (w.enabled ? '' : ' off') }, L);
+    const sw = (x1 - x0) / w.nx, sh = (y1 - y0) / w.ny;
+    for (let j = 0; j < w.ny; j++) for (let i = 0; i < w.nx; i++) {
+      const k = j * w.nx + i;
+      svgEl('rect', { x: x0 + i * sw, y: y0 + j * sh, width: sw, height: sh, class: k < used ? 'used' : 'free' }, g);
+    }
+    svgEl('title', {}, g).textContent = `Wipe area: pens are primed here${w.enabled ? '' : ' (switched off in beds.py: not measured yet)'}`
+      + (used >= 0 ? `, ${used} of ${w.nx * w.ny} slots used` : '');
+  }
 }
 
 // The set (shapes grouped by hand) a shape is in: the later one, when in two
@@ -806,6 +830,7 @@ async function drawObjects() {
   drawHandles();
   drawRulers();
   if (sel && geo[sel] && geo[sel].data !== had) renderObjectPanel();      // its layers count shapes
+  renderLayers();
 }
 
 // Shapes too small or dense for their tool's line (the slice says which): outlined in
@@ -862,6 +887,13 @@ function styleObject(o, g, data) {
         if (fill === 'var(--paper)') { stroke = stroke === 'none' ? 'var(--muted)' : stroke; }
       }
     }
+    if (view !== 'paths' && hiddenLayers.size) {           // its parts on a hidden pen's layer: not shown
+      const fg = effGroup(o, sh, 'fill'), sg = sh.line ? fg : effGroup(o, sh, 'stroke');
+      const off = (g) => !!g && hiddenLayers.has(target(g));
+      if (off(sg) || (sh.line && off(fg))) stroke = 'none';
+      if (!sh.line && off(fg)) fill = 'none';
+    }
+    p.style.display = stroke === 'none' && fill === 'none' && view !== 'paths' ? 'none' : '';
     p.setAttribute('stroke', stroke);
     p.setAttribute('stroke-width', sw);
     p.setAttribute('fill', fill);
@@ -907,8 +939,8 @@ function scrubTo(line) {
   if (!preview) return;
   const travel = $('#show-travel').checked;
   let last = -1;
-  preview.runs.forEach(([k, , l], i) => {
-    const on = l <= line && (k !== 0 || travel);
+  preview.runs.forEach(([k, t, l], i) => {
+    const on = l <= line && (k !== 0 || travel) && !(k !== 0 && hiddenLayers.has(preview.tools[t]));
     runEls[i].style.display = on ? '' : 'none';
     if (l <= line) last = i;
   });
@@ -1022,6 +1054,35 @@ function renderObjectList() {
   $('#group-objects').textContent = `Group ${multi.size}`;
   $('#ungroup-objects').hidden = !(o && o.group);
 }
+// Every pen's layer over all the drawings, with an eye: hidden ones aren't shown on the canvas nor in
+// the paths (they still plot). The scans pinned under the plot are listed under them (scan.js).
+function renderLayers() {
+  const count = {};
+  for (const o of S.job.objects) for (const [to, ids] of Object.entries(layerShapes(o))) count[to] = (count[to] || 0) + ids.length;
+  const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mask', 'skip']
+    .filter((to) => count[to] || hiddenLayers.has(to));
+  const row = (to) => {
+    const t = S.tools[to], off = hiddenLayers.has(to);
+    const sw = t ? `<span class="swatch dot" style="background:${esc(t.color)}"></span>` : `<span class="swatch ${to}"></span>`;
+    const via = t && t.source === 'plan' ? ` · ${t.alias ? `drawn by ${esc(t.alias)}` : 'swapped in'}` : '';
+    return `<li data-layer="${esc(to)}" class="${off ? 'hidden' : ''}">
+      <button class="icon eye" data-act="eye" title="${off ? 'Hidden: show it' : 'Hide it from the canvas and the paths (it still plots)'}">${off ? '◌' : '◉'}</button>${sw}
+      <span class="name">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}${via}</span>` : esc(LAYER_NAMES[to])}</span>
+      <span class="note">${count[to] || 0}</span></li>`;
+  };
+  fill($('#layers-all'), tos.map(row).join('') || '<li class="note">Nothing on the bed yet.</li>');
+  $('#layers-show').hidden = !hiddenLayers.size;
+}
+$('#layers-all').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-layer]');
+  if (li && e.target.dataset.act === 'eye') setLayerHidden(li.dataset.layer, !hiddenLayers.has(li.dataset.layer));
+});
+$('#layers-show').addEventListener('click', () => {
+  hiddenLayers.clear(); store.set('hiddenLayers', []);
+  renderObjects(); renderLayers(); renderObjectPanel();
+  if (preview) scrubTo(+$('#scrubber').value);
+});
+
 // Drawings grouped: the same `group` on each (Shift-click picks them, Ctrl+G)
 async function groupDrawings(ids, name) {
   setState(await api('PATCH', '/api/objects', Object.fromEntries(ids.map((id) => [id, { group: name }]))));
@@ -1132,8 +1193,9 @@ function layersHtml(o) {
     const cs = chips.filter((c) => c.to === to), t = S.tools[to], key = `${o.id}|${to}`;
     const all = openLayers.has(key), n = (shapes[to] || []).length;
     const sw = t ? `<span class="swatch" style="background:${esc(t.color)}"></span>` : `<span class="swatch ${to}"></span>`;
-    return `<div class="layer${cs.length || n ? '' : ' empty'}" data-layer="${esc(to)}">
-      <div class="lhead">${sw}<span class="lname">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}</span>` : esc(LAYER_NAMES[to] || to)}</span>
+    const off = hiddenLayers.has(to);
+    return `<div class="layer${cs.length || n ? '' : ' empty'}${off ? ' off' : ''}" data-layer="${esc(to)}">
+      <div class="lhead"><button class="icon eye" data-act="layer-eye" title="${off ? 'Hidden: show it' : 'Hide it, from the canvas and the paths (it still plots)'}">${off ? '◌' : '◉'}</button>${sw}<span class="lname">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}</span>` : esc(LAYER_NAMES[to] || to)}</span>
         ${n ? `<button class="icon" data-act="pick-layer" title="Pick its ${n} shape${n > 1 ? 's' : ''} (the shapes tool, A)">${n} ⬚</button>` : '<span class="note">drop here</span>'}</div>
       ${cs.length ? `<div class="chips">${(all ? cs : cs.slice(0, CHIPS)).map(chip).join('')}${cs.length > CHIPS
         ? `<button class="icon" data-act="all-chips" title="${all ? 'Fewer' : 'Every colour of it'}">${all ? '−' : `+${cs.length - CHIPS}`}</button>` : ''}</div>` : ''}
@@ -1266,56 +1328,99 @@ async function ungroupPicked(o) {
   if (st) await patchObj(o.id, { sets: o.sets.filter((x) => x !== st) });
 }
 
+// A section of the selected drawing's panel that folds, and stays as it was left (per kind, not per drawing)
+function sect(key, title, inner, { n, open = false, help = '' } = {}) {
+  const on = store.get('sect:' + key, open);
+  return `<details class="sect" data-sect="${key}"${on ? ' open' : ''}><summary title="${esc(help)}">${esc(title)}${n != null ? ` <span class="note">${n}</span>` : ''}</summary>${inner}</details>`;
+}
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (d.matches && d.matches('details[data-sect]')) store.set('sect:' + d.dataset.sect, d.open);
+}, true);
+
+// Texts by their style (font, weight, size, colour): one row of settings for each, not one per text.
+// Each text apart only under 'Each text'.
+const TEXT_MODES = [['auto', 'auto'], ['source', 'source font'], ['line', 'line font'], ['skip', 'skip']];
+function textStyles(I) {
+  const out = new Map();
+  for (const t of I.texts) {
+    const k = [t.family || '', t.weight || '', t.style || '', num(t.size, 1), t.colour || ''].join('|');
+    if (!out.has(k)) out.set(k, { key: k, family: t.family, weight: t.weight, style: t.style, size: t.size, colour: t.colour, runs: [] });
+    out.get(k).runs.push(t);
+  }
+  return [...out.values()];
+}
+function textOpts(spec, attr) {
+  const lineFonts = S.line_fonts, srcFonts = S.fonts.filter((f) => f.kind === 'outline');
+  const v = (k) => (spec[k] === undefined ? '~' : spec[k] ?? '');
+  const mixed = (k) => (spec[k] === undefined ? '<option value="~" selected>mixed</option>' : '');
+  return `<select ${attr} data-f="mode">${mixed('mode')}${TEXT_MODES.map(([x, l]) => opt(x, v('mode'), l)).join('')}</select>
+    <select ${attr} data-f="line_font" title="Line font">${mixed('line_font')}${lineFonts.map((f) => opt(f, v('line_font'))).join('')}</select>
+    <select ${attr} data-f="fit" title="Line font size">${mixed('fit')}${[['cap', 'cap height'], ['width', 'cap + width']].map(([x, l]) => opt(x, v('fit'), l)).join('')}</select>
+    <select ${attr} data-f="font" title="Source font">${mixed('font')}${opt('', v('font'), 'by family')}${srcFonts.map((f) => opt(f.file, v('font'), `${f.family} ${f.style}`)).join('')}</select>`;
+}
+function textsHtml(o, I) {
+  if (!I.texts.length) return '';
+  const styles = textStyles(I);
+  const specOf = (t) => t.spec;
+  const common = (runs) => Object.fromEntries(['mode', 'line_font', 'fit', 'font'].map((k) => {
+    const vs = runs.map((t) => specOf(t)[k] ?? '');
+    return [k, vs.every((x) => x === vs[0]) ? vs[0] : undefined];
+  }));
+  const rows = styles.map((st, i) => `<div class="text-style" data-style="${i}">
+      <div class="row"><span class="swatch" style="background:${esc(st.colour || '#000')}"></span>
+        <b class="grow">${esc((st.family || 'no font-family').split(',')[0])}</b><span class="note">${num(st.size, 1)} mm · ${st.runs.length}</span></div>
+      <div class="meta note" title="${esc(st.runs.map((t) => t.text).join(' · '))}">${esc(st.runs.slice(0, 6).map((t) => `“${t.text.trim().slice(0, 18)}”`).join(' '))}${st.runs.length > 6 ? ` +${st.runs.length - 6}` : ''}</div>
+      <div class="opts">${textOpts(common(st.runs), 'data-ts="1"')}</div></div>`).join('');
+  const each = I.texts.map((t) => `<div class="text-run" data-i="${t.index}">
+      <div class="row"><span class="swatch" style="background:${esc(t.colour || '#000')}"></span><b>“${esc(t.text.trim().slice(0, 28))}”</b>
+        <span class="note">${num(t.size, 1)} mm${t.found ? '' : ' · no source font'}</span></div>
+      <div class="opts">${textOpts(t.spec, '')}</div></div>`).join('');
+  const found = I.texts.filter((t) => t.found).length;
+  return sect('texts', 'Texts', `<p class="note">${styles.length} style${styles.length > 1 ? 's' : ''}; ${found ? `${found} in an uploaded font` : 'no source font uploaded: line fonts (Fonts panel)'}</p>${rows}
+    ${sect('texts-each', 'Each text', each, { n: I.texts.length })}`, { n: I.texts.length, help: 'How its texts are drawn: by style, or each apart' });
+}
+
 function renderObjectPanel() {
   const P = $('#object-panel');
   const o = sel && obj(sel);
   if (!o) { P.hidden = true; return; }
   P.hidden = false;
   const I = info(o.id);
-  const lineFonts = S.line_fonts;
-  const srcFonts = S.fonts.filter((f) => f.kind === 'outline');
-  const texts = I.texts.map((t) => {
-    const s = t.spec;
-    return `<div class="text-run" data-i="${t.index}">
-      <div class="row"><span class="swatch" style="background:${esc(t.colour || '#000')}"></span>
-        <b>“${esc(t.text.slice(0, 28))}”</b></div>
-      <div class="meta">${esc(t.family || 'no font-family')} · ${num(t.size, 1)} mm · ${t.found ? 'source: ' + esc(t.found) : 'no source font uploaded'}</div>
-      <div class="opts">
-        <select data-f="mode">${[['auto', 'auto'], ['source', 'source font'], ['line', 'line font'], ['skip', 'skip']].map(([v, l]) => opt(v, s.mode, l)).join('')}</select>
-        <select data-f="line_font" title="Line font">${lineFonts.map((f) => opt(f, s.line_font)).join('')}</select>
-        <select data-f="fit" title="Line font size">${[['cap', 'cap height'], ['width', 'cap + width']].map(([v, l]) => opt(v, s.fit, l)).join('')}</select>
-        <select data-f="font" title="Source font">${opt('', s.font || '', 'by family')}${srcFonts.map((f) => opt(f.file, s.font || '', `${f.family} ${f.style}`)).join('')}</select>
-      </div></div>`;
-  }).join('');
   const painted = Object.keys(o.shapes).length;
+  const masks = o.masks.length ? `<ul class="list masks">${o.masks.map((m, i) => `<li data-m="${i}" class="${maskSel && maskSel.id === o.id && maskSel.i === i ? 'on' : ''}">
+        <span class="name">${num(Math.max(...m.map((p) => p[0])) * o.scale - Math.min(...m.map((p) => p[0])) * o.scale, 1)} × ${num(Math.max(...m.map((p) => p[1])) * o.scale - Math.min(...m.map((p) => p[1])) * o.scale, 1)} mm</span>
+        <button class="icon" data-unmask="${i}" title="Draw there again">✕</button></li>`).join('')}</ul>
+        <div class="row"><button data-act="unmask-all">Clear all</button></div>`
+    : `<p class="note">Nothing of it is drawn in a masked region, eg. over what is on the paper already. <button data-act="mask-tool" title="M">Mask tool</button></p>`;
   fill(P, `
     <h3 class="objname">${esc(o.id)}</h3>
     <div class="form">
       <label for="f-x">X</label><div class="row"><input id="f-x" type="number" step="0.5" value="${num(o.placement.x)}"> <label for="f-y">Y</label><input id="f-y" type="number" step="0.5" value="${num(o.placement.y)}"></div>
       <label for="f-r">Rotate</label><div class="row"><input id="f-r" type="number" step="15" value="${num(o.placement.rotate)}"> <button data-act="rot90" title="R">⟲ 90°</button></div>
-      <label for="f-s">Scale %</label><div class="row"><input id="f-s" type="number" step="1" min="1" value="${num(o.scale * 100, 1)}"> <button data-act="fit" title="Fit to the draw area">Fit</button> <button data-act="center">Centre</button></div>
+      <label for="f-s">Scale %</label><div class="row"><input id="f-s" type="number" step="1" min="1" value="${num(o.scale * 100, 1)}"> <button data-act="fit" title="Fit to the draw area">Fit</button> <button data-act="center" title="C">Centre</button></div>
       <label>Size</label><div>${num(I.size[0], 1)} × ${num(I.size[1], 1)} mm</div>
       <label></label><label class="check"><input type="checkbox" id="f-occ"${o.occlude ? ' checked' : ''}> what is on top hides what is under</label>
     </div>
-    <h3 title="Each pen and what it draws of this drawing: its colours, alike ones as one chip (outlines a ring, fills a dot). Drag a chip onto another pen, or click it for its settings">Layers</h3>
-    <div class="layers">${layersHtml(o)}</div>
+    ${sect('layers', 'Layers', `<div class="layers">${layersHtml(o)}</div>`, { open: true,
+      help: 'Each pen and what it draws of this drawing: its colours, alike ones as one chip (outlines a ring, fills a dot). Drag a chip onto another pen, or click it for its settings; the eye hides a pen from view' })}
     ${pickedHtml(o)}
     ${setsHtml(o)}
-    ${I.texts.length ? `<h3>Texts (${I.texts.length})</h3>${texts}` : ''}
     ${imagesHtml(o, I)}
-    <h3>Masked regions${o.masks.length ? ` (${o.masks.length})` : ''}</h3>
-    ${o.masks.length ? `<ul class="list masks">${o.masks.map((m, i) => `<li data-m="${i}" class="${maskSel && maskSel.id === o.id && maskSel.i === i ? 'on' : ''}">
-        <span class="name">${num(Math.max(...m.map((p) => p[0])) * o.scale - Math.min(...m.map((p) => p[0])) * o.scale, 1)} × ${num(Math.max(...m.map((p) => p[1])) * o.scale - Math.min(...m.map((p) => p[1])) * o.scale, 1)} mm</span>
-        <button class="icon" data-unmask="${i}" title="Draw there again">✕</button></li>`).join('')}</ul>
-        <div class="row"><button data-act="unmask-all">Clear all</button></div>`
-      : `<p class="note">Nothing of it is drawn in a masked region, eg. over what is on the paper already. <button data-act="mask-tool" title="M">Mask tool</button></p>`}
-    ${painted ? `<h3>Painted shapes</h3><div class="row">${painted} shape${painted > 1 ? 's' : ''} painted apart from their colour <button data-act="unpaint">Clear</button></div>` : ''}
+    ${textsHtml(o, I)}
+    ${sect('masks', 'Masked regions', masks, { n: o.masks.length || null })}
+    ${painted ? `<div class="row note">${painted} shape${painted > 1 ? 's' : ''} painted apart from their colour <button data-act="unpaint">Clear</button></div>` : ''}
     ${Object.keys(I.skipped || {}).length ? `<p class="note">Not drawn: ${esc(Object.entries(I.skipped).map(([k, v]) => `${v} ${k}`).join(', '))}</p>` : ''}`);
 }
 
 async function patchObj(id, body) { setState(await api('PATCH', `/api/objects/${id}`, body)); }
 
-// Its pictures (<image>s): left out, or made into lines in one colour, drawn by that colour's layer
+// Its pictures (<image>s): left out, or made into lines. Each ink is a colour layer: its pen is picked here
+// (or by dragging its chip in Layers). Palette: the picture's own main colours, a pen for each
+const SEPARATIONS = [['one', 'One colour', 'Its darkness, in one colour'],
+  ['palette', 'Its colours', 'The picture\'s own main colours, each drawn by the pen you give it'],
+  ['pens', 'Onto the pens', 'Each pixel unmixed into the colours of the pens ticked, each on its own screen angle'],
+  ['cmyk', 'CMYK', 'Cyan, magenta, yellow and black: give each a pen']];
 function imagesHtml(o, I) {
   const ims = I.images || [];
   if (!ims.length) return '';
@@ -1325,24 +1430,28 @@ function imagesHtml(o, I) {
   const auto = (f) => [...new Set(pensUsed.map(f))].map((v) => num(v)).join(' / ') || '—';     // as raster.auto
   const pitch = auto((t) => t.spacing), cell = auto((t) => Math.min(3, Math.max(0.5, 6 * t.width)));
   const draws = Object.values(S.tools).filter((t) => t.draws !== false);
-  return `<h3 title="The SVG's pictures: a pen can't draw them as they are">Images (${ims.length})</h3>
-    <div class="form raster">
+  const inkRows = inks.map((x) => `<div class="row ink" data-ink="${esc(x.key)}">${swatchOf('stroke', x.key.split(' ')[1])}
+      <span class="mono">${esc(x.key.split(' ')[1])}</span><select data-ink="${esc(x.key)}" title="The pen that draws this ink">${pens(target(layerGroup(o, x.key)))}</select>
+      <span class="note">${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'}</span></div>`).join('');
+  return sect('images', 'Images', `<div class="form raster">
       <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      ${on ? `<label for="r-pitch">${r.mode === 'halftone' ? 'Line gap' : 'Pitch'}</label><div class="row"><input id="r-pitch" data-r="pitch" type="number" step="0.05" min="0.1" value="${num(r.pitch)}"
-          placeholder="${pitch}" title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. Empty: each ink's pen's own line spacing (${pitch}), so black is solid"> <span class="note">mm${r.pitch == null ? ', the pen\'s' : ''}</span></div>
-        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.2" value="${num(r.cell)}" placeholder="${cell}" title="mm between dots, as plotted. Empty: from each ink's pen, 6 of its lines (0.5 to 3 mm): ${cell}"> <span class="note">mm${r.cell == null ? ', the pen\'s' : ''}</span></div>` : ''}
-        <label for="r-sep">Inks</label><select id="r-sep" data-r="separate" title="One colour; cyan, magenta, yellow and black (give each a pen in Layers); or unmixed onto the pens there are: each ink on its own screen angle">
-          ${[['one', 'One colour'], ['cmyk', 'CMYK'], ['pens', 'Onto the pens']].map(([v, l]) => opt(v, r.separate, l)).join('')}</select>
+      ${on ? `<label for="r-sep">Inks</label><select id="r-sep" data-r="separate">
+          ${SEPARATIONS.map(([v, l, t]) => `<option value="${v}" title="${esc(t)}"${v === r.separate ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        ${r.separate === 'palette' ? `<label for="r-colours">Colours</label><div class="row"><input id="r-colours" data-r="colours" type="number" step="1" min="1" max="12" value="${r.colours}"
+          title="How many of the picture's main colours (the paper-light ones left out): each a layer, a pen each"></div>` : ''}
         ${r.separate === 'pens' ? `<label>Pens</label><div class="row wrap pens-pick">${draws.map((t) => `<label class="check" title="${esc(t.name)}"><input type="checkbox" data-rpen="${esc(t.id)}"${!r.pens.length || r.pens.includes(t.id) ? ' checked' : ''}>
           <span class="swatch" style="background:${esc(t.color)}"></span>${esc(t.id)}</label>`).join('')}</div>` : ''}
+        ${r.separate === 'one' ? `<label for="r-colour">Colour</label><div class="row"><input id="r-colour" data-r="colour" type="color" value="${esc(r.colour)}" title="Its lines are this colour: the pen below draws them"></div>` : ''}
+        <label>Pens</label><div class="inks">${inkRows}</div>
+        <label for="r-pitch">${r.mode === 'halftone' ? 'Line gap' : 'Pitch'}</label><div class="row"><input id="r-pitch" data-r="pitch" type="number" step="0.05" min="0.1" value="${num(r.pitch)}"
+          placeholder="${pitch}" title="mm as plotted: between rows and dither cells${r.mode === 'halftone' ? ', between a dot\'s turns' : ''}. Empty: each ink's pen's own line spacing (${pitch}), so black is solid"> <span class="note">mm${r.pitch == null ? ', the pen\'s' : ''}</span></div>
+        ${r.mode === 'halftone' ? `<label for="r-cell">Dot grid</label><div class="row"><input id="r-cell" data-r="cell" type="number" step="0.25" min="0.2" value="${num(r.cell)}" placeholder="${cell}" title="mm between dots, as plotted. Empty: from each ink's pen, 6 of its lines (0.5 to 3 mm): ${cell}"> <span class="note">mm${r.cell == null ? ', the pen\'s' : ''}</span></div>` : ''}
         <label for="r-gamma">Gamma</label><div class="row"><input id="r-gamma" data-r="gamma" type="number" step="0.1" min="0.2" max="4" value="${num(r.gamma)}" title="Over 1: lighter, more paper; under 1: darker"></div>
         <label for="r-paper">Paper up to</label><div class="row"><input id="r-paper" data-r="paper" type="number" step="5" min="0" max="95" value="${num(r.paper * 100, 0)}"
-          title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span></div>
-        <label for="r-colour">${r.separate === 'one' ? 'Colour' : ''}</label><div class="row">${r.separate === 'one' ? `<input id="r-colour" data-r="colour" type="color" value="${esc(r.colour)}" title="Its lines are this colour: the layer of this colour draws them (drag its chip to another pen)">` : ''}
+          title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span>
           <label class="check"><input type="checkbox" data-r="invert"${r.invert ? ' checked' : ''}> invert</label></div>
-        <label></label><div class="note inks">${inks.map((x) => `<div>${swatchOf('stroke', x.key.split(' ')[1])} ${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'} by ${esc(target(layerGroup(o, x.key)))}</div>`).join('')}
-          <div>${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</div></div>` : ''}
-    </div>`;
+        <label></label><div class="note">${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</div>` : ''}
+    </div>`, { n: ims.length, open: true, help: 'The SVG\'s pictures: a pen can\'t draw them as they are' });
 }
 
 $('#object-panel').addEventListener('change', async (e) => {
@@ -1356,9 +1465,10 @@ $('#object-panel').addEventListener('change', async (e) => {
   const rk = t.dataset.r;
   if (rk) {
     const v = rk === 'invert' ? t.checked : ['mode', 'colour', 'separate'].includes(rk) ? t.value : rk === 'paper' ? +t.value / 100
-      : t.value === '' ? null : +t.value;
+      : rk === 'colours' ? Math.max(1, Math.min(12, Math.round(+t.value || 4))) : t.value === '' ? null : +t.value;
     return patchObj(o.id, { raster: { ...o.raster, [rk]: v } });
   }
+  if (t.dataset.ink) return setChip(o, [t.dataset.ink], (g) => toPen(g, t.value));      // an image's ink to a pen
   if (t.dataset.rpen) {
     const all = Object.values(S.tools).filter((x) => x.draws !== false).map((x) => x.id);
     const cur = o.raster.pens.length ? o.raster.pens : all;
@@ -1390,8 +1500,17 @@ $('#object-panel').addEventListener('change', async (e) => {
       return { ...p, [part]: t.value === '' ? null : toPen(colour ? layerGroup(o, `${part} ${colour}`) : {}, t.value) };
     });
   }
+  const style = t.closest('.text-style');
+  if (style && t.value !== '~') {
+    // every text of the style; when they are all the drawing's texts: its default, nothing apart
+    const I = info(o.id), runs = textStyles(I)[+style.dataset.style].runs, v = t.value === '' ? null : t.value;
+    if (runs.length === I.texts.length) return patchObj(o.id, { text: { ...o.text, [t.dataset.f]: v }, texts: {} });
+    const texts = { ...o.texts };
+    for (const r of runs) texts[r.index] = { ...(o.texts[r.index] || o.text), [t.dataset.f]: v };
+    return patchObj(o.id, { texts });
+  }
   const run = t.closest('.text-run');
-  if (run) {
+  if (run && t.value !== '~') {
     const i = run.dataset.i;
     const spec = { ...(o.texts[i] || o.text), [t.dataset.f]: t.value === '' ? null : t.value };
     return patchObj(o.id, { texts: { ...o.texts, [i]: spec } });
@@ -1423,6 +1542,8 @@ $('#object-panel').addEventListener('click', async (e) => {
   } else if (act === 'chip-close') {
     openChip = null;
     renderObjectPanel();
+  } else if (act === 'layer-eye') {
+    setLayerHidden(layer.dataset.layer, !hiddenLayers.has(layer.dataset.layer));
   } else if (act === 'all-chips') {
     const k = `${o.id}|${layer.dataset.layer}`;
     openLayers.has(k) ? openLayers.delete(k) : openLayers.add(k);
@@ -1567,12 +1688,45 @@ function renderOutput() {
     $('#stats').innerHTML = `<div><b>~${mins(st.time_s)}</b> · ${st.tool_changes} tool change${st.tool_changes === 1 ? '' : 's'}</div>
       <div>draw ${num(st.draw_mm / 1000, 2)} m · travel ${num(st.travel_mm / 1000, 2)} m</div>${tools}`;
   }
+  $('#plan').innerHTML = planHtml();
   $('#problems').innerHTML = (preview ? preview.problems : []).map((p) => `<li>${esc(p)}</li>`).join('');
   for (const b of ['#upload', '#print']) {
     $(b).disabled = !st || !st.draw_mm || preview.unsafe;
     $(b).title = preview && preview.unsafe ? 'The pen would go under safe_z off the paper: see the problems' : '';
   }
 }
+
+// The plot's steps before it is sent: each pen picked up (primed, probed when new), the pens swapped
+// in by hand (the plot waits), with the clock. A click goes to that step in the Paths view.
+const clock = (s) => `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`;
+function planHtml() {
+  const plan = preview && preview.plan;
+  if (!plan || !plan.length || !preview.stats || !preview.stats.draw_mm) return '';
+  const m = S.machine;
+  let t = 0;
+  const rows = plan.map((st) => {
+    const at = clock(t);
+    if (st.kind === 'start') return `<li data-line="${st.line}"><span class="when mono">${at}</span><span class="what">Home, start</span></li>`;
+    if (st.kind === 'end') return `<li data-line="${st.line}"><span class="when mono">${clock(t)}</span><span class="what">Pen away, done</span></li>`;
+    const tool = S.tools[st.tool] || {};
+    const sw = `<span class="swatch dot" style="background:${esc(tool.color || '#222')}"></span>`;
+    if (st.kind === 'swap') {
+      t += m.swap_time || 60;
+      return `<li class="swap" data-line="${st.line}" title="The plot puts the pen away, moves clear and pauses. Take ${esc(st.out_name || 'the pen')} out of holder ${st.holder}, hold ${esc(tool.name)} to the reader until it beeps, put it into holder ${st.holder}: it goes on by itself">
+        <span class="when mono">${at}</span><span class="what">✋ Holder ${st.holder}: ${st.out_name ? `${esc(st.out_name)} out, ` : ''}${sw}<b>${esc(tool.name)}</b> in <span class="note">(${esc(st.tool)}, scan it first)</span></span></li>`;
+    }
+    t += (m.toolchange_time || 0) + (st.time_s || 0);
+    const extra = [st.prime && 'primed', ...(st.aliases || []).map((a) => `also ${a}`)].filter(Boolean).join(' · ');
+    return `<li data-line="${st.line}" title="Picked up from holder ${st.holder}; a pen whose tag has no offsets is measured on the bed's sensor first">
+      <span class="when mono">${at}</span><span class="what">${sw}<b>${esc(st.tool)}</b> ${esc(tool.name || '')} <span class="note">${num((st.draw_mm || 0) / 1000, 2)} m · ${st.strokes} strokes · ~${(st.time_s || 0) < 60 ? `${Math.round(st.time_s || 0)} s` : `${Math.round(st.time_s / 60)} min`}${extra ? ' · ' + esc(extra) : ''}</span></span></li>`;
+  });
+  const swaps = plan.filter((x) => x.kind === 'swap').length;
+  return `<h3>Plan <span class="note">${plan.filter((x) => x.kind === 'tool').length} pens${swaps ? ` · ${swaps} swap${swaps > 1 ? 's' : ''} by hand` : ''} · ~${clock(t)}</span></h3><ol class="plan">${rows.join('')}</ol>`;
+}
+$('#plan').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-line]');
+  if (li) scrubBy(0, +li.dataset.line);
+});
 
 const MACHINE_FIELDS = [['z_touch', 'z touch'], ['z_min', 'z min'], ['z_max', 'z max'], ['z_travel', 'z travel'], ['hop_distance', 'hop under'],
   ['clearance', 'clearance'], ['feed_travel', 'travel F'], ['order_time', 'order s']];
@@ -1597,6 +1751,7 @@ function renderMachine() {
     <label></label><label class="check"><input type="checkbox" id="m-follow"${follow ? ' checked' : ''}> follow Klipper</label>
     <label>Paper</label><div class="mono">${m.draw_area.map((v) => num(v, 1)).join(', ')}</div>
     <label>Mesh</label><div class="mono">${esc(m.mesh || '(last loaded)')}</div>
+    <label>Wipe</label><div>${wipeHtml()}</div>
     ${MACHINE_FIELDS.filter(([k]) => k === 'z_touch' || k in over).map(field).join('')}
     ${more('machine', 'More settings', MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).map(field).join(''),
       MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).length)}`);
@@ -1604,8 +1759,23 @@ function renderMachine() {
     return `<label for="m-${k}">${l}</label><div class="row"><input id="m-${k}" data-k="${k}" type="number" step="0.1" value="${num(m[k])}"${k in over ? ' class="changed"' : ''}>${k in over ? ` <button class="icon" data-reset="${k}" title="Back to the profile">↺</button>` : ''}</div>`;
   }
 }
+function wipeHtml() {
+  const w = S.wipe, used = wipeUsed(), n = w ? w.nx * w.ny : 0;
+  const prime = `<label class="check" title="Each pen draws a short zigzag in the bed's wipe area before it plots: the ink flows from the first line"><input type="checkbox" id="m-prime"${S.machine.prime ? ' checked' : ''}${w && w.enabled ? '' : ' disabled'}> prime each pen</label>`;
+  if (!w) return `<span class="note">this bed has no wipe area</span>`;
+  if (!w.enabled) return `${prime}<div class="note">switched off in beds.py until it is measured</div>`;
+  return `${prime}<div class="row"><span class="note">${used < 0 ? 'Klipper doesn\'t say how full' : used >= n ? '<b>full</b>: a fresh pad' : `${used} of ${n} slots used`}</span>
+    ${used > 0 ? '<button class="small" data-act="wipe-reset" title="A fresh pad is on the wipe area: the next prime goes in its first slot (LRT_WIPE RESET=1)">New pad</button>' : ''}</div>`;
+}
+$('#machine').addEventListener('click', async (e) => {
+  if (e.target.dataset.act !== 'wipe-reset') return;
+  if (!twice('wipe-reset', e.target, 'A fresh pad on the wipe area: start from its first slot')) return;
+  await api('POST', '/api/printer/macro', { gcode: 'LRT_WIPE RESET=1' });
+  setTimeout(pollPrinter, 1500);
+});
 $('#machine').addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.id === 'm-prime') return setState(await api('PATCH', '/api/job', { machine_overrides: { prime: t.checked || null } }));
   if (t.id === 'm-follow') { store.set('followBed', t.checked); return; }
   if (t.id === 'm-bed') return setState(await api('PATCH', '/api/job', { machine_overrides: { bed_id: t.value || null } }));
   if (t.dataset.k) setState(await api('PATCH', '/api/job', { machine_overrides: { [t.dataset.k]: +t.value } }));
@@ -1735,7 +1905,45 @@ function renderTools() {
         <div class="grid">${fields}</div><div class="grid choices">${sels}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
     </div>`;
   }).join('');
-  fill($('#tools'), head + cards);
+  fill($('#tools'), head + cards + planPensHtml());
+}
+
+// Pens of the plan (job.pens): T5 on, pens not in the dock, scanned or not. They are painted like any
+// tool. When the plot is made, one a holder has (same pen, same colour) is drawn by it; the rest are
+// swapped into a holder by hand mid-plot, once its own pen is done (the plot pauses for it).
+const realTools = () => S.holders.map((h) => S.tools[h.t]).filter((t) => t && t.draws !== false);
+function planRoute(spec) {
+  return spec.use ? `use:${spec.use}` : spec.holder ? `holder:${spec.holder}` : '';
+}
+function planPensHtml() {
+  const plan = S.job.pens || {};
+  const libPens = Object.entries(S.pens).filter(([, p]) => (p.kind || 'pen') !== 'camera');
+  const rows = Object.entries(plan).map(([pid, spec]) => {
+    const t = S.tools[pid] || {}, lib = S.pens[spec.pen] || {};
+    const autoSays = t.alias ? `auto: ${t.alias} has it` : 'auto: swapped in (see the plan)';
+    const routes = opt('', planRoute(spec), autoSays)
+      + realTools().map((r) => opt(`use:${r.id}`, planRoute(spec), `drawn by ${r.id} ${r.name}, as it is`)).join('')
+      + S.holders.map((h) => opt(`holder:${h.holder}`, planRoute(spec), `swapped into holder ${h.holder} (${h.t}'s)`)).join('');
+    const sws = Object.entries(lib.colors || {}).map(([n, hex]) =>
+      `<button class="sw${hex.toLowerCase() === spec.color.toLowerCase() ? ' on' : ''}" data-pcolor="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
+    const state = t.alias ? `<span class="badge ok" title="A holder has this pen in this colour: it draws it, no swap">in ${esc(t.alias)}</span>`
+      : `<span class="badge warn" title="Not in the dock: the plot pauses for it to be swapped into a holder">swap</span>`;
+    return `<div class="tool plan-pen" data-pid="${esc(pid)}">
+      <div class="head"><span class="swatch" style="background:${esc(spec.color)}"></span><b>${esc(pid)}</b>
+        <span class="tname">${esc(t.name || '')}</span>${state}<button class="icon" data-act="unplan" title="Remove this pen from the plan (its colours go back to the holders' pens)">✕</button></div>
+      <div class="assign">
+        <select data-pp="pen" title="The kind of pen (pens.toml)">${opt('', spec.pen || '', 'pen…')}${libPens.map(([k, p]) => opt(k, spec.pen || '', `${p.name} · ${num(p.width)} mm`)).join('')}</select>
+        <div class="sws">${sws}<input type="color" data-pp="color" value="${esc(spec.color)}" title="Any colour"></div>
+        <select data-pp="route" title="Where it comes from when the plot is made">${routes}</select>
+        <label class="check" title="Measure it on the bed's sensor once it is in, whatever its tag says (a pen whose tag has no offsets always is)"><input type="checkbox" data-pp="calibrate"${spec.calibrate ? ' checked' : ''}> probe it</label>
+      </div></div>`;
+  }).join('');
+  return `<h3 class="plan-head" title="Pens the plot is planned with that are not in the dock (T5 on): paint with them like any tool. A pen a holder has is drawn by it; the others are swapped in by hand mid-plot, the plot waits">Pens for the plan</h3>
+    ${rows || '<p class="note">More pens than holders, or pens not scanned yet: add them here and paint with them.</p>'}
+    <button data-act="plan-add" title="A pen for the plan: T${S.holders.length + Object.keys(S.job.pens || {}).length} on">+ Pen</button>`;
+}
+async function patchPlan(pid, spec) {
+  setState(await api('PATCH', '/api/job', { pens: { [pid]: spec } }));
 }
 function redraft(t, update) {
   const d = drafts[t];
@@ -1744,6 +1952,21 @@ function redraft(t, update) {
   renderTools();
 }
 $('#tools').addEventListener('change', async (e) => {
+  const pp = e.target.dataset.pp, pcard = e.target.closest('.plan-pen');
+  if (pp && pcard) {
+    const pid = pcard.dataset.pid, v = e.target.value, spec = S.job.pens[pid];
+    if (pp === 'pen') {
+      const cols = Object.values((S.pens[v] || {}).colors || {});
+      return patchPlan(pid, { pen: v || null, color: cols.map((c) => c.toLowerCase()).includes(spec.color.toLowerCase()) ? spec.color : (cols[0] || spec.color) });
+    }
+    if (pp === 'color') return patchPlan(pid, { color: v });
+    if (pp === 'calibrate') return patchPlan(pid, { calibrate: e.target.checked });
+    if (pp === 'route') {
+      const [k, x] = v.split(':');
+      return patchPlan(pid, { use: k === 'use' ? x : null, holder: k === 'holder' ? +x : null });
+    }
+    return;
+  }
   const el = e.target, card = el.closest('.tool'); if (!card) return;
   const t = card.dataset.t;
   if (el.dataset.d === 'pen' && el.value === '__new') {
@@ -1763,6 +1986,23 @@ $('#tools').addEventListener('change', async (e) => {
 });
 $('#tools').addEventListener('click', async (e) => {
   const el = e.target;
+  const pcard = el.closest('.plan-pen');
+  if (el.dataset.act === 'plan-add') {
+    const used = new Set([...Object.keys(S.tools), ...Object.keys(S.job.pens || {})]);
+    let n = S.holders.length;
+    while (used.has(`T${n}`)) n++;
+    const [key, pen] = Object.entries(S.pens).find(([, p]) => (p.kind || 'pen') !== 'camera') || [null, {}];
+    const taken = new Set(Object.values(S.tools).map((t) => (t.color || '').toLowerCase()));
+    const color = Object.values(pen.colors || {}).find((c) => !taken.has(c.toLowerCase())) || '#000000';
+    await patchPlan(`T${n}`, { pen: key, color });
+    return toast(`T${n}: paint with it like any tool (Shift+${n < 10 ? n : '…'})`);
+  }
+  if (pcard) {
+    const pid = pcard.dataset.pid;
+    if (el.dataset.pcolor) return patchPlan(pid, { color: el.dataset.pcolor });
+    if (el.dataset.act === 'unplan' && twice(`unplan-${pid}`, el, `Remove ${pid} from the plan`)) return patchPlan(pid, null);
+    return;
+  }
   if (el.dataset.act === 'scan') {
     if (!twice('scan-tags', el, 'Take each tool to the tag reader in turn and read its tag')) return;
     printer = { ...(printer || {}), job: (await api('POST', '/api/scan', {})).job };
@@ -2020,7 +2260,18 @@ async function pollPrinter() {
   }
   quietly(renderPrinter);
   quietly(renderMacros);
+  renderSwap();
+  if (S) { renderBed(); quietly(renderMachine); }
   if (printer.ok && macros && !macros.checked) loadMacros();      // Klipper is back: which it has
+}
+// A pen swapped in by hand mid-plot: what the paused plot waits for
+let swapWas = null;
+function renderSwap() {
+  const sw = printer && printer.ok && printer.swap, el = $('#swap-now');
+  el.hidden = !sw;
+  if (!sw) { swapWas = null; return; }
+  el.innerHTML = `✋ <b>Holder ${sw.holder}</b>: hold <b>${esc(sw.name)}</b> to the reader until it beeps, then put it into holder ${sw.holder}. The plot goes on by itself${sw.calibrate ? ' (and measures it first)' : ''}.`;
+  if (swapWas !== sw.since) { swapWas = sw.since; toast(`Swap: ${sw.name} into holder ${sw.holder}`); }
 }
 function renderPrinter() {
   const p = printer;
@@ -2156,18 +2407,24 @@ $('#zoom-fit').addEventListener('click', fit);
 $('#zoom-in').addEventListener('click', () => zoom(0.8));
 $('#zoom-out').addEventListener('click', () => zoom(1.25));
 
-// Keyboard shortcuts: the table is the help (?) too
+// Keyboard shortcuts: the table is the help (?) too. The same key does the same on both tabs: 0 fits
+// the bed, Z zooms to what is selected, V is the tab's own tool, H pans, Esc steps back.
 const KEYS = [
-  ['Tools', [['V', 'select, move, scale, turn'], ['A', 'shapes: pick shapes (Shift adds, a box; Alt: one of a group)'], ['H', 'pan (or hold Space, or the right button)'], ['P', 'paint with a tool'],
-    ['Shift+0 … 9', 'paint with T0 … T9'], ['M', 'mask: drag over a drawing where it isn’t drawn'], ['Esc', 'stop: back to select, then deselect']]],
-  ['View', [['1  2  3', 'Original · Tools · Paths'], ['F  0', 'fit the bed'], ['Z', 'zoom to the selected drawing'], ['+  −', 'zoom in, out'],
-    ['T', 'travels in the Paths view'], ['G', 'the G-code beside the canvas'], ['\\', 'hide or show the panels'], ['?', 'these shortcuts']]],
-  ['The selected drawing', [['← → ↑ ↓', 'nudge 1 mm (Shift 10, Alt 0.1)'], ['R  Shift+R', 'turn a quarter, either way'], ['C', 'centre it on the paper'],
+  ['Both tabs', [['0', 'fit the bed'], ['Z', 'zoom to the selection (Plot: the drawing; Scan: the region)'], ['+  −', 'zoom in, out'],
+    ['H', 'pan (or hold Space, or the right button)'], ['V', 'the tab\'s own tool: select (Plot), region (Scan)'],
+    ['Esc', 'stop: back to that tool, then deselect'], ['← → ↑ ↓', 'nudge the selection 1 mm (Shift 10, Alt 0.1)'],
+    ['\\', 'hide or show the panels'], ['?', 'these shortcuts']]],
+  ['Plot: tools', [['A', 'shapes: pick shapes (Shift adds, a box; Alt: one of a group)'], ['P', 'paint with a pen'],
+    ['Shift+0 … 9', 'paint with T0 … T9'], ['M', 'mask: drag over a drawing where it isn’t drawn']]],
+  ['Plot: the selected drawing', [['R  Shift+R', 'turn a quarter, either way'], ['C', 'centre it on the paper'],
     ['Tab  Shift+Tab', 'select the next, the previous drawing'], [']  [', 'bring forward, send backward'], ['Shift+]  Shift+[', 'to the front, to the back'],
     ['Ctrl+D', 'duplicate'], ['Del', 'remove it (a masked region, with the mask tool)'],
     ['Shift+click', 'pick drawings together: they move together'], ['Ctrl+G  Ctrl+Shift+G', 'group, ungroup the picked drawings (shapes, with A)']]],
-  ['Plot', [['K', 'play the plot, pause'], [',  .', 'one G-code line back, on'], ['Shift+,  Shift+.', '100 lines back, on'], ['Home  End', 'the first line, the last'],
+  ['Plot: view and plot', [['1  2  3', 'Original · Tools · Paths'], ['T', 'travels in the Paths view'], ['G', 'the G-code beside the canvas'],
+    ['K', 'play the plot, pause'], [',  .', 'one G-code line back, on'], ['Shift+,  Shift+.', '100 lines back, on'], ['Home  End', 'the first line, the last'],
     ['Ctrl+S', 'download the G-code'], ['Ctrl+Z  Ctrl+Shift+Z', 'undo, redo']]],
+  ['Scan', [['L', 'look: one shot where you click'], ['F', 'focus: sweep the height where you click'],
+    ['← →', 'in the viewer: the tile before, after'], ['Esc', 'close the viewer']]],
   ['Canvas', [['wheel, pinch', 'zoom'], ['two fingers', 'pan (a trackpad, a touch screen)'], ['drag a corner', 'scale (Alt: about the middle)'],
     ['drag the knob', 'turn (Shift: 15° steps)'], ['drag a number', 'change it (Shift finer, Ctrl coarser)']]],
 ];
@@ -2241,6 +2498,7 @@ window.addEventListener('keydown', async (e) => {
   if (document.body.classList.contains('tab-scan')) {          // the rest is the Plot tab's
     if (key === '+' || key === '=') zoom(0.8);
     else if (key === '-') zoom(1.25);
+    else if (e.code === 'Digit0' && !e.shiftKey) fit();
     return;
   }
   const digit = /^Digit(\d)$/.exec(e.code);
@@ -2257,7 +2515,6 @@ window.addEventListener('keydown', async (e) => {
   if (key === 'h') return setMode('pan');
   if (key === 'p') return setMode('paint');
   if (key === 'm') return setMode('mask');
-  if (key === 'f') return fit();
   if (key === 'z') return zoomToSel();
   if (key === '+' || key === '=') return zoom(0.8);
   if (key === '-') return zoom(1.25);
@@ -2321,6 +2578,7 @@ function render() {
   renderBed();
   renderObjects();
   renderObjectList();
+  renderLayers();
   renderObjectPanel();
   renderPalette();
   renderMachine();

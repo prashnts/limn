@@ -27,7 +27,7 @@ from shapely.ops import unary_union
 from .gcode import Writer, num
 from .order import improve, join, order
 from .preview import parse, stats
-from .profile import load_machine, load_pens, load_tools, reach, with_tags
+from .profile import holder_tools, load_machine, load_pens, load_tools, plan_pens, reach, with_tags
 from .slicer import Cache, cut, goes_under, lightness
 from .tools import DRAW
 
@@ -210,12 +210,56 @@ class Result:
     stats: dict = field(default_factory=dict)
     unsafe: list[str] = field(default_factory=list)     # it must not be sent to the plotter
     sim: object = None          # preview.Sim: the G-code read back
+    plan: list = field(default_factory=list)    # the steps, in order: start, swap (by hand), tool, end
 
 
 def _fields(machine, tool, tools):
-    digits = ''.join(c for c in tool.id if c.isdigit())
+    digits = ''.join(c for c in (tool.call if tool.swap else tool.id) if c.isdigit())
+    # {prepare}: once the tool is picked up, before its offsets are applied: probed on the bed's
+    # sensor when its tag has no offsets (or it was swapped in to be), primed in the wipe area
+    prepare = 'TOOL_PREPARE CALIBRATE=' + ('1' if tool.calibrate else 'auto') + f' PRIME={int(machine.prime)}'
     return {'tool': tool, 'machine': machine, 'index': digits or '0',
-            'mesh': f' MESH={machine.mesh}' if machine.mesh else ''}
+            'mesh': f' MESH={machine.mesh}' if machine.mesh else '', 'prepare': prepare if tool.touches else ''}
+
+
+def swaps(machine, tools, used, problems):
+    '''The plan pens swapped into a holder by hand (profile.plan_pens): each gets its holder,
+    one picked when the job leaves it (a holder whose pen this plot doesn't use, else the one
+    whose pen is done first), and comes after that holder's own pen and the swaps before it.
+    -> (tools, the order they draw in).'''
+    real = holder_tools(tools, machine.holders)         # holder -> its tool
+    out = dict(tools)
+    into = {}                                           # holder -> the plan pens swapped into it
+    for tid in used:
+        t = tools[tid]
+        if t.source != 'plan' or t.alias:
+            continue
+        h = t.swap
+        if h is None:
+            def cost(h):
+                own = tools[real[h]]
+                return (not own.draws, real[h] in used, used.index(real[h]) if real[h] in used else 0,
+                        len(into.get(h, [])), machine.holders.index(h))
+            if not real:
+                problems.append(f'{tid}: no holder to swap it into')
+                continue
+            h = min(real, key=cost)
+        into.setdefault(h, []).append(tid)
+        out[tid] = t.model_copy(update={'swap': h, 'holder': h, 'macro': tools[real[h]].call if h in real else None})
+    order, left = [], list(used)
+    while left:                                         # each in its order, once what must go first went
+        for tid in left:
+            t = out[tid]
+            if not t.swap:
+                break
+            first = [real.get(t.swap)] + into[t.swap][:into[t.swap].index(tid)]
+            if all(f not in left for f in first):
+                break
+        else:
+            tid = left[0]
+        left.remove(tid)
+        order.append(tid)
+    return out, order
 
 
 def _on_paper(machine, oid, tid, paths, placement, problems):
@@ -332,32 +376,51 @@ def emit(job, machine, tools, sliced) -> Result:
             if tid in under.get(obj.id, {}):        # cut in order: the pieces stay in it
                 paths = [s.surface.drape(p) for p in cut([p[:, :2] for p in paths], under[obj.id][tid])]
             placed = _on_paper(machine, obj.id, tid, paths, obj.placement, problems)
-            by_tool.setdefault(tid, []).append(placed)
+            by_tool.setdefault(tools[tid].alias or tid, []).append(placed)     # a plan pen a holder has: its tool
 
     first = job.tool_order or list(tools)
     by_tool = {t: bs for t, bs in by_tool.items() if any(bs)}
     used = [t for t in first if by_tool.get(t)] + [t for t in by_tool if t not in first]
     if any(tools[t].layers for t in used):
         used.sort(key=lambda t: -lightness(tools[t].color))     # light first: the dark goes over it
+    tools, used = swaps(machine, tools, used, problems)
     e = Emitter(machine, Planner(machine, obstacles))
     g = e.g
     g.comment('limn-plot 1')
     for tid in used:
         t = tools[tid]
         g.comment(f'tool {tid}: {t.kind} {t.name!r} {num(t.width)}mm {t.color}'
-                  + (f' press {num(t.pressed)}' if t.pressed is not None else ''))
+                  + (f' press {num(t.pressed)}' if t.pressed is not None else '')
+                  + (f', swapped into holder {t.swap} by hand' if t.swap else ''))
         if t.press is not None and t.press_max is not None and t.press > t.press_max:
             problems.append(f'{tid} asks for a press of {num(t.press)}, its pen takes {num(t.press_max)} at most: '
                             f'{num(t.press_max)} it is')
     if not used:
         problems.append('nothing to draw')
         return Result(g.text(), problems)
+    if '{prepare}' not in machine.tool_begin and machine.prime:
+        problems.append('the machine\'s tool_begin has no {prepare}: the pens are not primed (nor probed when new)')
 
+    plan = [{'kind': 'start', 'line': len(g.lines) + 1}]
     g.raw(machine.start.format(**_fields(machine, tools[used[0]], tools)))
+    held = {h: t for h, t in holder_tools(tools, machine.holders).items()}     # what each holder has now
     for tid in used:
         tool = tools[tid]
+        if tool.swap:
+            out = tools.get(held.get(tool.swap))
+            g.comment(f'--- swap: holder {tool.swap} gets {tid} {tool.name}' + (f' for {out.name}' if out else ''))
+            plan.append({'kind': 'swap', 'tool': tid, 'holder': tool.swap, 'out': out.id if out else None,
+                         'out_name': out.name if out else '', 'line': len(g.lines) + 1})
+            name = ''.join(c for c in tool.name if c not in '"#;\n')[:20]
+            g.raw('UNDOCK\n' + f'TOOL_SWAP T={tool.swap}' + (f' PEN={tool.pen}' if tool.pen else '')
+                  + f' COLOR={tool.color.lstrip("#")} NAME="{name}"' + (' CALIBRATE=1' if tool.calibrate else ''))
+            held[tool.swap] = tid
         g.comment(f'--- {tid} {tool.name}')
+        plan.append({'kind': 'tool', 'tool': tid, 'holder': tool.holder, 'line': len(g.lines) + 1,
+                     'aliases': [p for p, t in tools.items() if t.alias == tid],
+                     'prime': machine.prime and '{prepare}' in (tool.begin or machine.tool_begin)})
         g.raw((tool.begin or machine.tool_begin).format(**_fields(machine, tool, tools)))
+        g.comment(f'tool {tid}')                # the preview: drawn by this tool, whatever macro picked it up
         g.at(*machine.park)
         e.surface_z = 0.0
         for p in join(chain(by_tool[tid], machine.park[:2]), link=tool.link_gap):
@@ -366,6 +429,7 @@ def emit(job, machine, tools, sliced) -> Result:
         end = tool.end if tool.end is not None else machine.tool_end
         if end.strip():
             g.raw(end.format(**_fields(machine, tool, tools)))
+    plan.append({'kind': 'end', 'line': len(g.lines) + 1})
     g.raw(machine.end.format(**_fields(machine, tools[used[-1]], tools)))
     text = g.text()
     sim = parse(text)
@@ -379,32 +443,45 @@ def emit(job, machine, tools, sliced) -> Result:
     bad = unsafe(machine, g.moves)
     if bad:
         problems.append(f'UNSAFE, not for the plotter: {bad[0]}' + (f' (and {len(bad) - 1} more)' if len(bad) > 1 else ''))
-    return Result(text, problems + e.problems, stats(sim, machine, tools), bad, sim)
+    st = stats(sim, machine, tools)
+    for step in plan:
+        if step['kind'] == 'tool':
+            step.update(st['tools'].get(step['tool'], {'draw_mm': 0.0, 'strokes': 0, 'time_s': 0.0}))
+    return Result(text, problems + e.problems, st, bad, sim, plan)
 
 
 def load(job, tags=None):
     '''The job's machine and tools, with its overrides. tags: printer.limn.tools, what the
-    tools' tags say they are (with_tags).'''
+    tools' tags say they are (with_tags). Then the job's own pens (plan_pens): one a holder
+    has is that holder's tool as it is, tuning and all.'''
     def near(name):
         p = job.root / name
         return str(p) if p.suffix == '.toml' and p.exists() else name
     machine = load_machine(near(job.machine), job.machine_overrides)
     tools = load_tools(near(job.tools))
+    pens = load_pens()
     if tags:
-        tools = with_tags(tools, load_pens(), tags, machine.holders)
+        tools = with_tags(tools, pens, tags, machine.holders)
     bad = set(job.draw) - set(DRAW)
     if bad:
         raise ValueError(f'draw: no setting {", ".join(sorted(bad))} (there are {", ".join(DRAW)})')
     draw = {k: v for k, v in job.draw.items() if v is not None}
-    if draw:
-        tools = {tid: type(t)(**{**t.model_dump(), **{k: v for k, v in draw.items() if k in type(t).model_fields}})
-                 for tid, t in tools.items()}
-    for tid, over in job.tool_overrides.items():
-        if tid in tools and over:
-            if 'press_max' in over:
-                raise ValueError(f'{tid}: press_max comes from the pen library, a job cannot raise it')
-            t = tools[tid]
-            tools[tid] = type(t)(**{**t.model_dump(), **over})
+
+    def tuned(tools, only=None):
+        if draw:
+            tools = {tid: type(t)(**{**t.model_dump(), **{k: v for k, v in draw.items() if k in type(t).model_fields}})
+                     if only is None or tid in only else t for tid, t in tools.items()}
+        for tid, over in job.tool_overrides.items():
+            if tid in tools and over and (only is None or tid in only):
+                if 'press_max' in over:
+                    raise ValueError(f'{tid}: press_max comes from the pen library, a job cannot raise it')
+                t = tools[tid]
+                tools[tid] = type(t)(**{**t.model_dump(), **over})
+        return tools
+    tools = tuned(tools)
+    if job.pens:
+        tools = plan_pens(tools, pens, job.pens, machine.holders)
+        tools = tuned(tools, {pid for pid in job.pens if not tools[pid].alias})
     return machine, tools
 
 

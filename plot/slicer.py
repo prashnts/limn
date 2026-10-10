@@ -153,7 +153,7 @@ def nearest_tool(colour, tools):
 
 def image_keys(drawing, obj, tools):
     '''The colour keys of the inks its images are made into (none when it leaves them out).'''
-    return raster_keys(obj.raster, tools) if obj is not None and drawn(obj, drawing) else []
+    return raster_keys(obj.raster, tools, drawing.images) if obj is not None and drawn(obj, drawing) else []
 
 
 def default_groups(drawing, tools, obj=None):
