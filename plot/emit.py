@@ -26,6 +26,7 @@ from shapely.ops import unary_union
 
 from .gcode import Writer, num
 from .order import improve, join, order
+from . import ink
 from .preview import parse, stats
 from .profile import holder_tools, load_machine, load_pens, load_tools, plan_pens, reach, with_tags
 from .slicer import Cache, cut, goes_under, lightness
@@ -407,6 +408,7 @@ def emit(job, machine, tools, sliced) -> Result:
         problems.append('the machine\'s tool_begin has no {prepare}: the pens are not primed (nor probed when new)')
 
     plan = [{'kind': 'start', 'line': len(g.lines) + 1}]
+    drawn = []                  # (tool, path) as written: the ink check's
     g.raw(machine.start.format(**_fields(machine, tools[used[0]], tools)))
     held = {h: t for h, t in holder_tools(tools, machine.holders).items()}     # what each holder has now
     for tid in used:
@@ -430,6 +432,7 @@ def emit(job, machine, tools, sliced) -> Result:
         e.surface_z = 0.0
         for p in join(chain(by_tool[tid], machine.park[:2]), link=tool.link_gap):
             e.stroke(tool, p)
+            drawn.append((tid, p))
         g.rapid(z=e.clamp(tool, max(g.z, min(machine.z_travel, machine.z_max))), f=machine.feed_z)
         end = tool.end if tool.end is not None else machine.tool_end
         if end.strip():
@@ -449,6 +452,9 @@ def emit(job, machine, tools, sliced) -> Result:
     if bad:
         problems.append(f'UNSAFE, not for the plotter: {bad[0]}' + (f' (and {len(bad) - 1} more)' if len(bad) > 1 else ''))
     st = stats(sim, machine, tools)
+    # The ink as it goes on the paper: too much of it in one spot, or two inks meeting (ink.py)
+    ink_problems, st['ink'] = ink.check(drawn, {k: v for k, v in tools.items() if v.draws}, goes_under)
+    problems += ink_problems
     for step in plan:
         if step['kind'] == 'tool':
             step.update(st['tools'].get(step['tool'], {'draw_mm': 0.0, 'strokes': 0, 'time_s': 0.0}))

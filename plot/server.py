@@ -271,6 +271,7 @@ class Workspace:
                     'plan': result.plan,
                     'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
                     'small': {o.id: sliced[o.id].small for o in job.objects if sliced[o.id].small},
+                    'dense': {o.id: sliced[o.id].dense for o in job.objects if sliced[o.id].dense},
                     'ms': round((time.monotonic() - t0) * 1000)}
 
     def sliced(self):

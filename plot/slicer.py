@@ -359,28 +359,32 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             sg, stroke_on, st = None, False, None
         stroke_covers = obj.occlude and stroke_on and sh.stroke_opaque
         s_area = within(stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join), clip) if (wide or stroke_covers) else None
-        covers = []                 # (area, tool id; '' a mask): what it hides of the shapes under it
+        covers = []                 # (area, tool id; '' a mask, a line on its centre): what it hides under it
         if obj.occlude and fill_on and (sh.fill_opaque or not sh.fill) and fill_area is not None:
-            covers.append((fill_area, fg.tool or ''))
+            covers.append((fill_area, fg.tool or '', False))
         if stroke_covers:
-            covers.append((s_area, sg.tool or ''))
+            covers.append((s_area, sg.tool or '', st is not None and not wide))
         items.append((sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, covers))
 
-    flat = [(i, geom, t) for i, it in enumerate(items) for geom, t in it[-1] if not geom.is_empty]
-    tree = shapely.STRtree([g for _, g, _ in flat]) if flat else None
+    flat = [(i, geom, t, line) for i, it in enumerate(items) for geom, t, line in it[-1] if not geom.is_empty]
+    tree = shapely.STRtree([g for _, g, _, _ in flat]) if flat else None
     grown = {}
 
     def above(i, geom, tool):
         '''What the shapes painted after shape i hide of `geom`: what another tool
-        (or a mask) draws there is kept the tool's `bleed` clear of.'''
+        (or a mask) draws there is kept the tool's `bleed` clear of. Another tool's line
+        drawn on its centre is left to ink.guard (its pen's width, and ends that give way:
+        a tick shortened rather than the label under it cut), but with `overdraw` off.'''
         if tree is None or geom is None or geom.is_empty:
             return None
         bleed = tool.bleed if tool is not None else 0
         hits = []
         # Within the bleed, not intersecting a buffer: buffering an image's thousands of lines takes seconds
         for j in (tree.query(geom, predicate='dwithin', distance=bleed) if bleed > 0 else tree.query(geom)):
-            k, g, t = flat[j]
+            k, g, t, line = flat[j]
             if k <= i or goes_under(tool, tools.get(t)):
+                continue
+            if line and tool is not None and t != tool.id and tool.overdraw != 'draw':
                 continue
             if bleed > 0 and t != tool.id:
                 if (j, bleed) not in grown:
@@ -467,7 +471,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     if obj.occlude:
         by = {}
         for it in items:
-            for geom, t in it[-1]:
+            for geom, t, _ in it[-1]:
                 by.setdefault(t, []).append(geom)
         cover = {t: less(unary_union(gs), masked) for t, gs in by.items()}
         cover = {t: g for t, g in cover.items() if not g.is_empty}

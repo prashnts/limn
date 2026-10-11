@@ -511,3 +511,80 @@ def test_each_image_can_have_its_own_settings(tmp_path, tools):
                              'images': {str(low.index): RasterSpec(mode='dither', colour='#ff0000')}})
     assert raster.object_keys(o, d, tools) == ['stroke #ff0000']
     assert xs(slice_object(o, tools))[:, 1].max() < 50 - 28 + 1
+
+
+# Ink on paper (ink.py): no spot inked over and over, no two inks running together
+
+def dots(n=40, r=0.35, step=0.15, colour='#ff0000', y=50):
+    '''A scatter plot's run of translucent dots, each well under its spacing apart.'''
+    return ''.join(f'<circle cx="{10 + i * step:.3f}" cy="{y}" r="{r}" fill="{colour}" fill-opacity="0.3"/>'
+                   for i in range(n))
+
+
+def ink_length(paths):
+    return sum(np.hypot(*np.diff(p[:, :2], axis=0).T).sum() for p in paths)
+
+
+def test_small_shapes_that_touch_merge_into_one_area(write_svg, tools):
+    p = write_svg(dots())
+    g = {'fill #ff0000': Group(tool='T3')}
+    merge = {**tools, 'T3': tools['T3'].model_copy(update={'dense': 'merge', 'small': 'warn'})}
+    s = slice_object(Obj(id='d', svg=str(p), groups=g), merge)
+    assert any('40 small shapes of T3 that touch are drawn as 1 area' in q for q in s.problems)
+    assert s.dense == list(range(40)) and s.small == []         # the band they make isn't too small
+    # Exact: each dot as it is, but no dot over the ones on top of it
+    exact = {**tools, 'T3': tools['T3'].model_copy(update={'small': 'warn'})}
+    e = slice_object(Obj(id='d', svg=str(p), groups=g), exact)
+    assert any('of T3 would go over its own ink on top, cut' in q for q in e.problems)
+    assert len(e.paths['T3']) < 40
+    # Merged: one line down the band they make (too thin for a ring), 6 mm of it
+    assert len(s.paths['T3']) == 1 and ink_length(s.paths['T3']) == pytest.approx(39 * 0.15, abs=0.5)
+
+
+def test_the_plot_says_where_ink_piles_up_or_runs_together(write_svg, tools, job_of):
+    p = write_svg(dots() + dots(colour='#21ff06', y=50.2))
+    g = {'fill #ff0000': Group(tool='T3'), 'fill #21ff06': Group(tool='T0')}
+    job = job_of(p, groups=g)
+    job.draw = {'small': 'draw', 'overdraw': 'draw'}
+    r, _ = plot(job)
+    assert any(q.startswith('ink: T') and 'puts over 1.6 layers' in q for q in r.problems)
+    assert any(q.startswith('ink: ') and 'run together' in q for q in r.problems)
+    assert r.stats['ink']['dense'] and r.stats['ink']['touch']
+    job.draw = {'small': 'draw', 'dense': 'merge'}
+    r, _ = plot(job)
+    assert not [q for q in r.problems if q.startswith('ink: ')]
+
+
+def test_lines_along_their_own_ink_go_crossing_lines_stay(write_svg, tools):
+    # Two of one pen: one along the other (0.1 apart, under its 0.5 line), one across it
+    p = write_svg('''
+        <path d="M10 50.1 H60" stroke="#ff0000" stroke-width="0.2"/>
+        <path d="M30 30 V70" stroke="#ff0000" stroke-width="0.2"/>
+        <path d="M10 50 H60" stroke="#ff0000" stroke-width="0.2"/>''')
+    s = slice_object(Obj(id='d', svg=str(p), groups=RED), tools)
+    # the line under the top one is gone; the crossing one (under it too) only where the top one is
+    assert ink_length(s.paths['T3']) == pytest.approx(50 + 40 - 0.2)
+    assert max(np.ptp(a[:, 1]) for a in s.paths['T3']) < 20.1
+
+
+def test_an_end_gives_way_not_what_it_runs_into(write_svg, tools):
+    # A green tick on top, its end on a red label's stroke: the tick is shortened, the label whole
+    p = write_svg('''
+        <path d="M50 40 V60" stroke="#ff0000" stroke-width="0.2"/>
+        <path d="M50 50 H55" stroke="#21ff06" stroke-width="0.2"/>''')
+    groups = {'stroke #ff0000': Group(tool='T3'), 'stroke #21ff06': Group(tool='T0')}
+    s = slice_object(Obj(id='d', svg=str(p), groups=groups), tools)
+    assert ink_length(s.paths['T3']) == pytest.approx(20)
+    tick, = s.paths['T0']
+    gap = (tools['T3'].width + tools['T0'].width) / 2
+    assert tick[:, 0].min() == pytest.approx(50 + gap, abs=1e-3) and tick[:, 0].max() == pytest.approx(55)
+
+
+def test_a_hatch_stays_a_spacing_inside_its_border(write_svg, tools):
+    p = write_svg('<rect x="10" y="10" width="20" height="20" fill="#ff0000"/>')
+    s = slice_object(Obj(id='d', svg=str(p), groups={'fill #ff0000': Group(tool='T3')}), tools)
+    t = tools['T3']
+    border, *hatch = s.paths['T3']
+    pts = np.vstack(hatch)[:, 0]
+    assert pts.min() == pytest.approx(10 + t.width / 2 + t.spacing, abs=1e-4)
+    assert pts.max() == pytest.approx(30 - t.width / 2 - t.spacing, abs=1e-4)

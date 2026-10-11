@@ -38,6 +38,7 @@ MERGE = 4       # dense 'merge': shapes under this many tool widths across are m
 CROSS = 3       # its own ink on top: a stretch within its spacing longer than this many spacings is cut
 DENSE = 1.6     # check: more layers of ink than this, averaged over a disc a pen's width across
 SPOT = 2        # .. over more than this many pen widths squared, is a spot that soaks
+BIG = 2000      # guard: a unit of more points than this is grown only near what it is checked against
 
 
 @dataclass
@@ -257,6 +258,23 @@ def guard(units, tools, under=None):
     def mode_of(t):
         return getattr(t, 'overdraw', 'cut') if t is not None else 'draw'
 
+    grown = {}
+
+    def ink_of(j, geom, d, box):
+        '''Unit j's lines (geom) grown by d: its ink and the gap to it. Small units whole, once;
+        a big one (a picture's thousands of lines) only near `box`, buffering all of it is slow.'''
+        if len(shapely.get_coordinates(geom)) > BIG:
+            near = shapely.clip_by_rect(geom, box[0] - d, box[1] - d, box[2] + d, box[3] + d)
+            return None if near.is_empty else near.buffer(d, quad_segs=4)
+        k = (j, id(geom), round(d, 6))
+        if k not in grown:
+            grown[k] = (geom, geom.buffer(d, quad_segs=4))      # geom kept: its id stays its own
+        return grown[k][1]
+
+    def near(i):
+        x0, y0, x1, y1 = lines[i].bounds
+        return (ids[k] for k in tree.query(box(x0 - reach, y0 - reach, x1 + reach, y1 + reach)))
+
     def tell(u, other, removed, where):
         st = stats.setdefault((u.tool, other), [0.0, where])
         st[0] += removed
@@ -268,18 +286,16 @@ def guard(units, tools, under=None):
         u, t = units[i], tools.get(units[i].tool)
         if mode_of(t) == 'draw':
             continue
-        x0, y0, x1, y1 = lines[i].bounds
         zone, near_tools = [], []
-        for j in (ids[k] for k in tree.query(lines[i], predicate='dwithin', distance=reach)):
+        for j in near(i):
             v, vt = units[j], tools.get(units[j].tool)
             if j == i or vt is None or v.tool == u.tool or lines[j] is None:
                 continue
             if under is not None and (under(t, vt) if j > i else under(vt, t)):
                 continue
-            d = (t.width + vt.width) / 2 + t.bleed
-            near = shapely.clip_by_rect(lines[j], x0 - d, y0 - d, x1 + d, y1 + d)
-            if not near.is_empty:
-                zone.append(near.buffer(d, quad_segs=4))
+            g = ink_of(j, lines[j], (t.width + vt.width) / 2 + t.bleed, lines[i].bounds)
+            if g is not None and g.intersects(lines[i]):
+                zone.append(g)
                 near_tools.append(v.tool)
         if not zone:
             continue
@@ -294,28 +310,23 @@ def guard(units, tools, under=None):
                 lines[i] = ls if ls is not None and not ls.is_empty else None
     idx = [i for i in idx if lines[i] is not None and not lines[i].is_empty]
     final = list(lines)
-    grown = {}
     for i in sorted(idx, reverse=True):
         u, t = out[i], tools.get(units[i].tool)
         mode = mode_of(t)
         if mode == 'draw':
             continue
         same, other, tops = [], [], {}
-        x0, y0, x1, y1 = lines[i].bounds
-        for j in (ids[k] for k in tree.query(lines[i], predicate='dwithin', distance=reach)):
+        for j in near(i):
             if j <= i or final[j] is None or final[j].is_empty:
                 continue
             v, vt = units[j], tools.get(units[j].tool)
             if vt is None or (under is not None and under(t, vt)):
                 continue
             d = t.spacing if v.tool == u.tool else (t.width + vt.width) / 2 + t.bleed
-            k = (j, round(d, 6), x0, y0)
-            if k not in grown:
-                near = shapely.clip_by_rect(final[j], x0 - d, y0 - d, x1 + d, y1 + d)
-                grown[k] = None if near.is_empty else near.buffer(d, quad_segs=4)
-            if grown[k] is not None:
-                (same if v.tool == u.tool else other).append(grown[k])
-                tops.setdefault(v.tool, []).append(grown[k])
+            g = ink_of(j, final[j], d, lines[i].bounds)
+            if g is not None and g.intersects(lines[i]):
+                (same if v.tool == u.tool else other).append(g)
+                tops.setdefault(v.tool, []).append(g)
         if not same and not other:
             continue
         sz, oz = unary_union(same) if same else None, unary_union(other) if other else None
@@ -384,9 +395,10 @@ MAX_PX = 1_500_000      # the grid's pixels at most: a bigger plot is checked co
 
 
 def check(runs, tools, under=None):
-    '''What is drawn: runs [(tool id, (n, 2+) points)], bed mm. -> (problems, report):
-    spots of too much ink of one tool, spots where two tools' inks meet.'''
-    runs = [(t, np.asarray(p)[:, :2]) for t, p in runs if t in tools and len(p) >= 2]
+    '''What is drawn: runs [(tool id, (n, 2+) points)], bed mm (a dot: a path that goes
+    nowhere, inked as a dab half the pen's width long). -> (problems, report): spots of
+    too much ink of one tool, spots where two tools' inks meet.'''
+    runs = [(t, np.asarray(p)[:, :2]) for t, p in runs if t in tools and len(p)]
     if not runs:
         return [], {}
     widths = [tools[t].width for t, _ in runs]
@@ -396,13 +408,18 @@ def check(runs, tools, under=None):
     x1, y1 = allp.max(axis=0) + pad
     px = max(min(widths) / 3, ((x1 - x0) * (y1 - y0) / MAX_PX) ** 0.5)
     nx, ny = int((x1 - x0) / px) + 1, int((y1 - y0) / px) + 1
-    dens = {}
+    samples = {}
     for tid, p in runs:
-        q, ln = _resample(p, px / 4)
+        q, ln = _resample(p, px / 4) if len(p) >= 2 else (p[:1], np.zeros(1))
+        if ln.sum() < tools[tid].width / 2:
+            q, ln = p[:1], np.array([tools[tid].width / 2])
+        samples.setdefault(tid, []).append((q, ln))
+    dens = {}
+    for tid, ss in samples.items():         # length of line in each pixel
+        q, ln = np.vstack([a for a, _ in ss]), np.concatenate([b for _, b in ss])
         ix = np.clip(((q[:, 0] - x0) / px).astype(int), 0, nx - 1)
         iy = np.clip(((q[:, 1] - y0) / px).astype(int), 0, ny - 1)
-        d = dens.setdefault(tid, np.zeros(nx * ny))
-        d += np.bincount(iy * nx + ix, ln, minlength=nx * ny)
+        dens[tid] = np.bincount(iy * nx + ix, ln, minlength=nx * ny)
     problems, report, inked = [], {'dense': {}, 'touch': {}}, {}
     at = lambda ij: (round(float(x0 + (ij[1] + 0.5) * px), 1), round(float(y0 + (ij[0] + 0.5) * px), 1))
     kernels = {}

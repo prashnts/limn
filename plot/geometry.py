@@ -132,7 +132,14 @@ def centerline(area, step):
     edges = shapely.get_parts(shapely.voronoi_polygons(pts, only_edges=True))
     shapely.prepare(area)
     keep = [e for e in edges if area.contains(e) and area.boundary.distance(e) > step / 4]
-    return lines_of(shapely.line_merge(MultiLineString(keep))) if keep else []
+    if not keep:
+        return []
+    lines = lines_of(shapely.line_merge(MultiLineString(keep)))
+    # Spurs shorter than a step (into a wobble of the outline) break it into pieces: the pen lifts
+    long = [p for p in lines if np.hypot(*np.diff(p, axis=0).T).sum() >= step]
+    if long and len(long) < len(lines):
+        lines = lines_of(shapely.line_merge(MultiLineString(long)))
+    return lines
 
 
 def thin(area, inner, width):
@@ -191,13 +198,29 @@ def _fill(area, width, spacing, pattern, angle, border):
     out = thin(area, inner, width)
     if inner.is_empty:
         return out
+    if border:
+        # Where the area is too thin for a ring (its two sides nearer than a spacing: the pen
+        # would go twice over its middle), one line down its middle; the ring round the rest
+        core = inner.buffer(-spacing / 2, join_style='mitre', mitre_limit=5).buffer(
+            spacing / 2, join_style='mitre', mitre_limit=5).intersection(inner)
+        narrow = inner if core.is_empty else inner.difference(core.buffer(width * 0.05))
+        for piece in shapely.get_parts(narrow):
+            if piece.area < (spacing * spacing) / 8 and not core.is_empty and piece.distance(core) < width * 0.1:
+                continue        # a sliver along the ring: its ink is there already
+            out += centerline(piece, spacing / 4) or lines_of(piece.centroid)
+        inner = core
+        if inner.is_empty:
+            return out
     out += lines_of(inner) if border else []
+    # Inside a border, a spacing in from it (ink doesn't go twice along the edge, nor a thin
+    # area's border get hatched over: it is filled already)
+    rest = inset(inner, spacing) if border else inner
     if pattern == 'concentric':
-        out += concentric(inset(inner, spacing) if border else inner, spacing)
+        out += concentric(rest, spacing)
     elif pattern in ('hatch', 'crosshatch'):
-        lines = hatch(inner, spacing, angle)
+        lines = hatch(rest, spacing, angle)
         if pattern == 'crosshatch':
-            lines += hatch(inner, spacing, angle + 90)
+            lines += hatch(rest, spacing, angle + 90)
         start = lines[0][0] if lines else (0, 0)
-        out += link(order(lines, start), inner, spacing * 2.5)
+        out += link(order(lines, start), rest, spacing * 2.5)
     return out

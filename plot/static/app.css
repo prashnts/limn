@@ -492,6 +492,9 @@ a.button, .button { line-height: 1.6; }
 /* Shapes too small or dense for their tool (left out, or warned about) */
 .obj path.shape.small { stroke-dasharray: .4 .3; filter: drop-shadow(0 0 .25px var(--bad)) drop-shadow(0 0 .25px var(--bad)); }
 .obj.dim path.shape.small { filter: none; }
+/* Merged with others (dense), or cut where they'd go over ink (overdraw) */
+.obj path.shape.dense:not(.small) { filter: drop-shadow(0 0 .25px var(--warn)) drop-shadow(0 0 .25px var(--warn)); }
+.obj.dim path.shape.dense { filter: none; }
 
 /* The Printer panel: its macros, where Fluidd is */
 .macros { margin-top: 10px; display: grid; gap: 6px; }

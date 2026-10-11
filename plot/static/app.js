@@ -191,6 +191,8 @@ const HELP = {
   bleed: 'mm kept clear around what another tool (or a mask) draws on top: inks that run don\'t meet',
   layers: 'Light under dark: a lighter ink isn\'t cut out where a darker one draws over it, it is drawn whole and the light pens plot first, so the dark outlines over them stay crisp. Cut out: each ink only where it shows',
   small: 'Shapes too small or dense for the tool\'s line (it would fill them in: tiny handwriting, text): leave them out, draw them with a warning, or just draw them',
+  dense: 'Exact: every shape followed as it is. Merge: small shapes of one pen whose inks touch (a scatter plot\'s dots, short dashes close together) are one area, filled once',
+  overdraw: 'Lines that would go over ink drawn on top of them, which soaks and tears the paper: cut there (another pen\'s ink kept its bleed clear, its own where they run along it; ends give way first), only warned about, or drawn anyway',
   dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (the clock stops while the pens are in use)',
   webcam: 'The camera\'s name in Moonraker\'s webcams',
   focus_z: 'Camera: the G-code z where what lies on the bed is sharpest',
@@ -946,12 +948,15 @@ async function drawObjects() {
 }
 
 // Shapes too small or dense for their tool's line (the slice says which): outlined in
-// the Tools view, so it shows what 'too small' leaves out
+// the Tools view, so it shows what 'too small' leaves out; merged or cut ones (ink.py) in amber
 function markSmall() {
-  const small = (preview && preview.small) || {};
+  const small = (preview && preview.small) || {}, dense = (preview && preview.dense) || {};
   for (const g of $$('#design-layer g.obj')) {
-    const set = new Set(small[g.dataset.id] || []);
-    for (const p of $$('path.shape', g)) p.classList.toggle('small', set.has(+p.dataset.i));
+    const set = new Set(small[g.dataset.id] || []), merged = new Set(dense[g.dataset.id] || []);
+    for (const p of $$('path.shape', g)) {
+      p.classList.toggle('small', set.has(+p.dataset.i));
+      p.classList.toggle('dense', merged.has(+p.dataset.i));
+    }
   }
 }
 
@@ -2001,9 +2006,12 @@ const DRAW_CHOICES = {
   border: [['1', 'border'], ['0', 'no border']],
   stroke: Object.entries(STROKES),
   small: [['skip', 'leave out'], ['warn', 'warn, draw'], ['draw', 'draw']],
+  dense: [['exact', 'exact'], ['merge', 'merge small']],
+  overdraw: [['cut', 'cut'], ['warn', 'warn, draw'], ['draw', 'draw']],
   layers: [['1', 'light under dark'], ['0', 'cut out']],
 };
 const BOOL_CHOICES = new Set(['border', 'layers']);
+const CHOICE_LABELS = { small: 'too small', overdraw: 'over ink' };
 const asChoice = (v) => (v === true ? '1' : v === false ? '0' : v ?? '');
 const fromChoice = (k, v) => (v === '' ? null : BOOL_CHOICES.has(k) ? v === '1' : v);
 const choiceLabel = (k, v) => (DRAW_CHOICES[k].find(([c]) => c === asChoice(v)) || [, String(v)])[1];
@@ -2015,7 +2023,7 @@ function renderDraw() {
   const d = S.job.draw, base = S.draw;
   const nums = DRAW_NUMS.map(([k, l]) => `<label>${l}<input type="number" step="any" data-dk="${k}" value="${d[k] == null ? '' : num(d[k], 3)}"
       placeholder="${PEN_OWN.has(k) ? 'pen’s' : num(base[k], 3)}"${k in d ? ' class="changed"' : ''}></label>`).join('');
-  const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${k === 'small' ? 'too small' : k}${choices(k, d[k], base[k], `data-dk="${k}"${k in d ? ' class="changed"' : ''}`)}</label>`).join('');
+  const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${CHOICE_LABELS[k] || k}${choices(k, d[k], base[k], `data-dk="${k}"${k in d ? ' class="changed"' : ''}`)}</label>`).join('');
   const n = Object.keys(d).length;
   fill($('#drawset'), `<div class="grid">${nums}</div><div class="grid choices">${sels}</div>
     <p class="note">For every tool, whatever its pen; a tool’s tuning wins (Tools), a colour’s own fill and stroke over both.</p>
@@ -2092,7 +2100,7 @@ function renderTools() {
     // with a press, z_down and hop don't count: pen-down is z_touch less it, the lift comes from it and the play
     const fields = TOOL_FIELDS.filter((k) => k in tool && !(tool.press != null && (k === 'z_down' || k === 'hop'))).map((k) =>
       `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
-    const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${k === 'small' ? 'too small' : k}${choices(k, k in o ? tool[k] : null,
+    const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${CHOICE_LABELS[k] || k}${choices(k, k in o ? tool[k] : null,
       k in S.job.draw ? S.job.draw[k] : S.draw[k], `data-k="${k}" data-sel="1"${k in o ? ' class="changed"' : ''}`)}</label>`).join('');
     const tuned = Object.keys(o).length;
     const dry = ((printer && printer.drying) || {})[String(holder)];
