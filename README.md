@@ -1,182 +1,63 @@
-# Limn
+## Limn: Pen Plotter with Toolchanger
 
-Limn is a pen plotter with a toolchanger. This repository contains the various klipper configuration files and some extra modules.
+I wanted to build a plotter that could draw in different colors without
+manual color swaps. Limn is my attempt to build one using 3D printed and 3D
+printer parts. It has a 5-slot toolchanger, auto tool offset calibration,
+can plot on A6 and A5 (~90%) paper, and it runs on klipper.
 
-- `klipper/`: Klipper configuration for the toolchanger and printer.
-- `ext/limn/`: Klipper extension for the Dock and the calibration beds (`LRT_*` commands). Install with `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`, tests: `uv run python ext/tests/test_*.py`.
-- `ext/limn/tool_holder.py`: The tool holders' switches (MCP23017) and the tool tags (PN532), read by the extension straight off the Pi's I2C bus (`tool_holder_*` in `[limn]`). Commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK T= EXPECT=occupied|empty`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE [DX= DY= DZ= NAME= REFERENCE=0|1]`. Klipper's user needs to be in the `i2c` group.
-  Pens can also be scanned by hand: hold the pen to the reader until it beeps, then put it into a holder within 8 s. That holder has that pen (`TOOL_TAGS`, the web UI) until a hand empties it again; docking and undocking don't. Between tool changes the reader listens every 2 s (every 5 s while printing, `tool_holder_scan_idle` / `tool_holder_scan_printing` in `[limn]`, 0: off), and every 0.5 s for a minute after a hand was on the holders.
-  A tool with no holder (the Pi camera, `limn_endoscope/picam`) is docked by hand: `DOCK_MANUAL` (or a hand on the holders) to listen fast, hold its tag to the reader until it beeps, then push it onto the carriage within 20 s: the key's switch (`manual_stepper axis_k`) triggering docks it (`currently_docked_tool` 90, its tag's offsets, `printer.limn.manual`). Until it is taken off the dock is off limits: moves past X 110 fail (`manual_dock_x_max`), and `DOCK`, `UNDOCK`, `TOOL_SCAN`, `TOOL_TAG_READ/WRITE` and `BED_MESH_CALIBRATE` refuse. Take it off by hand, then `DOCK_CLEAR`, or hold it to the reader again. A camera whose pen (`pens.toml`) has a URL for `webcam` is then a camera of the plot tool's Scan tab.
-- `limn_cam/`: What the cameras see of a plot: the Z ladder that finds where each pen touches the paper, from a photo (`uv run python -m limn_cam ladder T0 T1`); homographies, the ink map, ArUco tags. Optional: nothing else needs it; OpenCV (for the tags) is an extra, `uv sync --extra cam`. See `notebooks/act-7-camera-ladder.md`.
-- `micropython/`: Firmware for the Dock and the bed MCUs, and `mcu.py` to install and update them.
-- `plot/`: SVG to G-code, and the web UI to place, paint, preview and plot drawings (`plot/README.md`). On the Pi, supervisord runs it on port 4219 (`limn_web.conf`, see *Web UI on the Pi*).
-- `slicer/`: The old PrusaSlicer setup, retired: `plot/` replaces it. Don't plot its G-code: its pen moves needed the `G1` ACT macro, which is gone, and without it `G1 Z0 ACT1` drives the pen to Z0.
-- `GEOMETRY.md`: where everything is, in plotter coordinates: axes, body, beds, dock and tools, heights, probe, camera.
-- `step/`: (todo) 3D Printable Parts
+Build logs are on [Hackaday.io](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger),
+and the printed parts can be found on [Printables](https://www.printables.com/model/1786450-limn-pen-plotter-with-automatic-tool-changer-parti).
 
 
-## Web UI on the Pi
+Due to physical constraints and geometry, no two tools/pens will land at the same
+point on paper for the given coordinate. This implies that they have each a
+certain offset relative to an origin. If we assign a reference pen as the origin,
+we can calibrate other tools by comparing the tip position (eg. by drawing and measuring).
 
-The plot UI runs next to Klipper and talks to Moonraker on the same Pi. Its workspace (the job, dropped SVGs, fonts) is `~/limn/plot-data`.
+This calibration can be done both by hand or automatically. There's an RFID tag
+on each tool. Automatic offset calibration requires a sensing surface where the
+tools can be probed. Limn can use a Resistive Touch Panel or an FSR matrix
+to probe the tool's tips and estimate the XYZ offset with about <0.2mm (best: 0.04mm). 
 
-```sh
-cd ~/limn && git pull && uv sync        # the plot dependencies (shapely, svgelements, fonttools, uharfbuzz, ..)
-sudo ln -sf ~/limn/limn_web.conf /etc/supervisor/conf.d/limn_web.conf
-sudo supervisorctl reread && sudo supervisorctl update
-sudo supervisorctl status limn_web      # then http://<pi>:4219
-```
+Then I needed software to actually draw things. I first used PrusaSlicer with
+an absurd hack: we can translate "retract", "unretract" as signals to move the
+pen up or down... and it worked quite well!
 
-After a `git pull` that changes `plot/`: `sudo supervisorctl restart limn_web`. It has no login: keep it on the LAN.
+There's an experimental "slicer" in `plot/` which will replace the slicer 
+gcode generation. It parses the SVG files natively and handles images, gradient,
+text well. It's also "vibecoded". It handles images and gradients with dithering
+and the pens can be layered. I intend to refine it further, but it does the job
+right now.
 
-Scans (the Scan tab) are kept in the Pi's memory (`/dev/shm/limn-captures`, at most 2 GB, the oldest go first): a reboot loses them. To keep them, set up the NAS in the Scan tab's *NAS* panel: an S3 endpoint (eg. OpenMediaVault's S3 plugin), bucket, folder and keys, saved in `~/limn/plot-data/nas.json` (its owner only); *Check* writes a small file there. Then ⇪ uploads a capture, or tick *upload each scan when done*. Stitching for film is Hugin's: `sudo apt install hugin-tools enblend`.
+Lots of things are currently undocumented and unstable. It's a build log with
+code, not a kit: expect to fork it and do some debugging. There's a
+`CHANGELOG.md` containing the progress.
 
+## What's where
 
-## Bed meshes and test marks
+- `klipper/`: Klipper configuration for the toolchanger motion and printer.
+- `ext/limn/`: Klipper extension for complex tasks (eg. calibration).
+- `plot/`: SVG to G-code ["Slicer"](plot/README.md).
+- `limn_cam/`: (experimental) Z ladder, homographies, scan stitching.
+- `micropython/`: firmware for the Dock and the bed MCUs.
+- `slicer/`: the old PrusaSlicer based setup, retired.
+- `GEOMETRY.md`: plotter coordinates, hardware.
+- `docs/`: the details below.
 
-`LRT_MESH_CALIBRATE` takes the meshes of the bed on the plotter (`meshes` in `ext/limn/beds.py`); with no bed on the plotter, the whole bed as `[bed_mesh]` in `printer.cfg` has it. A bed it doesn't know, it doesn't probe. `IF_STALE=1` only meshes when the meshes aren't of the bed as it sits now.
+## Development
 
-The meshes and the test marks belong to one placement of the bed. The Dock counts the beds placed and removed since it booted (`read_bed_id()`, see `micropython/STRATEGY.md`), so this holds over Klipper restarts. Once the bed has been off, or the Dock restarted, `LRT_PROBE_TOOL` meshes the bed again before probing the tool (and takes the tool back after), and the marks start over at the first one. The tools' tags stay as they are. `LRT_CALIBRATE` uses the meshes when they are of the bed as it sits (`MESH=1`: new ones anyway). The meshes and the calibration are kept in the saved variables too (`lrt_mesh_data`, `lrt_profile`) and put back at startup, so a restart without `SAVE_CONFIG` loses neither. Dock firmware without the count: the meshes are trusted until Klipper restarts.
-
-Meshing a calibrated bed again also probes the calibration's bed z again (BLTouch, nothing on the carriage), which the tools' dz are measured against. Then, when holder 45 has the reference tool, tagged `REFERENCE=1` (`LRT_CALIBRATE` tags it), it is docked and the reference points are taken again too: a full calibration. Otherwise the old reference points stay, and tools probed after the move are off in XY by about as much as the bed moved. That's fine as long as the pens only have to agree with each other.
-
-### Calibrating the pens on the FSR bed (BED_5)
-
-```
-LRT_CALIBRATE              ; the reference pen, in holder 45: a felt tip (a Stabilo). Its tag gets REFERENCE=1
-LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe the sheet when it beeps
-```
-
-Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 6), then two edges in X and two in Y, on the sheet's strong cells (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`): each axis is their mean, and how far apart they put the tip goes into its ±. The taps press until the cell reads `press_strength` (a felt tip ~0.1 mm in), 0.2 mm past contact at most, less for a pen whose `press_max` in `plot/profiles/pens.toml` is less; each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
-
-After a sensor swap:
-
-1. Map it, with the reference pen on the carriage: `LRT_FSR_MAP TIP=2.0,2.13` (the pen's tip from the toolhead, as the edges measured it; without TIP the map is in toolhead coordinates). It touches the sheet spot by spot on a 1.25 mm grid over the array and a 1 mm margin (`STEP=`, `MARGIN=`), each from a baseline in the air until a cell rises 40 (`RISE=`), then reads every cell 0.02 mm deeper (`DEPTH=`). It fits the array's origin and pitch to where each cell answers strongest, lists the cells that never answer and those answering far from their place (a ribbon off by a pin), and writes a picture and the data to `~/printer_data/logs/fsr-maps/` (Moonraker: `/server/files/logs/fsr-maps/…`; `fsr_map_dir` in `[limn]`). Set `origin` in `ext/limn/beds.py` from it. ~20-30 min. A spot where nothing answers (the margin, a dead cell) is pressed at most 0.06 mm under where the sheet is expected.
-2. `LRT_FSR_MATRIX` with nothing on the sheet: every cell low (under ~30), but row 3 (no series resistor).
-3. With the reference pen (a felt tip) on the carriage:
-
-```
-LRT_FSR_SURVEY             ; ~8 min: every cell pressed once, 0.08 mm at most past first touch
-LRT_CALIBRATE              ; the reference: holder 45
-LIMN_TOOL_CALIBRATE T=41   ; and the others
-```
-
-The survey's warnings name cells to move `z_cell` or the edges to when the ones in the config are weak or faulty on this sheet.
-
-It reads the sheet at rest, finds the tip, and presses every cell (but the dead row) from just above contact to 0.08 mm past first touch, one console line a cell. Then it judges: faulty (high at rest, or another cell answers while it is pressed), weak (under half the median), the noise floor and from it the `early` threshold, and an aim that brings the reference tip down mid cell on a good one. All saved per bed (`lrt_fsr_survey`) and gone by from then on: faulty cells aren't read, the aim and `early` are the survey's. It warns when the measuring cell or an edge cell is faulty or weak, with the strongest cells to use instead (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`). `SURVEY=0` on a measurement ignores it, `LRT_FSR_SURVEY CLEAR=1` drops it.
-
-What the sheet does, measured on 2026-10-07 (`ext/tests/test_fsr.py` simulates it, `bed5=True`): column 3 is faulty and never read (`faulty_cols`), row 3 has no series resistor (`dead_rows`); a press lifts its whole column, almost as much as the pressed cell at first touch; (2, 4) and (1, 4) are weak cells; the response stops rising ~0.13 mm in. A pen that comes down on another cell than aimed at is aimed again by that cell.
-
-After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
-
-Nothing is probed or drawn when a pen could hit the bed or the tools:
-- Meshing puts the carried tool away first (`UNDOCK` in the `BED_MESH_CALIBRATE` macro). Empty holders are normal. With no tool saved as carried, the key locked (the `axis_k` endstop open) and exactly one holder empty, that tool is taken as the carried one and put away. With the key open, nothing is guessed: keeping the carriage empty is up to you.
-- A mark is only drawn with a carried tool, with a paper mesh of this placement, inside that mesh and short of the holders (`MARKS_MAX_X`), and with sane offsets on its tag (`TOOL_MAX_DXY`, `TOOL_DZ`). The pen travels at the beds' travel height and comes down only over the mark.
-
-There is some more info posted [here](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) about this project.
-
-## LEDs
-
-The extension sets the tool holder and UI LEDs from what it knows. `klipper/leds.cfg` has how each state looks (`_led_styles`); `TOOL_LEDS` redraws them and lists the states.
-
-**The UI matrix** is a Pimoroni Unicorn pHAT: 8 × 4 RGB LEDs, Klipper's `[neopixel picam]` (`rpi:gpio15`, GRB), numbered 1 – 32 row by row from the top left. Each part has its own `led_effect` in `klipper/leds.cfg`:
-
-<img src="docs/led-matrix-ui.png" alt="The LED matrix UI: the alert sign, X Y Z K, the tag sign, a tool's number and the tool change light" width="320">
-
-```
-  1  2 |  3 |  4  5  6 |  7 |  8      1 2 9 10      ui_alert        the machine's mood (below)
-  9 10 | 11 | 12 13 14 | 15 | 16      3 11 19       ui_*stepper_*   the X, Y, Z endstops
- 17 18 | 19 | 20 21 22 | 23 | 24      27            ui_key_*        K: the toolchanger's key, red locked, green open
- 25 26 | 27 | 28 29 30 | 31 | 32      17 18 25 26   ui_tag          the tag reader
-                                      cols 4 – 6    ui_tool_41..45  a tool's number in pixels (T0 is holder 41)
-                                      16 24 32      ui_traffic_*    the tool change: red, yellow, green
-```
-
-The art (`docs/led-matrix-ui.svg`, 40 px a LED) is what the matrix means: the alert sign over the top left 2 × 2, X Y Z K down column 3, the tag sign over the bottom left 2 × 2. The plot UI's *Display* panel shows the matrix and the dock strip live, from the LEDs' own colours in Klipper (`neopixel picam`, `neopixel indockator`), with the art over them and, from `printer.limn.leds`, what each part says.
-
-| Where | State | Means |
-|---|---|---|
-| Dock strip, per holder | green | tool in its holder |
-| | off | holder empty (its tool on the carriage, or missing), or holders unreadable |
-| | red | the check at this holder failed |
-| Fluidd tool buttons `T0`..`T4` | dot colour / highlight | green home, no dot empty, red failed / the carried tool (`tool_holder_macros` in `[limn]`) |
-| UI digit | the tool's number: T0 (holder 41) shows 0 | |
-| | blue, breathing | tool being changed |
-| | amber / white | carried tool, tag not read / tag applied |
-| UI column 8 (red, yellow, green) | red, yellow, green blinking, green | tool change: travelling, at the holder, leaving, done. Red blinking: failed, until the next change or `DOCK_RESET` |
-| UI tag (bottom left) | blue blink / green / red blink | reading / applied / failed |
-| | dim cyan, breathing / cyan, quick blink | listening for a pen held to the reader (a hand was on the holders) / a pen was scanned: into its holder now |
-| | green / red blink | a holder took the scanned pen / it went in too late, or into two holders at once |
-| UI alert (top left), most urgent first | red, fast then slow blink | a check failed or the holders can't be read (fast for the first 3 s) |
-| | blue spinner, faster near the holder | tool change: travelling, at the holder, leaving |
-| | cyan spinner | reading or writing a tag |
-| | green, quick blink | a tool change just went well |
-| | amber blink, slowing down over 5 s | a hand was on the holders |
-| | amber, breathing | a tool is unaccounted for, or the carried tool's tag failed |
-| | green, breathing | carrying a tool with its tag read: ready |
-| | dim green, slow | all tools home |
-| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: its pen's `dry` minutes in `plot/profiles/pens.toml` (fineliners 10, the Stabilo 88's dry-safe ink 240), else 10 min (`tool_dry_idle`). The clock only runs while the machine leaves the pens alone: a print, G-code running (a calibration, a homing) or a tool change stops it, and the pen on the carriage starts afresh while it draws; a paused print doesn't. It beeps as a pen gets worse and once a minute meanwhile (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
-
-## Toolhead wiring and the endoscope
-
-**Cable chain** to the toolhead, open on one side (ventilated):
-- Z: NEMA 8 stepper, its 4 wires in a silicone ribbon.
-- K: 10 mm linear micro stepper, its 4 wires in a silicone ribbon.
-- The stepper drivers run at 5V.
-- A USB-C cable.
-- A ribbon with the endstops, the accelerometer and future toolhead sensors.
-- Mostly 26 AWG, with a short 30 AWG piece. 26 AWG is ~0.134 ohm/m (~2.2 A chassis rating), 30 AWG ~0.34 ohm/m (~0.86 A). A 30 AWG piece only a few cm long can carry more than that: the thicker wire at its ends draws the heat away. On 5V the voltage drop is the limit: the GND wire carries the same current, so count the run twice; doubling 5V and GND halves the drop.
-- Planned: pogo pins on the toolhead, tool power through the coupling (see *Toolhead rework* in `TODO.md`).
-
-**Endoscope camera** (on the toolhead), reclaimed from single-use medical endoscopes:
-- USB decoder board `0bde:8076` "Xitech USB Camera", UVC, 400x400 only (YUYV or MJPG, 30 fps). In crowsnest: `[cam endocam]`, ustreamer, port 8082 (`/webcam3/`), device `/dev/v4l/by-id/usb-Xitech_USB_Camera_20240610-video-index0`. The Fluidd webcam entry "axiscam" points at `/webcam3/` too, so it shows the endoscope. Crowsnest doesn't reopen a camera that was unplugged: restart it.
-- The sensor has 4 wires to the board through our adapter: VDD, GND, VCLK, VOUT. VOUT is raw analog: one pixel's level per VCLK tick, no sync like composite video. The board drives the clock, samples VOUT and builds the frames. A bad contact on VOUT/VCLK shows as a camera that enumerates and streams nothing. Adapter rules: a GND between VOUT and VCLK, short runs away from the stepper wires, decoupling on VDD near the sensor, never plug the sensor in while the board is powered.
-- The board's potentiometer is in the clock path (traced from photos, 2026-10-02), not on the LED driver. Its job is unconfirmed: likely the sampling phase (an RC delay) or the clock's edges/swing. See TODO.md.
-- No LEDs at the tip: light goes in through two fibers on the connector's optical port, ~1 cm from the camera connector. Each fiber end is Ø0.9 mm, 1.40 mm apart (hand-measured, ±0.1-0.2 mm; render: `~/limn-shot/endo-connector-model-20261001.png`). A 1W LED shone at it lights objects 5-10 mm from the tip. Couple a small flat emitter (~2 mm, covering both fibers) to within ~0.1 mm of the face; a collimating lens doesn't help. The fibers are likely plastic: keep a hot LED off the face.
-- LED power: ~3.0V × 350 mA ≈ 1 W at the LED; from 24V through a buck constant-current driver ~50 mA, from 5V 0.25-0.35 A. Switched on only for snapshots (on/off, not PWM: the camera shows PWM as bands).
-
-## Adding a camera
-
-A camera of the plot tool's Scan tab is an entry of the pen library (`plot/profiles/pens.toml`, `kind = "camera"`), named by a tag like a pen. Its URL alone gives a live view; a scan also needs its optics, or it takes the defaults (a 16 × 9 mm shot, turn 0, no offset, focus at Z7.5): tiles too far apart or overlapping, a mosaic turned or scaled wrong, positions off from where a pen draws.
-
-What an entry says (`Camera` in `plot/tools.py`):
-
-| Key | What | Found by |
-|---|---|---|
-| `webcam` | `http://host:port/capture.jpg` for a camera with its own server (limn_picam, the endoscope), or a Moonraker webcam's name | its server |
-| `fov` | mm one shot covers at `focus_z`, across and down (its px/mm) | Calibrate |
-| `turn` | degrees machine +X makes in the picture | Calibrate |
-| `center` | mm from the tool point to the picture's middle: positions are the middle's, so a scan lines up with what a pen draws at the same x, y | Calibrate, on the cross |
-| `focus_z` | machine Z (no mesh, no tag dz) where the paper is sharpest | Calibrate (or *Find focus*) |
-| `clear_z`, `z_min` | sideways only at `clear_z` or higher; never under `z_min` (the lens, its tube) | by hand: measure them |
-| `settle` | s still before a shot | by eye: shots blurred by the move |
-
-Not modelled: a mirrored picture (`turn` can't say it: flip it at the camera, limn_picam's `hflip`/`vflip` in its settings, the endoscope's `?flip=1`), and lens distortion (one px/mm over the whole picture: a wide lens's mosaic doesn't meet at its edges; more `overlap` hides some of it).
-
-**A Pi camera** (`limn_endoscope/picam`, docked by hand: holder 90, `DOCK_MANUAL`):
-1. Its server on the Pi (`picam/README.md`); `http://<host>:4250/capture.jpg` should give a full-size still.
-2. Its entry: the library's `[picam]`, or a new one (a key of up to 8 of a-z 0-9 - _ .: it goes on the tag) with `kind = "camera"`, `webcam`, `clear_z`, `z_min`. Give it a rough `center` if the lens is more than a few mm from the tool point (a ruler): the calibration has to find its cross in the first shot.
-3. Its tag names that key (`PEN=<key>`, written like any tool's tag, before it is docked): docking it by hand (`DOCK_MANUAL`, the tag to the reader) makes it the Scan tab's camera *manual*.
-4. **Before it goes on**, with a pen: the Scan tab's *Calibration cross* puts a 12 mm cross (the drawing `camera-mark`) at the middle of the region; plot it like any drawing. Once the camera is on, the dock is out of reach (no tool changes) until it is taken off and `DOCK_CLEAR`.
-5. Dock the camera by hand. *Calibrate* (about a minute, over the cross): the focus sweep, moves of 0.5 mm in X and in Y then of a quarter of a shot (the picture's shift by phase correlation, the two measures agreeing within 8%), the cross found in the picture (straightened by the turn) for `center`, then a look with that center: the cross should be in the middle (its *residual*). The shots are a capture (*calibrate*, ⊕).
-6. Check what it found (the Scan tab shows the old values beside it), then *Save to <key>*: `fov`, `turn`, `focus_z` and `center` go into its entry, the file's comments kept. Nothing is written before.
-7. A small scan over the cross: no gaps between tiles (`fov` too big) and no doubled edges (too small). Calibrate again after the camera, its lens or its tag's offsets change: `center` includes the tag's dx/dy.
-
-It says when it can't: no cross in sight (a rough `center`), a picture that hardly moves (nothing to see there), two measures that don't agree (the bed mat's regular grid and glare fool the correlation: plain paper and the cross), a mirrored picture.
-
-**A camera picked up from a holder** (the U20, a tag in its holder) is the same, but the job picks it up first, and the cross is plotted any time before. Without a cross (*Calibrate* on the region's middle, over something with texture) it measures all but `center`.
-
-Behind the buttons: `POST /api/camera/mark {x, y}`, `POST /api/camera/calibrate` (on the cross, else `{x, y}`), `POST /api/camera/calibration` (save); `Job.calibrate` in `limn_cam/scan.py`.
-
-## Linking the Klipper config
-
-Symlink the repo's `klipper/` folder into Klipper's config folder instead of copying the files over:
+Install Klipper and clone this repository in the home dir. Create following symlinks for plotter config and extension:
 
 ```sh
 ln -sfn ~/limn/klipper ~/printer_data/config/limn
 ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 ```
 
-Then in `~/printer_data/config/printer.cfg` include them through the link:
+The extension requires some packages, so does the plot tool. Extension runs in
+Klipper's venv and requires `numpy` to be installed. The plot tool needs `uv`.
+In practice these config will require hand tuning for your specific device.
+
+Then add the limn config files to your Klipper config:
 
 ```ini
 [include limn/limn.cfg]
@@ -184,6 +65,49 @@ Then in `~/printer_data/config/printer.cfg` include them through the link:
 [include limn/buzzer.cfg]
 ```
 
-- `printer.cfg` itself stays a real file in `~/printer_data/config/`. `SAVE_CONFIG` rewrites it by renaming a new file over it, so a symlink would be replaced by a plain copy, and the saved `[limn]` calibration would stop reaching the repo. `klipper/printer.cfg` in the repo is a reference copy (the tests read its `SAVE_CONFIG` block); copy it back when you want the repo to have the latest calibration.
-- Klipper resolves `[include]` relative to the file that has it. `limn.cfg` ends with `[include limn-tools.cfg]`, which through the link means `~/limn/klipper/limn-tools.cfg`. Either move that file into the repo's `klipper/`, or move the `[include limn-tools.cfg]` line from `limn.cfg` into `printer.cfg`.
-- Editing the linked files in Fluidd/Mainsail edits the repo's files. After a `git pull`, `RESTART` picks up config changes; changes under `ext/limn` need `sudo systemctl restart klipper`, since Klipper imports its extras only once.
+`printer.cfg` is not linked because Klipper's `SAVE_CONFIG` replaces it with a new one, which would break a symlink.
+
+The plot UI runs next to Klipper (or preferably on a different computer). Its
+workspace (the job, dropped SVGs, fonts) is `~/limn/plot-data`.
+
+```sh
+cd ~/limn && git pull && uv sync
+sudo ln -sf ~/limn/limn_web.conf /etc/supervisor/conf.d/limn_web.conf
+sudo supervisorctl reread && sudo supervisorctl update
+sudo supervisorctl status limn_web      # then http://<pi>:4219
+```
+
+Note that there's no authentication yet, but Moonraker's auth will be supported soon.
+
+A camera tool (wifi/wired) can be calibrated in the UI to scan the bed and plot 
+over an existing image (not fully tested yet) or they may be stitched with hugin:
+
+`sudo apt install hugin-tools enblend`
+
+Camera scans are kept in RAM (`/dev/shm/limn-captures`, 2 GB at most).
+
+
+- Run Tests: `uv run python ext/tests/test_*.py`
+- Interact/Update MCUs: `uv run python micropython/mcu.py`
+- Camera: `uv sync --extra cam`
+
+
+## Calibrating the pens
+
+A Bed containg a FSR matrix is used to calibrate XYZ offsets of the pens using
+these commands:
+
+```
+LRT_CALIBRATE              ; with the reference pen in holder 45
+LRT_PROBE_TOOL T=41   ; each other pen: its DX DY DZ go onto its tag
+```
+
+TODO: Description.
+Everything about meshes, the sensor and its quirks is in `docs/calibration.md`.
+
+## More notes
+
+- `docs/calibration.md`: bed meshes, test marks, the FSR sensor and its survey.
+- `docs/leds.md`: the LED matrix and dock strip, and what each state means.
+- `docs/toolhead.md`: tool holders and tags, hand-docked tools, the toolhead's wiring, the endoscope.
+- `docs/cameras.md`: adding a camera to the Scan tab and calibrating it.
