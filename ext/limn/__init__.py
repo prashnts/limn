@@ -80,9 +80,12 @@ MANUAL_WINDOW = 20.0    # s from the scan until the key's switch triggers
 MANUAL_POLL = 0.2       # s between looks at the key's switch, in that window
 MANUAL_X_MAX = 110.0
 INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
-TAP_PRESS = 0.1     # mm the FSR taps press past contact at most (less for a pen that presses less plotting).
-# Deeper spreads a felt tip over the cells' border: at 0.15 the Stabilo's locate went a cell off
-# in Y (3.87, 3.79 for ~2.1), an edge search failed and its contact came out 0.14 low (2026-10-07).
+TAP_PRESS = 0.2     # mm the FSR taps press past contact at most (less for a pen whose press_max is less).
+# The taps stop sooner at press_strength (beds.py): a felt tip there by ~0.1, a fine tip needs the
+# depth. 0.1 until 2026-10-11, from the sheet before its loads, ~5x as sensitive: there a Stabilo at
+# 0.15 went a cell off in locate (2026-10-07). With the 47k loads a Micron 01 at 0.1 read 0-80, and
+# an edge failed then passed (2026-10-10, act-9); a Stabilo reads ~135 at 0.1 and levels off ~230
+# from 0.25 (the Z axis lifts in its play: no more force deeper, 2026-10-11 ~/limn-shot/acc-*).
 PENS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'plot', 'profiles', 'pens.toml')
 # A pen swapped into a holder by hand mid-plot (TOOL_SWAP): the empty carriage waits over the
 # paper, clear of the holders, the print paused until that pen is scanned and in its holder.
@@ -387,15 +390,15 @@ class Limn:
         be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
         def before():
             carried = self._carried()
-            # The taps press TAP_PRESS at most, less for a pen that presses less plotting (its
-            # `press`, pens.toml); PRESS= instead, when given (deeper too)
+            # The taps press TAP_PRESS at most, less for a pen that may never press that much
+            # (its `press_max`, pens.toml); PRESS= instead, when given (deeper too)
             self._pen_dry()
             pen = self._tags().get(str(carried), {}).get('pen')
             press = gcmd.get_float('PRESS', None, minval=0.05, maxval=0.5)
             if press is not None:
                 fsr.press_cap, why = press, 'PRESS'
             elif pen in self._pens[3] and self._pens[3][pen] < TAP_PRESS:
-                fsr.press_cap, why = max(0.05, self._pens[3][pen]), f'as {pen} presses plotting'
+                fsr.press_cap, why = max(0.05, self._pens[3][pen]), f'{pen} never presses more'
             else:
                 fsr.press_cap, why = TAP_PRESS, 'the FSR\'s' if pen else 'the FSR\'s, its tag names no pen'
             gcmd.respond_info(f"[LRT] Tool {carried}: the taps press at most {fsr.press_cap:.2f}mm past contact ({why})")
@@ -1740,7 +1743,7 @@ class Limn:
                 lib = {k: v for k, v in lib.items() if isinstance(v, dict)}
                 self._pens = (mtime, {k: float(v['dry']) for k, v in lib.items() if v.get('dry')},
                               {k for k, v in lib.items() if v.get('kind', 'pen') not in INKY},
-                              {k: float(v['press']) for k, v in lib.items() if v.get('press')})
+                              {k: float(v['press_max']) for k, v in lib.items() if v.get('press_max')})
         except (OSError, ImportError, ValueError) as e:
             if self._pens[0] != 'missing':
                 logging.info("[Tool holder] no pen library for drying times (%s): %s", self.dry_pens, e)

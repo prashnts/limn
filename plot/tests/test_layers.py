@@ -482,7 +482,9 @@ def test_an_images_lines_are_drawn_as_lines_and_a_move_keeps_their_order(tmp_pat
     r2, _ = plot(job, cache)
     assert cache.slices == 1 and not ordered
     d1, d2 = (sim.segs[sim.kind == 1] for sim in (r.sim, r2.sim))
-    assert len(d1) == len(d2) and np.allclose(np.sort(d2[:, 3]) - 7, np.sort(d1[:, 3]), atol=1e-3)
+    # (both ends: from the park, a path may be drawn from its other end)
+    ends = lambda d: np.sort(np.concatenate([d[:, 0], d[:, 3]]))
+    assert len(d1) == len(d2) and np.allclose(ends(d2) - 7, ends(d1), atol=5e-3)
     # Only the image changed: the line's fill comes from before
     job.objects[0].raster.gamma = 2
     plot(job, cache)

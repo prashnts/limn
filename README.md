@@ -46,7 +46,7 @@ LRT_CALIBRATE              ; the reference pen, in holder 45: a felt tip (a Stab
 LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe the sheet when it beeps
 ```
 
-Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 1), then an edge in X and one in Y. The taps press 0.1 mm past contact at most, less for a pen that presses less plotting (its `press` in `plot/profiles/pens.toml`); each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
+Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 1), then an edge in X and one in Y. The taps press until the cell reads `press_strength` (a felt tip ~0.1 mm in), 0.2 mm past contact at most, less for a pen whose `press_max` in `plot/profiles/pens.toml` is less; each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
 
 After a sensor swap:
 

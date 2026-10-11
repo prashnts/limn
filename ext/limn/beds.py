@@ -118,22 +118,28 @@ BEDS = {
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
-            'respond': 150,         # strength (0..1000) that counts as touched
-            'early': 60,            # coarse descents stop at this, then fine steps to `respond`: the sheet
-                                    # reads <=6 at rest, col 4 ~24 (LRT_FSR_MATRIX, 2026-10-07)
+            # The strengths below are for the sheet with its 47k loads (2026-10-09, `fsr_load`): ~5x
+            # less than before at a depth. 0 at rest; a Stabilo on (1, 1) ~45 at first touch, ~65 at
+            # 0.05mm, ~135 at 0.1, ~200 at 0.2, flat ~230 from 0.25 (the Z axis lifts in its play,
+            # 2026-10-11, ~/limn-shot/acc-2026-10-11.jsonl); a Micron 01 0-80 at 0.1 (act-9). Before
+            # the loads: respond 150, early 60, sure 450, press_limit 950, press_strength 450,
+            # locate_strength 180.
+            'respond': 60,          # strength (0..1000) that counts as touched
+            'early': 30,            # coarse descents stop at this, then fine steps to `respond`; the
+                                    # survey sets it from the noise at rest (30 on 2026-10-09)
             # A press lifts the other rows of its column too, row 3 (no series
             # resistor on its ADC line) to ~530 while the pressed cell is ~880:
             # A press also lifts the rest of its row: with a fine tip pressing weakly
             # (a Micron on (1,5) at 355) (1,3) read 259, 0.73 of it, 2026-09-29.
             'dominance': 0.9,       # a cell responds only this close to the strongest
-            'sure': 450,            # another cell this strong: the tip is there, not crosstalk
-            'press_limit': 950,     # strength that means pressing too hard: lift now
+            'sure': 150,            # another cell this strong: the tip is there, not crosstalk
+            'press_limit': 600,     # strength that means pressing too hard: lift now (~2.5x the most seen)
             # The XY taps press past contact until the cell reads press_strength,
             # `press` mm at most (fsr.py, press_depth): a felt tip ~0.05mm, a fine
             # one up to 0.3. Deeper only adds force, and 0.3mm taps with a Stabilo
             # (~670) left marks on the sheet, 2026-09-29.
-            'press_strength': 450,
-            'locate_strength': 180, # locate's taps: enough to tell the cell (a weak cell, (2, 4): ~220 at most)
+            'press_strength': 120,  # a Stabilo by ~0.1mm; a fine tip goes the whole cap (ext/limn TAP_PRESS)
+            'locate_strength': 70,  # locate's taps: enough to tell the cell
             'identify': 0.06,       # mm past contact at least for locate's tap: past the first-touch crosstalk
             'press': 0.3,           # mm below contact for the XY taps, at most, when nothing else says
                                     # (ext/limn: the pen's own press, pens.toml; PRESS=)

@@ -564,7 +564,9 @@ def load(src, tolerance=0.02) -> Drawing:
                       e.values.get('fill-rule', 'nonzero'),
                       e.values.get('stroke-linecap', 'butt'), e.values.get('stroke-linejoin', 'miter'),
                       clip=clip_of(e))
-        path = e if isinstance(e, S.Path) else S.Path(e)
+        # A shape svgelements can't reify (an ellipse turned, a rect skewed) keeps its transform
+        # apart: abs() applies it, or it is drawn where it is in its own user space
+        path = e if isinstance(e, S.Path) else abs(S.Path(e))
         for sub in path.as_subpaths():
             p, closed = _flatten(sub, tolerance)
             if p is not None:

@@ -130,3 +130,13 @@ def test_object_coordinates_are_y_up(write_svg, tools):
     a, = s.paths['T3']
     assert a[:, 1].tolist() == pytest.approx([30, 30])         # the SVG's top is y = page height
     assert a[:, 2].tolist() == [0, 0]
+
+
+def test_a_turned_ellipse_stays_where_it_is(write_svg):
+    # An <ellipse> turned (here through a <use>) can't be reified: its transform must still apply
+    p = write_svg('''
+        <defs><ellipse id="e" cx="20" cy="30" rx="5" ry="10"/></defs>
+        <g transform="translate(40 10)"><g transform="rotate(-30 20 30)"><use href="#e" fill="#ff0000"/></g></g>''')
+    sh, = svg.load(p).shapes
+    a = np.vstack(sh.paths)
+    assert a.mean(axis=0) == pytest.approx([60, 40], abs=0.5)     # its centre, the page's mm

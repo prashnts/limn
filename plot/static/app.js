@@ -191,6 +191,7 @@ const HELP = {
   bleed: 'mm kept clear around what another tool (or a mask) draws on top: inks that run don\'t meet',
   layers: 'Light under dark: a lighter ink isn\'t cut out where a darker one draws over it, it is drawn whole and the light pens plot first, so the dark outlines over them stay crisp. Cut out: each ink only where it shows',
   small: 'Shapes too small or dense for the tool\'s line (it would fill them in: tiny handwriting, text): leave them out, draw them with a warning, or just draw them',
+  tone: 'Fills: solid in the pen, or screened: lines with paper between, as many as make the colour as light as it is in the pen\'s ink (a grey in the black pen)',
   dense: 'Exact: every shape followed as it is. Merge: small shapes of one pen whose inks touch (a scatter plot\'s dots, short dashes close together) are one area, filled once',
   overdraw: 'Lines that would go over ink drawn on top of them, which soaks and tears the paper: cut there (another pen\'s ink kept its bleed clear, its own where they run along it; ends give way first), only warned about, or drawn anyway',
   dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (the clock stops while the pens are in use)',
@@ -856,13 +857,14 @@ function effGroup(o, sh, part) {
   }
   return g;
 }
-const target = (g) => (g && g.tool) || (g && g.mask ? 'mask' : 'skip');
+const target = (g) => (g && g.tool) || (g && g.mix ? 'mix' : g && g.mask ? 'mask' : 'skip');
 
 function paintOf(g) {
   // [colour, opacity] of a group in the Tools view
   if (!g) return ['none', 1];
   if (g.tool && S.tools[g.tool]) return [S.tools[g.tool].color, 1];
   if (g.mask) return ['var(--paper)', 1];
+  if (g.mix) return ['#777', 0.55];          // mixed from the pens: its own colour is what they aim at
   return ['#999', 0.18];
 }
 
@@ -1131,8 +1133,9 @@ $('#play').addEventListener('click', async () => {
 
 // --- panels -------------------------------------------------------------------
 function toolOptions(g) {
-  const cur = g && g.tool ? g.tool : g && g.mask ? 'mask' : 'skip';
+  const cur = target(g);
   const opts = Object.values(S.tools).filter((t) => t.draws !== false).map((t) => `<option value="${esc(t.id)}"${cur === t.id ? ' selected' : ''}>${esc(t.id)} ${esc(t.name)}</option>`);
+  opts.push(`<option value="mix"${cur === 'mix' ? ' selected' : ''}>mix of pens</option>`);
   opts.push(`<option value="mask"${cur === 'mask' ? ' selected' : ''}>mask</option>`);
   opts.push(`<option value="skip"${cur === 'skip' ? ' selected' : ''}>skip</option>`);
   return opts.join('');
@@ -1202,7 +1205,7 @@ function renderLayers() {
   const count = {};
   for (const o of S.job.objects) for (const [to, ids] of Object.entries(layerShapes(o))) count[to] = (count[to] || 0) + ids.length;
   const pens = plotOrder().filter((to) => S.tools[to] && S.tools[to].draws !== false && (count[to] || hiddenLayers.has(to)));
-  const tos = [...pens, ...['mask', 'skip'].filter((to) => count[to] || hiddenLayers.has(to))];
+  const tos = [...pens, ...['mix', 'mask', 'skip'].filter((to) => count[to] || hiddenLayers.has(to))];
   const row = (to) => {
     const t = S.tools[to], off = hiddenLayers.has(to);
     const sw = t ? `<span class="swatch dot" style="background:${esc(t.color)}"></span>` : `<span class="swatch ${to}"></span>`;
@@ -1357,13 +1360,13 @@ function layerShapes(o) {
   return out;
 }
 const pens = (cur) => Object.values(S.tools).filter((t) => t.draws !== false).map((t) => opt(t.id, cur, `${t.id} ${t.name}`)).join('')
-  + opt('mask', cur, 'mask') + opt('skip', cur, 'skip');
-const LAYER_NAMES = { mask: 'Mask: hides what is under', skip: 'Not drawn' };
+  + opt('mix', cur, 'mix of pens') + opt('mask', cur, 'mask') + opt('skip', cur, 'skip');
+const LAYER_NAMES = { mix: 'Mixed: the pens side by side', mask: 'Mask: hides what is under', skip: 'Not drawn' };
 const swatchOf = (part, colour) => `<span class="swatch ${part}" style="${part === 'stroke' ? 'border-color' : 'background'}:${esc(colour)}"></span>`;
 function layersHtml(o) {
   const chips = chipsOf(o), shapes = layerShapes(o);
-  const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mask', 'skip'];
-  for (const c of chips) if (!tos.includes(c.to)) tos.splice(-2, 0, c.to);      // a tool not in a holder any more
+  const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mix', 'mask', 'skip'];
+  for (const c of chips) if (!tos.includes(c.to)) tos.splice(-3, 0, c.to);      // a tool not in a holder any more
   const chip = (c) => `<button class="chip${openChip === `${o.id}|${c.keys[0]}` ? ' on' : ''}" draggable="true" data-chip="${esc(c.keys[0])}"
       title="${esc(`${c.part === 'stroke' ? 'Outlines' : 'Fills'} ${c.colours.slice(0, 6).join(', ')}${c.colours.length > 6 ? ` and ${c.colours.length - 6} more` : ''}: ${c.shapes} shape${c.shapes > 1 ? 's' : ''}. Drag onto another pen, click for its settings`)}">${swatchOf(c.part, c.colour)}${c.colours.length > 1 ? `<span class="n">${c.colours.length}</span>` : ''}</button>`;
   return tos.map((to) => {
@@ -1388,6 +1391,7 @@ function chipEditor(o, chips) {
     ? `<select data-cf="fill" title="How the insides are filled">${opt('', cur.fill ?? '', `${t.fill} (pen)`)}${['hatch', 'crosshatch', 'concentric', 'none'].map((v) => opt(v, cur.fill ?? '')).join('')}</select>
        <label>∠<input type="number" data-cf="angle" value="${num(cur.angle)}" step="15" placeholder="${num(t.angle)}" title="Fill lines' angle"></label>
        <label>gap<input type="number" data-cf="spacing" value="${num(cur.spacing)}" step="0.05" min="0.05" placeholder="pen" title="mm between fill lines"></label>
+       <select data-cf="tone" title="Solid, or lines with paper between: as many as make the colour as light as it is in the pen's ink">${opt('', cur.tone ?? '', `${t.tone || 'solid'} (pen)`)}${opt('solid', cur.tone ?? '')}${opt('screen', cur.tone ?? '')}</select>
        <select data-cf="border" title="Outline the fill">${opt('', b, `${t.border ? 'border' : 'no border'} (pen)`)}${opt('1', b, 'border')}${opt('0', b, 'no border')}</select>
        <label class="check" title="Keep the fill its pen's bleed (${num(t.bleed)} mm, Tools tuning) inside its own edge, the corners round; a border runs along that inner edge"><input type="checkbox" data-cf="inset"${cur.inset ? ' checked' : ''}> bleed margin</label>`
     : `<select data-cf="stroke" title="Outlines: a line down the middle, or as wide as the SVG has them">${opt('', cur.stroke ?? '', `${STROKES[t.stroke]} (pen)`)}${Object.entries(STROKES).map(([v, l]) => opt(v, cur.stroke ?? '', l)).join('')}</select>`;
@@ -1397,7 +1401,7 @@ function chipEditor(o, chips) {
     <div class="row">${swatchOf(c.part, c.colour)} <b>${c.part === 'stroke' ? 'Outlines' : 'Fills'}</b>
       <span class="note grow">${c.colours.length > 1 ? `${c.colours.length} colours alike · ` : `${esc(c.colour)} · `}${c.shapes} shape${c.shapes > 1 ? 's' : ''}</span>
       <button class="icon" data-act="chip-close" title="Close">✕</button></div>
-    <div class="opts"><select data-cf="to" title="The pen these colours are drawn with; mask: they hide what is under; skip: not drawn">${pens(target(cur))}</select>${opts}</div>
+    <div class="opts"><select data-cf="to" title="The pen these colours are drawn with; mix of pens: all the pens side by side, in the shares that make the colour (outlines: the nearest pen); mask: they hide what is under; skip: not drawn">${pens(target(cur))}</select>${opts}</div>
     ${each}</div>`;
 }
 async function setChip(o, keys, fn) {
@@ -1405,7 +1409,7 @@ async function setChip(o, keys, fn) {
   for (const k of keys) groups[k] = fn({ ...layerGroup(o, k) });
   return patchObj(o.id, { groups });
 }
-const toPen = (g, v) => ({ ...g, tool: ['mask', 'skip'].includes(v) ? null : v, mask: v === 'mask' });
+const toPen = (g, v) => ({ ...g, tool: ['mix', 'mask', 'skip'].includes(v) ? null : v, mask: v === 'mask', mix: v === 'mix' });
 
 // The shapes picked with the shapes tool: their pen, their fill (only shapes that can take
 // one: not lines), its margin and border. Exactly a group's shapes: the group's settings.
@@ -2008,6 +2012,7 @@ const DRAW_CHOICES = {
   small: [['skip', 'leave out'], ['warn', 'warn, draw'], ['draw', 'draw']],
   dense: [['exact', 'exact'], ['merge', 'merge small']],
   overdraw: [['cut', 'cut'], ['warn', 'warn, draw'], ['draw', 'draw']],
+  tone: [['solid', 'solid'], ['screen', 'screen']],
   layers: [['1', 'light under dark'], ['0', 'cut out']],
 };
 const BOOL_CHOICES = new Set(['border', 'layers']);
@@ -2643,7 +2648,11 @@ async function openJob(file) {
   toast(`Opened ${file.name} (Ctrl+Z: back to the one before)` + (got.notes.length ? `. ${got.notes.join('; ')}` : ''));
 }
 $('#job-input').addEventListener('change', (e) => { if (e.target.files[0]) openJob(e.target.files[0]); e.target.value = ''; });
-window.addEventListener('dragover', (e) => { e.preventDefault(); $('#drop').classList.add('over'); });
+// A drag that starts in the page (a layer, a chip) is not a file drop: these leave it alone
+let innerDrag = false;
+window.addEventListener('dragstart', () => { innerDrag = true; }, true);
+window.addEventListener('dragend', () => { innerDrag = false; }, true);
+window.addEventListener('dragover', (e) => { if (innerDrag) return; e.preventDefault(); $('#drop').classList.add('over'); });
 window.addEventListener('dragleave', () => $('#drop').classList.remove('over'));
 // A drop: SVG files (an SVG font, its name with "font" in it, goes to the fonts), fonts, a saved job;
 // or SVG markup dropped as text (from an app, not a file). Anything else: says so, not silently nothing
@@ -2654,6 +2663,7 @@ function svgOf(name, type, text) {
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   $('#drop').classList.remove('over');
+  if (innerDrag) return;
   const dt = e.dataTransfer, files = [...dt.files];
   const isSvg = (f) => /\.svg$/i.test(f.name) || f.type === 'image/svg+xml';
   const svgs = files.filter((f) => isSvg(f) && !/font/i.test(f.name));

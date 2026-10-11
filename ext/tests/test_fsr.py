@@ -17,8 +17,19 @@ def bed_z(x, y):
     return 0.01 * x + 0.005 * y     # not level
 
 
-def bed_cfg():
+# The strengths BED_5's sheet had before its 47k loads (2026-10-09). Every FsrBed model here was
+# measured then (gain 2000, bed5, fresh), so the tests run them with these; loaded_cfg() is the
+# config as it is, for the loaded model (test_the_loaded_sheet).
+UNLOADED = {'respond': 150, 'early': 60, 'sure': 450, 'press_limit': 950, 'press_strength': 450,
+            'locate_strength': 180}
+
+
+def loaded_cfg():
     return copy.deepcopy(BEDS['BED_5']['fsr'])
+
+
+def bed_cfg():
+    return {**loaded_cfg(), **UNLOADED}
 
 
 def old_cfg():
@@ -37,7 +48,7 @@ class FsrBed:
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
                  dead_lifts=0.0, bed5=False, fresh=False, shift=(0.0, 0.0), dead_cols=(), preload=None, hover=None,
-                 patchy=0.0):
+                 patchy=0.0, top=880):
         self.samples = samples
         self.dock = dock
         # shift: the sheet sits that far from where the config has it (a swap)
@@ -53,6 +64,7 @@ class FsrBed:
         self.tool_length = tool_length
         self.dead = dead
         self.gain = gain
+        self.top = top                          # a press reads no more than this (the loaded sheet: ~230)
         self.noise = noise
         self.alive_for = alive_for              # frames stop after this many seconds
         self.responds = responds
@@ -189,21 +201,21 @@ class FsrBed:
             return self.frame_bed5(array)
         shares = self.shares(array)
         columns = {c for _, c in shares}
-        pressed = min(880, self.press() * self.gain)
+        pressed = min(self.top, self.press() * self.gain)
         rows = {r: max(v for (rr, _), v in shares.items() if rr == r) for r, _ in shares}
         values = []
         for row in range(array.rows):
             for col in range(array.cols):
                 s = abs(self.rng.normal(0, self.noise))
                 if (row, col) in shares:
-                    s = 1000 if self.spike else min(880, self.press() * self.gain) * shares[(row, col)] + s
+                    s = 1000 if self.spike else min(self.top, self.press() * self.gain) * shares[(row, col)] + s
                 elif self.dead_lifts and (3, col) in shares:
                     s += self.dead_lifts * pressed * shares[(3, col)]
                 elif self.crosstalk and col in columns:
                     # Up the column, as measured (2026-10-07): row 3 ~0.95 of the pressed cell,
                     # row 0 0.94 of it at first touch falling to ~0.4 by 0.07mm, row 2 0.8 -> 0.37
                     first = 1 / (1 + (max(self.press(), 0) / 0.035) ** 4)
-                    column = max(min(880, self.press() * self.gain) * v for (r_, c), v in shares.items() if c == col)
+                    column = max(min(self.top, self.press() * self.gain) * v for (r_, c), v in shares.items() if c == col)
                     base, extra = {3: (0.95, 0.0), 0: (0.40, 0.55)}.get(row, (0.37, 0.45))
                     s += column * (base + extra * first)
                 elif row in rows:
@@ -842,6 +854,40 @@ def test_dz_trim_takes_every_tag_down_alike():
         fsr.dz_trim = trim
         dzs.append(fsr.probe_tool(profile)[2])
     assert abs(dzs[0] - dzs[1] - 0.15) < 0.02, dzs
+
+
+def test_the_loaded_sheet():
+    '''BED_5 with its 47k loads, the config as it is: a Stabilo reads ~65 at 0.05mm past first
+    touch, ~135 at 0.1, ~200 at 0.2 and no more than ~230 (the Z axis lifts in its play); a
+    Micron 01 0-80 at 0.1 (2026-10-10/11). The reference's taps stop by ~0.1, a fine tip's go
+    the whole cap (0.2, ext/limn TAP_PRESS), and both are measured. This model is kinder than the
+    sheet (no patches, weak cells or crosstalk): it measures the fine tip at the old cap (0.1) too,
+    where on the plotter a Micron 01's edge failed, then passed (2026-10-10).'''
+    cfg = loaded_cfg()
+    felt = dict(gain=1350, top=230)
+    fine = dict(gain=450, top=230, width=0.1)
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), **felt)
+    fsr.press_cap = 0.2
+    profile = fsr.calibrate()
+    assert 0.06 <= fsr.depth[1] <= 0.12, fsr.depth
+    ref = profile['fsr_ref']
+    assert abs(ref['x'] - 116.0) < 0.03 and abs(ref['y'] - 54.6) < 0.03, ref
+    for tip in ((0.35, -0.2), (-1.3, 0.95)):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, tool_length=2.2, **fine)
+        fsr.press_cap = 0.2
+        bed.tool = 'T1'
+        dx, dy, dz = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
+        assert abs(fsr.depth[1] - 0.2) < 1e-9, fsr.depth
+        assert bed.max_press < 0.2 + 0.08, bed.max_press        # the cap, and contact a fine step late
+        assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
+    # dz: the fine tool is 0.4 longer; contact is where the sheet rises `early` (30), which a fine
+    # tip reaches ~0.05mm later than the felt one: it reads that much lower, its tag that much deeper
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), **felt)
+    fsr.press_cap = 0.2
+    bed.tool = 'T4'
+    _, _, ref_dz = fsr.probe_tool(profile)
+    assert 0.4 - 0.08 < dz - ref_dz < 0.4 + 0.01, (ref_dz, dz)
 
 
 if __name__ == '__main__':

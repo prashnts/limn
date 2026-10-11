@@ -45,10 +45,12 @@ from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
 from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
 from .ink import MERGE, Unit, across, guard, merge, refill
+from .mix import SCREEN_MIN, coverage, shares, side_by_side
 from .job import Group, Obj
 from .raster import drawn, object_keys, raster_shapes
 from .surface import make
 
+MIXED = '*mix'  # what a colour mixed from the pens covers, as a tool (ink: another tool's)
 WIDE = 1.5      # auto: strokes this many tool widths wide or more fill their area
 SMALL = 2.5     # a shape less than this many tool widths across is a blob (but a dot, under half one)
 LOST = 0.7      # too dense: the tool's line paints over this much of the space inside a shape
@@ -335,6 +337,12 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         paths = [local(p) for p in sh.paths]
         sg = part_group(obj, sh, 'stroke', groups, sets)
         fg = part_group(obj, sh, 'fill', groups, sets)
+        # Mixed from the pens side by side: an area only. A line (an outline, text in a line
+        # font) in the pen nearest its colour
+        if sg is not None and sg.mix:
+            sg = sg.model_copy(update={'tool': nearest_tool(sh.stroke, tools), 'mix': False})
+        if fg is not None and fg.mix and sh.line:
+            fg = fg.model_copy(update={'tool': nearest_tool(sh.fill, tools), 'mix': False})
         clip = clip_of(sh)
         if clip is not None and clip.is_empty:
             continue                # its clip-path or mask hides all of it
@@ -344,7 +352,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             items.append((sh, paths, None, fg, None, None, False, False, []))
             continue
         stroke_on = sg is not None and (sg.tool is not None or sg.mask)
-        fill_on = fg is not None and (fg.tool is not None or fg.mask)
+        fill_on = fg is not None and (fg.tool is not None or fg.mask or fg.mix)
         fill_area = None
         if fill_on:
             rings = [p if c else np.vstack([p, p[:1]]) for p, c in zip(paths, sh.closed)]
@@ -361,7 +369,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         s_area = within(stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join), clip) if (wide or stroke_covers) else None
         covers = []                 # (area, tool id; '' a mask, a line on its centre): what it hides under it
         if obj.occlude and fill_on and (sh.fill_opaque or not sh.fill) and fill_area is not None:
-            covers.append((fill_area, fg.tool or '', False))
+            covers.append((fill_area, fg.tool or (MIXED if fg.mix else ''), False))
         if stroke_covers:
             covers.append((s_area, sg.tool or '', st is not None and not wide))
         items.append((sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, covers))
@@ -405,6 +413,35 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         units.append(Unit((sh.index, part), t.id, lines_of(lines), {sh.index}, ink, how,
                           (paths, None) if ink is not None else None))
 
+    def screened(sh, fg, ft):
+        '''A fill's line spacing as screened (`tone`): as many lines as make the colour as
+        light as it is in the pen's ink. 0: solid; None: too light, the paper.'''
+        if setting(fg, ft, 'tone') != 'screen' or not sh.fill:
+            return 0
+        c = coverage(sh.fill, ft.color)
+        return None if c < SCREEN_MIN else ft.width / c
+
+    pens = {}                       # what a mix draws with: each ink once (two black pens: the first)
+    for k, t in sorted(tools.items()):
+        if t.draws and not t.alias and t.kind != 'laser' and t.color.lower() not in {p.color.lower() for p in pens.values()}:
+            pens[k] = t
+    mixes = {}                      # colour -> (shares, the paper's, error): told once
+
+    def mixed_unit(i, sh, fg, area, over):
+        '''A fill mixed from the pens side by side (mix.py): a unit for each pen.'''
+        if not pens:
+            return
+        rep = max(pens.values(), key=lambda t: t.bleed)         # the widest gap any of them keeps
+        if over is not None:
+            area = area.difference(over.buffer(rep.bleed) if rep.bleed > 0 else over)
+        area = less(area, above(i, area, rep))
+        if sh.fill not in mixes:
+            mixes[sh.fill] = shares(sh.fill, {k: t.color for k, t in pens.items()})
+        share = mixes[sh.fill][0]
+        lines, _ = side_by_side(area, share, pens, fg.angle if fg.angle is not None else rep.angle)
+        for tid, ps in sorted(lines.items()):
+            units.append(Unit((sh.index, 0), tid, ps, {sh.index}))
+
     for i, (sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, _) in enumerate(items):
         ft = tool_of(fg)
         if sh.line:
@@ -413,15 +450,21 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
                 line_unit(sh, 0, ft, paths, less(lines, above(i, lines, ft)))
             continue
         st = tool_of(sg)
-        if ft is not None and fill_area is not None:
+        if fg is not None and fg.mix and fill_area is not None:
+            mixed_unit(i, sh, fg, fill_area, s_area if stroke_covers else None)
+        if ft is not None and fill_area is not None and screened(sh, fg, ft) is not None:
             area = margin(fill_area, ft.bleed) if fg.inset else fill_area
             if stroke_covers and not goes_under(ft, st):
                 gap = ft.bleed if st is None or st.id != ft.id else 0
                 area = area.difference(s_area.buffer(gap) if gap > 0 else s_area)
             area = less(area, above(i, area, ft))
             how = (setting(fg, ft, 'fill'), fg.spacing or ft.spacing, setting(fg, ft, 'angle'), setting(fg, ft, 'border'))
-            units.append(Unit((sh.index, 0), ft.id, refill(area, ft.width, how), {sh.index}, area, how,
-                              (paths, fill_area) if (sh.index, ft.id) in deferred else None))
+            gap = screened(sh, fg, ft)
+            if gap and gap > how[1] and how[0] != 'none':      # lines with paper between, no outline
+                how = (how[0], gap, how[2], False)
+            later = (sh.index, ft.id) in deferred       # filled once merged, or not (ink.merge)
+            units.append(Unit((sh.index, 0), ft.id, None if later else refill(area, ft.width, how), {sh.index},
+                              area, how, (paths, fill_area) if later else None))
         if st is not None:
             if wide:
                 area = less(s_area, above(i, s_area, st))
@@ -430,6 +473,11 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
             else:
                 lines = within(centerlines(paths, sh.closed), clip_of(sh))
                 line_unit(sh, 1, st, paths, less(lines, above(i, lines, st)))
+
+    for colour, (share, paper, err) in mixes.items():
+        parts = ', '.join(f'{k} {v:.0%}' for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
+        problems.append(f'{obj.id}: {colour} mixed side by side: {parts or "no pen"}, paper {paper:.0%}'
+                        + (f' (the pens get only near it: {err:.0%} off)' if err > 0.1 else ''))
 
     units, merged = merge(units, tools)
     dense = set()

@@ -28,6 +28,8 @@ class Group(BaseModel):
     border: bool | None = None      # fills: outline the area too
     spacing: float | None = None    # fills: instead of the tool's
     inset: bool | None = None       # fills: kept the tool's `bleed` inside its own edge (smooth corners)
+    tone: Literal['solid', 'screen'] | None = None      # fills: solid, or lines as far apart as it is light
+    mix: bool = False               # drawn by all the pens side by side, in the shares that make it (mix.py)
 
 
 class ShapePaint(BaseModel):

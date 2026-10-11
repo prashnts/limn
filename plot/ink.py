@@ -45,7 +45,7 @@ BIG = 2000      # guard: a unit of more points than this is grown only near what
 class Unit:
     key: tuple                      # paint order: (shape index, 0 fill / 1 stroke)
     tool: str
-    paths: list                     # (n, 2), object mm
+    paths: list | None              # (n, 2), object mm; None: its `ink` filled as `how`, when merged or not
     shapes: set = field(default_factory=set)
     ink: object = None              # the area its ink covers: small ones may merge
     how: tuple = None               # how its area is filled again: pattern, spacing, angle, border
@@ -53,7 +53,12 @@ class Unit:
     merged: int = 1                 # shapes in it
 
 
-def across(paths):
+def across(paths, area=None):
+    if paths is None:
+        if area is None or area.is_empty:
+            return 0.0
+        x0, y0, x1, y1 = area.bounds
+        return max(x1 - x0, y1 - y0)
     pts = [p for p in paths if len(p)]
     if not pts:
         return 0.0
@@ -74,7 +79,7 @@ def merge(units, tools):
     for u in units:
         t = tools.get(u.tool)
         if (t is not None and getattr(t, 'dense', 'exact') == 'merge' and u.ink is not None
-                and not u.ink.is_empty and u.how is not None and across(u.paths) < MERGE * t.width):
+                and not u.ink.is_empty and u.how is not None and across(u.paths, u.ink) < MERGE * t.width):
             groups.setdefault((u.tool, u.how), []).append(u)
         else:
             out.append(u)
@@ -101,7 +106,7 @@ def merge(units, tools):
         n = 0
         for cl in clusters.values():
             if len(cl) == 1:
-                out.append(cl[0])
+                out.append(_filled(cl[0], t))
                 continue
             area = unary_union([u.ink for u in cl])
             paths = refill(area, t.width, how)
@@ -113,8 +118,15 @@ def merge(units, tools):
         if merged:
             s, k = stats.get(tid, (0, 0))
             stats[tid] = (s + merged, k + n)
+    out = [_filled(u, tools[u.tool]) if u.paths is None else u for u in out]
     out.sort(key=lambda u: u.key)
     return out, stats
+
+
+def _filled(u, t):
+    if u.paths is not None:
+        return u
+    return Unit(u.key, u.tool, refill(u.ink, t.width, u.how), u.shapes, u.ink, u.how, u.small, u.merged)
 
 
 def _densify(p, step):

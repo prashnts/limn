@@ -22,11 +22,13 @@
 # to 0..1, then ** gamma. Then:
 #
 #   dither    Floyd-Steinberg on cells `pitch` apart (Pillow's); the inked
-#             cells of a row joined into lines. Fine detail, many strokes.
+#             cells of a row joined into lines. Fine detail, many strokes. A
+#             lone cell's dash inks more than its cell (round ends): the tone is
+#             corrected for it (gain), or the light tones come out dark.
 #   lines     rows `pitch` apart, each drawn where the picture is darker than
-#             its row's level (4 levels, ordered): long strokes, quick.
+#             its row's level (8 levels, ordered): long strokes, quick.
 #   halftone  dots `cell` apart, every other row offset, each a spiral with its
-#             turns `pitch` apart, as wide as the spot is dark.
+#             turns `pitch` apart, its area the spot's darkness (dot_radius).
 #
 # `pitch` and `cell` are mm as plotted (the drawing's scale is taken out).
 # Left empty they follow the pen that draws the ink (its colour's layer):
@@ -53,7 +55,7 @@ from . import svg
 from .geometry import lines_of
 from .job import RasterSpec
 
-LEVELS = (0, 2, 1, 3)       # the rows' thresholds in `lines`, in order (a 1-D Bayer matrix)
+LEVELS = (0, 4, 2, 6, 1, 5, 3, 7)     # the rows' thresholds in `lines`, in order (a 1-D Bayer matrix)
 CMYK = (('#00ffff', 15), ('#ff00ff', 75), ('#ffff00', 0), ('#000000', 45))
 ANGLES = (45, 15, 75, 0, 30, 60, 90, 105)
 MAX_CELLS = 250_000         # dither: about 60 thousand strokes at most
@@ -246,6 +248,16 @@ def tone(d, spec):
     return d ** spec.gamma
 
 
+def gain(t, g):
+    '''How many marks make tone t (0..1 of the paper inked), each mark inking g of its cell:
+    marks overlap at random as they grow, so t = (1 - e^(-g f)) / (1 - e^(-g)) for a fraction
+    f of the cells (all of them: all inked). Solved for f. A pen's mark is bigger than its
+    cell (a dash with round ends): without it the light tones come out dark and blotchy.'''
+    if g <= 0:
+        return t
+    return -np.log1p(-np.clip(t, 0, 1) * -np.expm1(-g)) / g
+
+
 def floyd(t):
     '''Floyd-Steinberg (Pillow's): which cells are inked (NaN: never).'''
     grey = np.clip((1 - np.nan_to_num(t)) * 255 + 0.5, 0, 255).astype(np.uint8)
@@ -261,6 +273,14 @@ def runs(mask, us, v, step, world):
         a, b = (us[i], us[j]) if j > i else (us[i] - step / 4, us[i] + step / 4)
         out.append(np.array([world(a, v), world(b, v)]))
     return out
+
+
+def dot_radius(t, step):
+    '''A halftone dot inking t of its cell (rows staggered): its area t of the cell's until
+    it meets its neighbours (half a cell), then out to where they leave no paper (5/8).'''
+    if t <= math.pi / 4:
+        return step * math.sqrt(t / math.pi)
+    return step * (0.5 + 0.125 * (t - math.pi / 4) / (1 - math.pi / 4))
 
 
 def spiral(cx, cy, r, pitch, chord=0.1):
@@ -300,6 +320,9 @@ def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tool
     if spec.mode in ('dither', 'lines'):
         us, vs, t, world, step = grid(img, plane, pitch / scale, angle, MAX_CELLS if spec.mode == 'dither' else MAX_ROWS_CELLS)
         t = tone(t, spec)
+        if spec.mode == 'dither':           # what one cell's mark inks of it: a dash half a cell, round ends
+            width, cell_mm = (pen.width if pen is not None else 0.5), step * scale
+            t = gain(t, (width * cell_mm / 2 + math.pi * width ** 2 / 4) / cell_mm ** 2)
         if spec.mode == 'dither':
             ink = floyd(t)
         else:
@@ -314,13 +337,13 @@ def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tool
         us, vs, t, world, step = grid(img, plane, cell / scale, angle, MAX_DOTS)
         t = np.nan_to_num(tone(t, spec))
         chord = max(0.1, pitch / 2)                 # mm as plotted between a spiral's points
-        # its points: each dot pi r^2 / (pitch chord) (r = 0.6 step sqrt(t)), at least 12 a turn
-        est = float(np.sum(2 * math.pi * (0.36 * step ** 2 * t) * scale ** 2)) / (pitch * chord)
+        # its points: each dot about its area / (pitch chord), twice over: at least 12 a turn
+        est = float(np.sum(2 * np.minimum(t, 1.2) * step ** 2 * scale ** 2)) / (pitch * chord)
         turns = pitch * max(1.0, est / MAX_POINTS)
         p = turns / scale
         for i, v in enumerate(vs):
             for j, u in enumerate(us):
-                r = step * 0.6 * math.sqrt(t[i, j])         # pi (0.6 cell)^2 ~ the cell's area at full
+                r = dot_radius(t[i, j], step)
                 if r >= p * 0.35:                   # less: a dot the pen's width, far darker than asked
                     out.append(spiral(*world(u + (step / 2 if i % 2 else 0), v), r, p, chord / scale))
         frame = Polygon(img.corners())          # dots at the edge are cut by the picture's frame
