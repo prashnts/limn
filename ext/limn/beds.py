@@ -118,7 +118,10 @@ BEDS = {
             # mm off every dz the FSR writes to a tag, the reference's and the pens' alike (DZ_TRIM=):
             # contact is where the sheet starts to rise, and the reference at Z1 there drew nothing
             # (2026-10-09). A guess to tune with the test marks: more, every pen presses deeper.
-            'dz_trim': 0.1,
+            # 0.3: the user's choice for the Stabilo on 2026-10-09 (dz 0.31, its marks complete).
+            # 0.1 until 2026-10-11, when the Stabilo's mark at dz 0.52 (touch 0.620, trim 0.1)
+            # didn't touch the paper; pens probed without DZ_TRIM= got 0.1 meanwhile (act-9).
+            'dz_trim': 0.3,
             'back_off': 0.4,        # mm up after finding contact: clear of it, a tip on an edge registers ~0.2 deep
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
