@@ -2,78 +2,76 @@
 
 All notable changes to Limn, a pen plotter with an automatic toolchanger, built from the parts of an old RepRap-style printer and running Klipper.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are dates (`YYYY.MM.DD`), each one a milestone. Entries come from the git history and from the build logs on [Hackaday.io](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) (marked 📓). Hardware changes are marked 🔧 and link to the code that came with them.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are dates (`YYYY.MM.DD`), each one a milestone. Entries come from the git history and from the build logs on [Hackaday.io](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) (marked 📓). Hardware changes are marked 🔧.
 
 - Repository: [prashnts/limn](https://github.com/prashnts/limn)
-- Branches: [`master`](https://github.com/prashnts/limn/tree/master), [`llm-v1`](https://github.com/prashnts/limn/tree/llm-v1) (merged in [#1](https://github.com/prashnts/limn/pull/1)), [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2) (current)
 - Printed parts: [Printables](https://www.printables.com/model/1786450-limn-pen-plotter-with-automatic-tool-changer-parti)
 
 ## Milestones
 
-| Date | Milestone |
+| Version | Milestone |
 |---|---|
-| 2026-03-30 | Project started on Hackaday.io |
-| 2026-04-11 | Source published on GitHub: Klipper config, toolchanger, RFID tags |
-| 2026-04-15 | First real multi-pen plots from SVG |
-| 2026-04-24 | Lead-screw Z axis, magnetic A5 bed; STEP/Fusion360 files published, license changed to GPL v3 |
-| 2026-05-12 | Tools aligned automatically in XYZ on a resistive touch panel |
-| 2026-06-13 | Pen calibration works end to end (~0.2 mm), calibrated plotting |
-| 2026-08-13 | Dock rework: holder switches, protected RFID tags; Printables project |
-| 2026-09-19 | FSR beds (BED_4/BED_5), bed detection on the Dock |
-| 2026-09-26 | **First use of AI in this project**: branch `llm-v1` |
-| 2026-09-29 | Limn's own SVG → G-code generator and web UI replace PrusaSlicer (`llm-v2`) |
-| 2026-09-30 | Cameras measure where each pen touches the paper (`limn_cam`) |
-| 2026-10-01 | Scanning for film (Hugin, flicker, NAS); the plot UI over the canvas; the LED display, live |
-| 2026-10-07 | Pen layers and groups; pictures as dither and halftone, colour separation onto the pens; the FSR calibration measured on the plotter |
+| 2026.03.31 | Project started on Hackaday.io |
+| 2026.04.03 | Repository created; toolhead and Z axis reworked |
+| 2026.04.11 | Source published on GitHub: Klipper config, toolchanger, RFID tags |
+| 2026.04.15 | First real multi-pen plots from SVG |
+| 2026.04.24 | Lead-screw Z axis, magnetic A5 bed; STEP/Fusion360 files published, license changed to GPL v3 |
+| 2026.05.01 | Tool offsets read from RFID tags; tethered tools |
+| 2026.05.12 | Tools aligned automatically in XYZ on a resistive touch panel |
+| 2026.05.21 | First Limn Klipper extension |
+| 2026.05.26 | Bed and dock MCUs on MicroPython firmware |
+| 2026.06.13 | Pen calibration works end to end (~0.2 mm), calibrated plotting |
+| 2026.08.13 | Dock rework: holder switches, protected RFID tags; Printables project |
+| 2026.08.16 | ToF sensing tried for dock calibration |
+| 2026.09.06 | Loose belts fixed; web server for the plotter state |
+| 2026.09.23 | FSR bed (BED_4) and bed detection on the Dock |
+| 2026.09.27 | First AI-assisted work: bed MCU chain, tool holders and LEDs in the extension |
+| 2026.09.30 | Limn's own SVG → G-code generator and web UI replace PrusaSlicer; cameras measure where each pen touches (`limn_cam`) |
+| 2026.10.01 | Scanning for film (Hugin, flicker, NAS); the plot UI over the canvas; the LED display, live |
+| 2026.10.07 | Pen layers and groups; pictures as dither and halftone; the FSR calibration measured on the plotter |
+| 2026.10.11 | Camera calibration, pens swapped mid-plot, wipe area; FSR sheet loaded and recalibrated |
 
 ---
 
-## [Unreleased] - `llm-v2`
-
-Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09-29 from [`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8). AI-assisted, like `llm-v1`. Not merged into `master` yet: its milestones follow.
+## [2026.10.11] - Camera calibration, pens for the plan, FSR sheet loaded
 
 ### Added
-- **Camera calibration** (the Scan tab's *Calibration cross* and *Calibrate*, `Job.calibrate` in `limn_cam/scan.py`): a camera's `fov`, `turn`, `focus_z` and `center` measured instead of by hand. A 12 mm cross is plotted with a pen (before a camera docked by hand goes on: the dock is out of reach then); over it the job sweeps the focus, moves 0.5 mm and then a quarter of a shot along X and Y (phase correlation, the two agreeing within 8%), finds the cross for the offset from the tool point and checks it with a second look. *Save* writes the values into the camera's entry in `pens.toml`, its comments kept. Made for the Pi camera docked by hand (`limn_picam`); the README's *Adding a camera* says how.
-- A drawn cross is found in a turned picture too (`cross_centre(turn=)`), and to its arm's middle rather than its peak: 0.025 mm off in the tests (it was up to 0.08).
-- **Pens for the plan** (`job.pens`, *Pens for the plan* under Tools; `profile.plan_pens`): pens not in the dock, scanned or not, as T5, T6, .., painted like any tool. One a holder has (the same pen of the library, the same colour) is drawn by it; the others are swapped into a holder by hand mid-plot, once its own pen is done (`emit.swaps`: a holder this plot doesn't use, else the one whose pen is done first). A dropdown picks it by hand instead. So more colours than holders.
-- **Pens swapped by hand mid-plot** (`TOOL_SWAP`, ext/limn): the carried pen goes back, the carriage waits over the paper and the print pauses until the pen asked for (its pen and colour) is scanned into that holder, then it goes on by itself; `RESUME` takes whatever is in it. The UI says what to do while it waits.
-- **A new pen is probed before it plots** (`TOOL_PREPARE`, `{prepare}` in `tool_begin`): a pen whose tag has no offsets, or one swapped in with *probe it*, is measured on the bed's sensor first and its offsets written to its tag; its test mark goes in the wipe area (the paper has the plot). A bed that can't measure it pauses the plot, to calibrate it by hand.
-- **The wipe area** (`beds.py` `wipe`, `LRT_WIPE [RESET=1]`, `TOOL_PRIME`, `prime` in the machine profile): off the paper towards the dock, where pens are primed (a zigzag) and test marks go. Its slots are used one after another and remembered per placement of the bed like the test marks; full, it beeps and asks for a fresh pad (*New pad*). Drawn on the bed in the UI with the slots used. BED_5's is a placeholder (X96–108, Y40–160), switched off until it is measured.
-- **The plot's plan** (Output panel): each step before it is sent, with the clock: each pen picked up (primed, probed when new, the plan pens it draws), each swap by hand. A click goes to that step in the Paths view. Swaps count in the time estimate (`swap_time`, 60 s).
-- **Layers over all the drawings** (the *Layers* panel): every pen's layer, in the order they plot, with an eye that hides it from the canvas and the Paths view (it still plots); the scans under the plot listed with them, and hidden the same way. Drag a pen to plot it earlier or later (`job.tool_order`); *Auto order* goes back to light first.
-- **A picture's own colours** (`separate = "palette"`, *Its colours*, `colours`): its main colours by median cut over all the drawing's pictures, the paper-light ones left out, each a layer; give each any pen. Every image ink has a pen dropdown in *Images*.
-- **Each picture its own settings** (`Obj.images`, by image index; the picker in *Images*): mode, inks, grid and tone per picture, *All images* for the rest, *Same as all* to drop them.
-- **A job saved as a file** (*Save job*, *Open job…*, Ctrl+Shift+S, or drop it on the page; `GET`/`POST /api/job/file`): the job, its drawings' SVGs and the fonts uploaded, in one `.limnplot.json`. Opened, it is one step for undo; a different SVG of the same name stays and the opened one goes beside it.
-- 🔧 **47k load resistors on BED_5's FSR rows** ([`1fd2e8c`](https://github.com/prashnts/limn/commit/1fd2e8c)): the sense rows had floated all along (`ADC()` turns the pad pull-downs off, and `fsr_pull_down` was never set). A 47k from each row, GP26–29, to GND, and `"fsr_load": 47000` in `nodes/fsr.json`: the internal pulls stay off and row 3's × 0.8 goes; `diag()` reports the load. At rest every cell now reads 0, in the air too (it was ≤ 6 to 130, drifting by tens); row 3 answers like the others and the survey finds no faulty cell. The cost: about a third of the signal (the median cell 134 at 0.08 mm in). Pinout and sizing in `notebooks/pinout.md`, BED_5's row 3 corrected to GP26.
-- 🔧 **`dz_trim`** (`beds.py`, 0.1; `DZ_TRIM=` on `LRT_CALIBRATE` and `LRT_PROBE_TOOL`; [`b78402a`](https://github.com/prashnts/limn/commit/b78402a)): every FSR tag's dz taken down alike: the reference's first test mark at Z1 drew nothing.
-
-### Fixed
-- **A Micron 01 probed against the new reference** (2026-10-10): with a Micron 005 Black as the reference (holder 45), `LRT_PROBE_TOOL` on the Micron 01 Blue gave up once on the X edge ("no border … on five lines") and passed the next run: dx −4.02, dy −0.88, dz 1.87. Every other pen's tag was against the Stabilo and is to be probed again. Its taps (`VERBOSE=1`) in `~/limn-shot/fsr-2026-10-10-blue-probe-verbose.log`, notes in `notebooks/act-9-fsr-rework.md`.
-- **Halftone dots too big**: the dot grid followed 6 of the pen's lines, 0.5 to 3 mm (2.4 mm for a 0.4 felt tip); now 4, to 2 mm. And with *Its colours* a colour was drawn solid whatever the pen: a light grey drawn in Stabilo blue came out as big solid dots. It is as dark as the colour now, in the pen's ink (a quarter covered for that grey). On a map of Delhi the median dot went from 1.8 to 0.9 mm (1.5 to 0.5 mm in the light grey). Dots too small to show aren't drawn as pen-wide blobs either.
-- **The dark ink over the light** where they overlap uncut (text in a line font over a fill): pens plot light first unless the order is set (it was by id, so black text went down before a felt-tip green over it). A pen with `layers` still goes under darker inks whatever the order.
-- **Press again**: a button that asks twice turns yellow and reads *Press again* for 4 s (it was 2 s, the label unchanged): on a slow UI the second press came late and only armed it again, the button left yellow. One armed at a time; a panel redrawn meanwhile shows it armed still, and its label always comes back.
-- Following Klipper's bed no longer clears the bed while Klipper hasn't read it (`bed: null`).
-- An SVG with pictures and no other shapes no longer fails to load; the whitespace between `<tspan>`s isn't a text.
-- The LED legend no longer throws before its panel is drawn.
-- **Halftone and lines slice in seconds** (`plot/slicer.py`): a picture's lines were taken for strokes, so with `stroke = "width"` every halftone spiral and every row was made an area, filled, and thinned (Voronoi). A 40 × 30 mm picture took 235 s, and its spirals came out as blobs. A picture's lines are now always drawn on their line: ~2 s, and a 120 × 90 mm halftone that never finished slices in ~3 s (laptop; the Pi is a few times slower). The occlusion check no longer buffers a picture's thousands of lines to look for what lies near them (`dwithin`).
+- **Camera calibration** (the Scan tab's *Calibration cross* and *Calibrate*, `Job.calibrate` in `limn_cam/scan.py`): a camera's `fov`, `turn`, `focus_z` and `center` are measured instead of set by hand. A 12 mm cross is plotted with a pen; the job sweeps the focus, shifts the view by 0.5 mm and by a quarter shot (phase correlation), finds the cross for the offset from the tool point and checks it with a second look. *Save* writes the values into the camera's entry in `pens.toml`. Made for the hand-docked Pi camera (`limn_picam`); the README's *Adding a camera* says how.
+- **Pens for the plan** (`job.pens`, `profile.plan_pens`): pens not in the dock appear as T5, T6, .., painted like any tool. A pen a holder already has is drawn by it; the others are swapped into a free holder by hand mid-plot (`emit.swaps`), so there can be more colours than holders.
+- **Pens swapped by hand mid-plot** (`TOOL_SWAP`, ext/limn): the carried pen goes back, the carriage waits over the paper and the print pauses until the pen asked for is scanned into that holder. `RESUME` takes whatever is in it.
+- **A new pen is probed before it plots** (`TOOL_PREPARE`): a pen whose tag has no offsets, or one swapped in with *probe it*, is measured on the bed's sensor first and its offsets written to its tag. A bed that can't measure it pauses the plot.
+- **The wipe area** (`beds.py` `wipe`, `LRT_WIPE [RESET=1]`, `TOOL_PRIME`): off the paper towards the dock, where pens are primed and test marks go. Full, it beeps and asks for a fresh pad (*New pad*). Drawn on the bed in the UI. BED_5's is a placeholder (X96–108, Y40–160), switched off until measured.
+- **The plot's plan** (Output panel): every step before it is sent, with the clock (pens picked up, primed, probed, swapped); a click goes to that step in the Paths view.
+- **Layers over all the drawings**: every pen's layer in plotting order, with an eye to hide it from the canvas and Paths view. Drag a pen to plot it earlier or later (`job.tool_order`); *Auto order* goes back to light first.
+- **A picture's own colours** (`separate = "palette"`): its main colours by median cut, each a layer with its own pen. **Each picture its own settings** (`Obj.images`): mode, inks, grid and tone per picture.
+- **A job saved as a file** (*Save job*, *Open job…*, Ctrl+Shift+S, or drop it on the page): the job, its SVGs and fonts in one `.limnplot.json`.
+- 🔧 **47k load resistors on BED_5's FSR rows** ([`1fd2e8c`](https://github.com/prashnts/limn/commit/1fd2e8c)): the sense rows had floated all along. A 47k from each row (GP26–29) to GND and `"fsr_load": 47000` in `nodes/fsr.json`. At rest every cell now reads 0 (it was ≤ 130 and drifting) and row 3 answers like the others, at the cost of about a third of the signal. Pinout in `notebooks/pinout.md`.
+- 🔧 **`dz_trim`** (`beds.py`; `DZ_TRIM=` on `LRT_CALIBRATE` and `LRT_PROBE_TOOL`; [`b78402a`](https://github.com/prashnts/limn/commit/b78402a), 0.3 since [`48c60e8`](https://github.com/prashnts/limn/commit/48c60e8)): every FSR tag's dz is taken down alike, because the reference's first test mark at Z1 drew nothing. With contact measured right again, trim 0.1 left the Stabilo off the paper; 0.3 (dz 0.31) gives complete marks.
 
 ### Changed
-- **Pens drying out only count while the machine leaves them alone** (`drying.py`, `_pens_wanted`): a print, G-code running (a calibration, a homing, a move) or a tool change stops every pen's clock, so nothing goes red or beeps while the pens are wanted (it beeped through prints, every 3 s, and `TOOL_DRY SILENCE=1` couldn't always be sent then). The pen drawing starts afresh. It beeps as a pen gets worse and once a minute meanwhile (`tool_dry_beep` 60, was 3). `tool_dry_printing` is gone (still accepted).
-- 🔧 **The FSR measurement reworked** ([`07c6df1`](https://github.com/prashnts/limn/commit/07c6df1), [`b78402a`](https://github.com/prashnts/limn/commit/b78402a); `notebooks/act-9-fsr-rework.md`): no decision hangs on one reading of one cell against a threshold any more. Contact is the rise onset of any cell (`early`), confirmed by its growth; an edge is a sweep of taps across two cells, each voting by the second cell's share of the two, the border where the fewest disagree (`border()`, with its sigma); `locate()` names the cell only, to half a cell. `LRT_PROBE_TOOL` writes no tag for a pen measured less sure than `max_sigma` (0.15 mm). On the plotter the reference repeats to 0.17 mm in X, 0.06 in Y and 0.08 in z over five runs, while each run claims ±0.01: the sigma doesn't see the run-to-run scatter yet.
-- **Keyboard shortcuts alike on both tabs**: `0` fits the bed (`F` did on the Plot tab), `Z` zooms to the selection, `V` is the tab's own tool (select; the scan region, was `R`), `H` pans, `Esc` steps back. On the Scan tab `F` is focus (was `K`). The help (`?`) groups them so.
-- **The selected drawing's panel folds**: its sections (layers, images, texts, masked regions) open and close and stay as left. Texts are grouped by style (font, weight, size, colour): one row of settings for each, not one for each text; each text apart under *Each text*.
-- The plot UI runs on the PC (`limn_plot_pc.conf`, supervisor, :4221): on the Pi the UI lagged.
-- **Reslicing is cached at more levels**, so moving a drawing, or changing one thing of it, doesn't redo the rest:
-  - The order its paths are drawn in, per pen, is kept with its slice, in the drawing's own mm: moving or turning it changes no distance between them, so a move skips 2-opt. Drawings are then drawn one after another, nearest next (the order used to be made across all of them). Paths cut by the paper's edge or a drawing on top keep that order.
-  - Fills by their area and settings (`geometry.fill`, the last 4096): when only a picture's settings or another colour's pen changed, the drawing's other fills come from before (the Bicycle diagram: 5.8 s → 1.7 s).
-  - The G-code is read back once for the preview, not twice.
-- Pens write a stroke's G-code all at once (`Writer.polyline`, the same lines as before), and a drawing's paths are placed and checked against the paper together. A 120 × 90 mm halftone moves in ~1.5 s.
-- A pen whose heights go outside its z limits is warned about once a stroke, not once for each height.
+- 🔧 **The FSR measurement reworked** ([`07c6df1`](https://github.com/prashnts/limn/commit/07c6df1), [`b78402a`](https://github.com/prashnts/limn/commit/b78402a); `notebooks/act-9-fsr-rework.md`): no decision hangs on one cell against a threshold. Contact is the rise onset of any cell (`early`), confirmed by its growth; an edge is a sweep of taps across two cells, each voting by the second cell's share, the border where the fewest disagree (`border()`, with its sigma). `LRT_PROBE_TOOL` writes no tag for a pen measured less sure than `max_sigma` (0.15 mm).
+- 🔧 **FSR thresholds rescaled to the loaded sheet** ([`1d31142`](https://github.com/prashnts/limn/commit/1d31142)): `press_strength` 120, `respond` 60, `early` 30, `sure` 150, `locate_strength` 70, `press_limit` 600. Taps press 0.2 mm past contact at most (`TAP_PRESS`), less for a pen with a smaller `press_max`.
+- 🔧 **The calibration measures on the sheet's strong cells, two edges an axis** ([`1602049`](https://github.com/prashnts/limn/commit/1602049)): z on (1, 6), X edges (1, 6)|(2, 6) and (2, 5)|(3, 5), Y edges (1, 6)|(1, 7) and (1, 3)|(1, 4). Each axis is the mean of its two borders, and their disagreement goes into its sigma (`edge_tips`). About 2.5 min more a pen.
+- **Pens drying out only count while the machine leaves them alone** (`drying.py`): a print, running G-code or a tool change stops every pen's clock, so nothing beeps while the pens are wanted. It beeps once a minute (`tool_dry_beep` 60, was 3); `tool_dry_printing` is gone.
+- **Keyboard shortcuts alike on both tabs**: `0` fits the bed, `Z` zooms to the selection, `V` is the tab's own tool, `H` pans, `Esc` steps back; the help (`?`) groups them. The selected drawing's panel folds, and texts are grouped by style.
+- The plot UI runs on the PC (`limn_plot_pc.conf`, :4221): on the Pi it lagged.
+- **Reslicing is cached at more levels** (path order per pen, fills by area and settings, G-code read back once), so moving a drawing or changing one thing of it doesn't redo the rest: the Bicycle diagram 5.8 s → 1.7 s. Pens write a stroke's G-code all at once; a 120 × 90 mm halftone moves in ~1.5 s.
+
+### Fixed
+- 🔧 **FSR contact came out low when a crosstalk cell led** ([`1602049`](https://github.com/prashnts/limn/commit/1602049); `Fsr.growth`): a touch was confirmed by the strongest cell growing, and row 3's (3, 1) rising at first touch got two of three contacts taken for readings in the air (0.12–0.18 mm low). Now each cell's growth over its own onset reading counts. On the plotter: 3.620 / 3.625 / 3.622, spread 0.005, the reference 0.620 over the BLTouch (10-09: 0.610). Notes: `notebooks/act-10-fsr-loaded.md`.
+- **A Micron 01 probed against the new reference** (2026-10-10): with a Micron 005 Black as the reference (holder 45), the Micron 01 Blue gave up once on the X edge and passed the next run (dx −4.02, dy −0.88, dz 1.87). Every other pen's tag was against the Stabilo and is to be probed again.
+- **Halftone dots too big**: the dot grid followed 6 of the pen's lines (now 4, to 2 mm), and with *Its colours* a colour was drawn solid whatever the pen; it is as dark as the colour now, in the pen's ink. On a map of Delhi the median dot went from 1.8 to 0.9 mm.
+- **Halftone and lines slice in seconds** (`plot/slicer.py`): a picture's lines were taken for strokes and every spiral was made an area and thinned. A 40 × 30 mm picture took 235 s; now ~2 s, and a 120 × 90 mm halftone that never finished takes ~3 s.
+- **The dark ink over the light** where they overlap uncut: pens plot light first unless the order is set.
+- **Press again**: a button that asks twice stays armed for 4 s (was 2) and its label always comes back.
+- Following Klipper's bed no longer clears the bed while Klipper hasn't read it; an SVG with only pictures loads; the LED legend no longer throws before its panel is drawn.
 
 ### Known issues
-- **A fine tip barely lifts the loaded FSR sheet**: at the 0.10 mm press cap a Micron 01 reads 0–80 on the cell under it, many taps 0, against `early` 30. Whether an edge gets enough taps is close to a coin toss (the same edge failed and passed an hour apart, 2026-10-10); run `LRT_PROBE_TOOL` again when it gives up. To fix: more signal (a 100k load), a press by force rather than capped for fine tips, the Y edge off the weak (1, 2).
+- **A fine tip on the loaded FSR sheet**: a Micron 01 read 0–80 at 0.10 mm and an edge failed then passed. Taps now go to 0.2 mm on the strong cells, not yet tried with Microns; a 100k load would give more signal.
 - (1, 0) reads 20–120 for a press anywhere along row 1 (the column-0 leak).
-- The FSR's sigma under-reports: X repeats to 0.17 mm run to run while a run claims ±0.01, so `max_sigma` doesn't catch it.
+- The taps' depth is found before the tip is known (~1.3 mm off in Y), so both spots can fall on a border's dead zone and the Stabilo taps the whole 0.2 mm.
+- Both X edges run before a Y edge, each missing its first two lines (~40 s each); to interleave.
+- The FSR's sigma under-reports run to run (X 0.17 mm against ±0.01 claimed); with two edges an axis it holds their disagreement (±0.04), run-to-run still to check.
 
 ## [2026.10.07] - Pen layers, pictures as halftone, the FSR calibration measured
 
@@ -82,49 +80,38 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 <img src="docs/plot-ui-halftone.png" alt="A colour picture separated into CMYK halftone dots, each ink in its own layer and on its own screen angle, as the Paths view draws them" width="800">
 
 ### Added
-- **Layers by pen** ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add), [`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12), the selected drawing's *Layers*): one per pen, with the colours it draws as chips (outlines a ring, fills a dot). Colours alike that go to one pen share a chip, and long layers fold behind *+n*, so a drawing of many shades stays readable. Drag a chip onto another pen, or click it for its settings. It replaces the table of colours, which had a row for each colour's stroke and another for its fill.
-- **The shapes tool** (`A`; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add), [`700c902`](https://github.com/prashnts/limn/commit/700c902)): pick shapes by click, Shift-click or a box. *Pen* puts the whole shape on one pen (its outline, and its fill where it is filled); *Outline* and *Fill* set them apart. A closed shape without a fill in its SVG can take one; lines get no fill option.
-- **Bleed margin** (`inset`, a checkbox per shape, a group or a colour; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)): a fill kept its pen's `bleed` inside its own edge, with round corners (sharp when the shape is too thin for round ones), its border along that inner edge (`geometry.margin`). The gap from inks drawn on top stays.
-- **Groups** ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)): shapes of a drawing (`Obj.sets`: painted together, the shapes never move), and drawings on the bed (`Obj.group`: they move, nudge and hide together, one undo step through `PATCH /api/objects`). Ctrl+G, Ctrl+Shift+G.
-- **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`; [`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12), [`700c902`](https://github.com/prashnts/limn/commit/700c902)): on upload the UI asks whether to leave them out or make them into lines, the drawing's *Images* changes it after.
-  - *Dither* (Floyd–Steinberg, a row's dots joined into lines), *lines* (rows, denser where darker), *halftone* (dots, each a spiral).
-  - Inks: one colour, CMYK, or unmixed onto the pens there are; each ink is a colour layer on its own screen angle.
+- **Layers by pen** (the selected drawing's *Layers*): one per pen, with the colours it draws as chips; drag a chip onto another pen, or click it for its settings. It replaces the table of colours.
+- **The shapes tool** (`A`): pick shapes by click, Shift-click or a box. *Pen* puts the whole shape on one pen, *Outline* and *Fill* set them apart; a closed shape without a fill can take one.
+- **Bleed margin** (`inset`, per shape, group or colour): a fill kept its pen's `bleed` inside its own edge with round corners, its border along that inner edge (`geometry.margin`).
+- **Groups**: shapes of a drawing (`Obj.sets`) and drawings on the bed (`Obj.group`, which move, nudge and hide together, one undo step). Ctrl+G, Ctrl+Shift+G.
+- **Pictures in an SVG become plottable** (`plot/raster.py`, `Obj.raster`): on upload the UI asks whether to leave them out or make them into lines; the drawing's *Images* changes it after.
+  - *Dither* (Floyd–Steinberg), *lines* (rows, denser where darker), *halftone* (dots, each a spiral).
+  - Inks: one colour, CMYK, or unmixed onto the pens there are; each ink is a layer on its own screen angle.
   - Pitch and dot grid follow each ink's pen; a paper threshold keeps light backgrounds clean; gamma and invert.
-  - A 0.05 fineliner stays plottable: dither and halftone are capped (and say so), lines run at the pen's own pitch. On a 120 × 90 mm picture: lines ~1 h, halftone ~4 h, dither (stippling) many hours.
-- Captures: *Hide all* / *Show all* and *Delete all* (`DELETE /api/captures`; [`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)).
-- A new `ball` pen (ballpoint) that presses 0.35 mm ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065)).
-- 🔧 **The FSR calibration checked against the plotter** ([`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): depth ladders, scans and contact maps by hand with the Stabilo (`~/limn-shot/fsr-2026-10-07-manual.*`), and the tests' simulated sheet fitted to them (`bed5=True`). BED_5's (1, 1) reads 112 → 523 over 0.01 → 0.10 mm past first touch and no more past ~0.13; its column's rows read nearly as much at first touch; (2, 4) and (1, 4) are weak cells; column 3 reads 360 while its row is pressed.
-- 🔧 Every FSR descent reads the sheet in the air first and goes by the rise over that (`Fsr.baseline`, `read()`): the new sheet's (3, 0) rests at 80-130 and its row 3 reads 30-50 with the pen above it, and the first `LRT_FSR_MAP` on the plotter 'touched' 4 mm up and mapped nothing.
-- 🔧 **`LRT_FSR_MAP`**: which cell answers where, the sheet touched spot by spot (`ext/limn/fsr_map.py`): each cell's centre, the array's origin and pitch fitted to them, the origin then refined by the calibration's edge searches across two row and two column borders (the grid's own fit is only good to about half its step: 0.37 mm off in the tests), silent cells and cells answering far from their place, the sheet's height; JSON and SVG in the logs (`fsr-maps/`). What was done by hand for the new sheet on 2026-10-07, made reproducible: set `origin` from it after a swap.
-- 🔧 **`LRT_FSR_SURVEY`**, for a new sheet after a swap: every cell pressed by the reference pen (0.08 mm past first touch at most), as its rise over a baseline read in the air right above it: the sheet's own level drifts by tens, cell by cell, from minute to minute (the first survey on the plotter took a rest from a minute before and 'touched' every cell in the air). The coarse descents of every measurement rise from such a baseline too. Faulty cells (high at rest, or another answering while pressed) aren't read from then on, weak ones are reported, `early` comes from the noise floor and the aim from where the reference tip lands. Saved per bed (`lrt_fsr_survey`); warns when the measuring cell or an edge cell is faulty or weak. In the tests: BED_5 as measured comes out column 3 faulty and (2, 4) weak; a healthy sheet nothing; a sheet with a fault its config doesn't know is measured right once surveyed.
-- 🔧 The FSR measurements say on the console what they do, like `bed_mesh`: each contact with its X Y and z, the median and spread, and where each edge search lost its cell; `VERBOSE=1` every tap too.
-- 🔧 A calibration is saved without `SAVE_CONFIG` ([`5716335`](https://github.com/prashnts/limn/commit/5716335), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): `LRT_CALIBRATE` and the meshes are kept in the saved variables too (`lrt_profile`, `lrt_mesh_data`) and put back at startup. `LRT_CALIBRATE` uses the meshes when they are of the bed as it sits (`MESH=1`: new ones anyway).
+  - On a 120 × 90 mm picture: lines ~1 h, halftone ~4 h, dither many hours.
+- Captures: *Hide all* / *Show all* and *Delete all*. A new `ball` pen (ballpoint, presses 0.35 mm).
+- 🔧 **The FSR calibration checked against the plotter** (depth ladders, scans and contact maps by hand with the Stabilo, `~/limn-shot/fsr-2026-10-07-manual.*`), and the tests' simulated sheet fitted to them. BED_5's (1, 1) reads 112 → 523 over 0.01 → 0.10 mm past first touch; (2, 4) and (1, 4) are weak; column 3 reads 360 while its row is pressed.
+- 🔧 **`LRT_FSR_MAP`** (`ext/limn/fsr_map.py`): which cell answers where, the sheet touched spot by spot: each cell's centre, the array's origin and pitch fitted to them and refined by edge searches, silent or misplaced cells, the sheet's height; JSON and SVG in `fsr-maps/`. Set `origin` from it after a swap.
+- 🔧 **`LRT_FSR_SURVEY`**, for a new sheet: every cell pressed by the reference pen (0.08 mm past first touch at most), read as its rise over a baseline taken in the air right above it. Faulty cells aren't read from then on, weak ones are reported, and `early` and the aim come from the survey. Saved per bed (`lrt_fsr_survey`).
+- 🔧 Every FSR descent reads the sheet in the air first and goes by the rise over that (`Fsr.baseline`); the FSR measurements say on the console what they do, `VERBOSE=1` every tap too.
+- 🔧 A calibration is saved without `SAVE_CONFIG`: `LRT_CALIBRATE` and the meshes are kept in the saved variables (`lrt_profile`, `lrt_mesh_data`) and put back at startup.
 
 ### Changed
-- 🔧 The FSR taps press 0.1 mm past contact at most (were 0.3), less for a pen that presses less plotting (its `press`, pens.toml), with no parameters; `PRESS=` on `LRT_CALIBRATE`, `LRT_PROBE_TOOL` and the `LIMN_*_CALIBRATE` macros by hand ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065), [`30fb357`](https://github.com/prashnts/limn/commit/30fb357), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)). At 0.15 the Stabilo's tip estimate went a cell off in Y and its contact came out 0.14 mm low; at 0.1 three runs agreed.
-- 🔧 No FSR descent goes deeper than the taps ([`4d80ccc`](https://github.com/prashnts/limn/commit/4d80ccc), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): once contact is roughly known, every descent is in fine (0.02 mm) steps; the first one, from above, stops at the first clear reading (60, the sheet reads ≤ 6 at rest), at three spots by turns (offset ½,¼ and ¼,½ of a cell: they can't all be on a border). `locate()`'s taps aim for 180 (enough to tell the cell), the edge taps' depth is measured on the measuring cell. Simulated on the measured sheet: at most 0.1 mm past first touch, everywhere (was 0.17, and 1.45 in a dead zone).
-- 🔧 `locate()` aims at column 6.3, not 5.5: this machine's pens came down on the weak (2, 4), and pressing parts of column 5 lit columns 3 and 4 up (the glue void), so the tip estimate went 1.7 mm out and `LRT_CALIBRATE` failed. They come down on (2, 5) now, strong, and search away from columns 3 and 4.
-- 🔧 The `lrt_fsr` mesh ends at y 57 ([`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)): its row at 59 was the sheet's edge, 0.2 mm low, and the taps that follow it were 0.07 mm off around column 1 (the Y edge repeated to 0.23 mm, X to 0.05).
-- 🔧 Row 3 is read again (`dead_rows` empty): on the new sheet it answers like the others; it was dead on the old one.
-- 🔧 BED_5's config is back to a fresh sheet's (no faulty columns, the aim mid array): the old sheet, damaged by its transfer and by today's tests, is to be replaced; the survey finds what a new one has. The tests keep the old one as a fixture (`old_cfg`, `bed5=True`) and model a fresh one (`fresh=True`).
-- 🔧 The old sheet's faulty columns 3 and 4 were never read (`faulty_cols`; column 4 lit up to 156 while (1, 1) was pressed, its corner with column 5 is touched first; the first descent's spots step away from them, and `locate()` never searches onto a line that isn't read; [`2bed56a`](https://github.com/prashnts/limn/commit/2bed56a)).
-- Pens touch the paper lightly ([`ee4d065`](https://github.com/prashnts/limn/commit/ee4d065)): fineliners press 0.1 mm (were 0.15), the Stabilo 0.15 (was 0.3, at most 0.3).
-- `<image>`s stay in an uploaded SVG (they were taken out): left out unless made into lines ([`76b0d12`](https://github.com/prashnts/limn/commit/76b0d12)).
-- A page's background (a full-page rectangle under the rest) is the paper, left out unless painted ([`700c902`](https://github.com/prashnts/limn/commit/700c902)).
-- A *look* is temporary: the next capture deletes it ([`3dd3add`](https://github.com/prashnts/limn/commit/3dd3add)).
+- 🔧 The FSR taps press 0.1 mm past contact at most (were 0.3), and no descent goes deeper than the taps: after the first, every descent is in 0.02 mm steps. `PRESS=` overrides on `LRT_CALIBRATE`, `LRT_PROBE_TOOL` and the `LIMN_*_CALIBRATE` macros. At 0.15 the Stabilo's contact came out 0.14 mm low; at 0.1 three runs agreed.
+- 🔧 `locate()` aims at column 6.3, not 5.5, where the cells are strong and away from columns 3 and 4; the `lrt_fsr` mesh ends at y 57 (its row at 59 was the sheet's edge, 0.2 mm low); row 3 is read again (`dead_rows` empty).
+- 🔧 BED_5's config is back to a fresh sheet's: the old sheet, damaged by its transfer and by the tests, is to be replaced. The tests keep it as a fixture (`bed5=True`) and model a fresh one (`fresh=True`).
+- Pens touch the paper lightly: fineliners press 0.1 mm (were 0.15), the Stabilo 0.15 (was 0.3).
+- `<image>`s stay in an uploaded SVG (left out unless made into lines); a page's full-page background rectangle is the paper; a *look* is temporary.
 
 ### Fixed
-- 🔧 `locate()` measured towards the dead row 3 and put the tip 1.3 mm too far in X (3.16 for 2.0); it avoids dead rows and faulty columns now, two cells over ([`2366961`](https://github.com/prashnts/limn/commit/2366961), [`e5dc446`](https://github.com/prashnts/limn/commit/e5dc446)).
-- 🔧 A pen that lands on another cell than aimed at: aimed again by that cell, twice at most ([`06d3dc7`](https://github.com/prashnts/limn/commit/06d3dc7)); a stop needs two readings to agree ([`2bed56a`](https://github.com/prashnts/limn/commit/2bed56a)); a weak press on a wrong cell stops 0.2 mm on instead of going down to the floor ([`2366961`](https://github.com/prashnts/limn/commit/2366961)).
-- 🔧 The three repeated touches on the measuring cell came down in 0.1 mm steps each time, pressing the pen in for nothing ([`4d80ccc`](https://github.com/prashnts/limn/commit/4d80ccc)).
-- Fills written as CSS `var()` take their fallback, `url()` patterns are left out: both came out solid black (a Concepts export: one 90 m hatch over the page; [`700c902`](https://github.com/prashnts/limn/commit/700c902)).
-- Ordering many strokes was quadratic: a dithered picture's 60 000 dashes took 54 s, now ~1 s, same order (a grid of buckets; [`700c902`](https://github.com/prashnts/limn/commit/700c902)).
-- A picked shape's new outline pen left its fill on the old pen ([`700c902`](https://github.com/prashnts/limn/commit/700c902)).
+- 🔧 `locate()` measured towards the dead row 3 and put the tip 1.3 mm too far in X; it avoids dead rows and faulty columns now. A pen that lands on another cell than aimed at is aimed again by that cell (twice at most), and a stop needs two readings to agree.
+- 🔧 The three repeated touches on the measuring cell came down in 0.1 mm steps, pressing the pen in for nothing.
+- Fills written as CSS `var()` take their fallback and `url()` patterns are left out (both came out solid black); ordering many strokes was quadratic (60 000 dashes: 54 s → ~1 s); a picked shape's new outline pen left its fill on the old pen.
 
 ### Known issues
-- The `locate()` estimate still varies (Y 1.52 – 1.68 for 2.13 at 0.1 mm taps); the re-aim covers it. The Y edge to be checked again after the mesh change.
+- The `locate()` estimate still varies (Y 1.52 – 1.68 for 2.13 at 0.1 mm taps); the re-aim covers it.
 - A fine pen's own response on the FSR isn't measured yet (the test fineliner is bent).
-- Halftone and dither on the plotter: pitch, blotting in the spirals' middles, real plot times, untried.
+- Halftone and dither on the plotter: pitch, blotting in the spirals' middles and real plot times untried.
 
 ## [2026.10.01] - Scanning film, the plot UI over the canvas, the LED display
 
@@ -133,218 +120,132 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 <img src="docs/plot-ui-scan.png" alt="The Scan tab: captures on the bed, a region of 12 shots, the camera's view under the head, the NAS settings" width="800">
 
 ### Added
-- **Scans kept in RAM, and on the NAS** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)): captures live in `/dev/shm` (2 GB at most, the oldest go first), so the Pi's SD card isn't worn. They upload to an S3 bucket (OpenMediaVault's S3, MinIO) through `limn_cam/nas.py`, which signs its own requests: no boto3. Settings in the Scan tab's *NAS* panel, saved in `plot-data/nas.json`; ⇪ per capture, or each scan when it is done.
-- **Hugin stitching** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), `limn_cam/hugin.py`, the viewer's *Hugin*):
-  - Features are found on contrast-stretched copies, and matches that disagree are left out (halftone repeats).
-  - The camera's real scale and turn are measured from all the overlaps; then the tiles only slide, plus the lens's barrel.
-  - enblend lays the seams: no more ghosting. On the sticker test, 0.31 px RMS, tiles within 0.32 mm of where they were sent.
-  - Needs `sudo apt install hugin-tools enblend` on the Pi. The `.pto` project is kept, to fine-tune in Hugin.
-- 🔧 **Flicker detection in every shot** ([`56259ea`](https://github.com/prashnts/limn/commit/56259ea), `limn_cam/flicker.py`): a light dimmed by PWM leaves dark bands across a rolling-shutter shot. They are found per column (so a negative's own edges don't count) and taken out with the brightest of 3 frames: 1.2 → 0.44 grey levels under the new light. The Scan tab warns, and each tile records it.
-- **A region for film** ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), [`4275211`](https://github.com/prashnts/limn/commit/4275211)):
-  - Film presets (35 mm, 120 6×4.5 – 6×9, 4×5 in, mounts) with a margin.
-  - The region drags and resizes on the bed; arrows nudge it, Z zooms to it.
-  - *Check corners*: 4 shots, the region's edges drawn over them; a click sets a corner, to 0.05 mm, zoomed in for precision.
-- 🔧 **The head, live on the canvas** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)): Klipper's position, the toolhead's outline from above (`plot/profiles/toolhead.svg`, traced from the overhead camera, mm, the tool point at its origin), a crosshair at the carried tool's tip, and the camera's view while it is on.
-- 🔧 **The LED display** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f), *Display* panel): the LED matrix UI (a Unicorn pHAT, 8 × 4) and the dock strip, live from the LEDs' colours in Klipper, with the matrix's art over them and what each part says. The limn extension now reports its LED states (`printer.limn.leds`). The matrix is documented in the README, its art in `docs/led-matrix-ui.svg`.
-- **The plot UI over the canvas** ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)):
-  - The canvas is the whole page; the panels are cards over it. A tap folds one, its grip moves it to the other side or out over the canvas. The drawings and captures stay put. *Panels* (or `\`) hides them all.
-  - The scan viewer and the cameras are windows that move and resize.
-  - Built for touch: bigger controls, two fingers pan and zoom.
-  - Numbers and technical details in monospace.
-  - Rarely needed settings fold away (*More settings*).
-- Klipper's cameras live in an overlay, and a link to Fluidd ([`56259ea`](https://github.com/prashnts/limn/commit/56259ea)). Each drawing and scan shows or hides; several scans can lie under the plot ([`4275211`](https://github.com/prashnts/limn/commit/4275211)). Right-drag and trackpad swipes pan, a pinch zooms; the scan previews zoom too ([`4275211`](https://github.com/prashnts/limn/commit/4275211)).
-- Browser tests (Playwright, the `ui` dependency group: `uv run --group ui pytest plot/tests/test_ui.py`) ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)).
+- **Scans kept in RAM, and on the NAS**: captures live in `/dev/shm` (2 GB at most, the oldest go first), so the Pi's SD card isn't worn. They upload to an S3 bucket (OpenMediaVault's S3, MinIO) through `limn_cam/nas.py`, which signs its own requests: no boto3. Settings in the Scan tab's *NAS* panel (`plot-data/nas.json`).
+- **Hugin stitching** (`limn_cam/hugin.py`, the viewer's *Hugin*): features on contrast-stretched copies, mismatches left out; the camera's real scale and turn measured from all the overlaps, then the tiles only slide, plus the lens's barrel; enblend lays the seams. On the sticker test: 0.31 px RMS, tiles within 0.32 mm of where they were sent. Needs `sudo apt install hugin-tools enblend` on the Pi.
+- 🔧 **Flicker detection in every shot** (`limn_cam/flicker.py`): a PWM-dimmed light leaves dark bands across a rolling-shutter shot. They are found per column and taken out with the brightest of 3 frames (1.2 → 0.44 grey levels). The Scan tab warns, and each tile records it.
+- **A region for film**: presets (35 mm, 120 6×4.5 – 6×9, 4×5 in, mounts) with a margin; the region drags and resizes on the bed; *Check corners* takes 4 shots with the region's edges drawn over them, a click sets a corner to 0.05 mm.
+- 🔧 **The head, live on the canvas**: Klipper's position, the toolhead's outline from above (`plot/profiles/toolhead.svg`), a crosshair at the carried tool's tip, and the camera's view while it is on.
+- 🔧 **The LED display** (*Display* panel): the LED matrix UI (a Unicorn pHAT, 8 × 4) and the dock strip, live from the LEDs' colours in Klipper (`printer.limn.leds`). Documented in the README, art in `docs/led-matrix-ui.svg`.
+- **The plot UI over the canvas**: the canvas is the whole page and the panels are cards over it, which fold, move or hide (`\`). The scan viewer and cameras are windows. Built for touch (two fingers pan and zoom), numbers in monospace, rarely needed settings under *More settings*.
+- Klipper's cameras in an overlay and a link to Fluidd; each drawing and scan shows or hides, and several scans can lie under the plot. Browser tests (Playwright, `uv run --group ui pytest plot/tests/test_ui.py`).
 
 ### Changed
-- The Paths view shows only the G-code; the drawing as a faint outline with *drawing* ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f)).
-- The overhead camera now gives 800 × 600 snapshots: its mapping onto the bed was fitted again (`GEOMETRY.md`) ([`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)).
+- The Paths view shows only the G-code, the drawing as a faint outline with *drawing*. The overhead camera gives 800 × 600 snapshots, its mapping onto the bed fitted again (`GEOMETRY.md`).
 
 ### Fixed
-- Painting missed thin lines (often under a pixel wide on screen): shapes are now picked within 6 px, hover shows which, a miss says so ([`3f7bb5f`](https://github.com/prashnts/limn/commit/3f7bb5f), [`a880f5f`](https://github.com/prashnts/limn/commit/a880f5f)).
+- Painting missed thin lines: shapes are picked within 6 px, hover shows which, a miss says so.
 
 ### Known issues
-- The camera's scale: Hugin measured 119.9 px/mm, `pens.toml` says 125.9 (before the tube was lengthened). To set from a scan of a ruler.
-- The new light flickers: taken out in software, best fixed at the light (full power, or a driver without PWM).
-- Cutting an outline to paint its pieces: only the geometry (`plot/cuts.py`) is in.
+- The camera's scale: Hugin measured 119.9 px/mm, `pens.toml` says 125.9 (before the tube was lengthened).
+- The new light flickers: taken out in software, best fixed at the light.
 - The Pi needs Klipper restarted for the LED states, and the plot UI pulled and restarted (`limn_web`).
 
 ## [2026.09.30] - Limn's own plot generator, cameras, hand-scanned pens
 
 ### Added
-- **Camera scans of the bed** ([`51bc888`](https://github.com/prashnts/limn/commit/51bc888) … [`621fe50`](https://github.com/prashnts/limn/commit/621fe50), [`e0ed019`](https://github.com/prashnts/limn/commit/e0ed019), 2026-09-30 – 10-01): `limn_cam/scan.py` and `stitch.py` stitch the bed together from camera frames. The plot UI gets a scan view (`plot/static/scan.js`).
-- **`limn_cam`, a camera library** ([`cdeae38`](https://github.com/prashnts/limn/commit/cdeae38), 2026-09-30): the auto Z ladder finds where each pen touches the paper from a photo (`python -m limn_cam ladder T0 T1`) and writes it to the pen's tag. Also homographies, the ink map, ArUco tags and Moonraker snapshots. `limn_cam/play.py` measures the pen's play ([`785c586`](https://github.com/prashnts/limn/commit/785c586)). Write-up: `notebooks/act-7-camera-ladder.md`.
-- **Pen drying timers** ([`6758d91`](https://github.com/prashnts/limn/commit/6758d91)): a known pen out of its cap too long (`dry` minutes per pen in `plot/profiles/pens.toml`) blinks its holder and beeps. `TOOL_DRY` shows the clocks, `RESET=1` and `SILENCE=1` handle them.
-- 🔧 **Hand-scanned pens** ([`6dc50f1`](https://github.com/prashnts/limn/commit/6dc50f1)): hold a pen to the PN532 reader, then drop it into a holder within 8 s. The extension listens in the background (every 2 s idle, 5 s printing, 0.5 s after a hand was on the holders), and the UI LEDs show the scan state (`klipper/leds.cfg`).
-- **Tool handling in the plot UI** ([`902d0bd`](https://github.com/prashnts/limn/commit/902d0bd), [`8ed0278`](https://github.com/prashnts/limn/commit/8ed0278), [`086c140`](https://github.com/prashnts/limn/commit/086c140)): pen profiles (`plot/profiles/pens.toml`), and the UI shows which pen sits in which holder.
-- **Web UI on the Pi** ([`d132bf5`](https://github.com/prashnts/limn/commit/d132bf5)): supervisord runs it on port 4219 (`limn_web.conf`).
-- **`plot/`, Limn's own SVG → G-code generator** ([`290cfa1`](https://github.com/prashnts/limn/commit/290cfa1), 2026-09-29), with an interactive web UI (FastAPI + one page) to place, paint, preview and plot drawings. Features:
-  - The draw area follows the placed bed's `lrt_paper` mesh.
-  - Text uses the source font or a single-line font.
-  - Per-segment tool painting.
-  - Z limits configurable per machine, tool and job.
-  - Travel stays close to the meshed paper.
-- `GEOMETRY.md`: where everything is, in plotter coordinates ([`290cfa1`](https://github.com/prashnts/limn/commit/290cfa1), [`785c586`](https://github.com/prashnts/limn/commit/785c586)).
+- **`plot/`, Limn's own SVG → G-code generator** (2026-09-29), with a web UI (FastAPI + one page) to place, paint, preview and plot drawings. The draw area follows the placed bed's `lrt_paper` mesh; text uses the source font or a single-line font; per-segment tool painting; Z limits per machine, tool and job; travel stays close to the meshed paper. `GEOMETRY.md` says where everything is, in plotter coordinates.
+- **Tool handling in the plot UI**: pen profiles (`plot/profiles/pens.toml`), and the UI shows which pen sits in which holder. The web UI runs on the Pi under supervisord, port 4219 (`limn_web.conf`).
+- **`limn_cam`, a camera library**: the auto Z ladder finds where each pen touches the paper from a photo (`python -m limn_cam ladder T0 T1`) and writes it to the pen's tag; also homographies, the ink map, ArUco tags, Moonraker snapshots, and `limn_cam/play.py` for the pen's play. Write-up: `notebooks/act-7-camera-ladder.md`.
+- **Camera scans of the bed**: `limn_cam/scan.py` and `stitch.py` stitch the bed together from camera frames; the plot UI gets a scan view (`plot/static/scan.js`).
+- **Pen drying timers**: a known pen out of its cap too long (`dry` minutes per pen in `pens.toml`) blinks its holder and beeps. `TOOL_DRY` shows the clocks.
+- 🔧 **Hand-scanned pens**: hold a pen to the PN532 reader, then drop it into a holder within 8 s. The extension listens in the background and the UI LEDs show the scan state (`klipper/leds.cfg`).
+- FSR alignment: finer XY resolution and calibration (2026-09-28), with `notebooks/act-6-fsr-alignment.md` on whether BED_5 needs a second array.
 
 ### Changed
-- 🔧 **The `G1` ACT/ALIGN macro hacks are gone** ([`973828d`](https://github.com/prashnts/limn/commit/973828d)). `plot/` writes the pen moves itself, so the Klipper `G1` override from 2026.05.01 is removed from `klipper/limn.cfg`. `slicer/` (PrusaSlicer) is retired and its G-code must not be plotted any more.
-- Pen-down is now `z_touch - press` per pen, and lift uses the measured play and tilt ([`7cbeaac`](https://github.com/prashnts/limn/commit/7cbeaac), [`385c568`](https://github.com/prashnts/limn/commit/385c568), [`f6c3cf6`](https://github.com/prashnts/limn/commit/f6c3cf6)).
+- 🔧 **The `G1` ACT/ALIGN macro hacks are gone**: `plot/` writes the pen moves itself, so the Klipper `G1` override from 2026.05.01 is removed from `klipper/limn.cfg`. `slicer/` (PrusaSlicer) is retired and its G-code must not be plotted any more.
+- Pen-down is now `z_touch - press` per pen, and lift uses the measured play and tilt.
 
 ### Fixed
-- Tag reads over I2C ([`8cf9581`](https://github.com/prashnts/limn/commit/8cf9581)).
-- FSR bed fixes ([`290cfa1`](https://github.com/prashnts/limn/commit/290cfa1), [`1507a7c`](https://github.com/prashnts/limn/commit/1507a7c)).
+- Tag reads over I2C; FSR bed fixes.
 
 ### Known issues
-- BED_5 FSR column 3 is faulty. Z and edges moved to column 1, the aim to column 5 (`TODO.md`).
-- The point where a pen first touches can move by ~0.2 mm from one sheet to the next. The Micron 01 is unresolved (`TODO.md`).
+- BED_5 FSR column 3 is faulty: Z and edges moved to column 1, the aim to column 5 (`TODO.md`).
+- The point where a pen first touches can move by ~0.2 mm from one sheet to the next. The Micron 01 is unresolved.
 
-## [2026.09.29] - FSR alignment (`llm-v1`, after the merge)
+## [2026.09.27] - AI-assisted
 
-### Added
-- Finer FSR XY resolution ([`930ecc9`](https://github.com/prashnts/limn/commit/930ecc9)) and FSR calibration ([`982ebd8`](https://github.com/prashnts/limn/commit/982ebd8)).
-- `notebooks/act-6-fsr-alignment.md`: simulating whether BED_5 needs a second array, and measuring the pens on it ([`c824bc8`](https://github.com/prashnts/limn/commit/c824bc8)).
-
-### Fixed
-- FSR fixes ([`06added`](https://github.com/prashnts/limn/commit/06added), [`c52138f`](https://github.com/prashnts/limn/commit/c52138f), [`8697154`](https://github.com/prashnts/limn/commit/8697154), [`e070c2c`](https://github.com/prashnts/limn/commit/e070c2c)). JSON status output ([`8255e23`](https://github.com/prashnts/limn/commit/8255e23)).
-
-## [2026.09.27] - `llm-v1`: first AI-assisted work
-
-> **First use of AI in Limn.** Branch [`llm-v1`](https://github.com/prashnts/limn/tree/llm-v1) was created on 2026-09-26 at 20:24 from [`0f2ae2d`](https://github.com/prashnts/limn/commit/0f2ae2d). From [`c28404e`](https://github.com/prashnts/limn/commit/c28404e) on, its commits are co-authored by Claude (Claude Code). It was merged into `master` on 2026-09-27 in [PR #1](https://github.com/prashnts/limn/pull/1) ([`b73db7d`](https://github.com/prashnts/limn/commit/b73db7d)).
+> Since 2026-09-26 commits are AI assisted. 
 
 ### Added
-- 🔧 **Bed MCU chain** (Dock → RTP bed → FSR bed over UART):
-  - New link protocol `micropython/lib/link.py` with tests ([`97055bc`](https://github.com/prashnts/limn/commit/97055bc)).
-  - Firmware updates over the chain: sha256 checks, commit/confirm, rollback, rescue loop. `node.json` per MCU. `mcu.py` installs, updates and monitors the boards ([`c28404e`](https://github.com/prashnts/limn/commit/c28404e)).
-  - Any MCU on USB can drive the chain below it ([`32571d6`](https://github.com/prashnts/limn/commit/32571d6)).
-  - Per-node data lines from the Dock and an FSR matrix mode ([`c011a0d`](https://github.com/prashnts/limn/commit/c011a0d)).
-  - Design notes: `micropython/STRATEGY.md`.
-- 🔧 **Touch trigger over DETECT**: bed nodes can raise a touch line, fired from a pen-down IRQ on the RTP ([`c28404e`](https://github.com/prashnts/limn/commit/c28404e)). It stays off until the diodes are fitted ([`4ee7012`](https://github.com/prashnts/limn/commit/4ee7012)).
-- 🔧 **Tool holder switches (MCP23017) and tag reader (PN532) read straight off the Pi's I2C bus** by the extension ([`d842438`](https://github.com/prashnts/limn/commit/d842438)). New commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE`.
-- 🔧 **LED strips driven by the extension** ([`518c16a`](https://github.com/prashnts/limn/commit/518c16a), [`0fbe0d1`](https://github.com/prashnts/limn/commit/0fbe0d1), [`f87ddad`](https://github.com/prashnts/limn/commit/f87ddad)):
-  - The dock strip shows holder status.
-  - The UI strip shows the tool digit, tool change phase, tag and alert states.
-  - `klipper/leds.cfg` now only holds the looks (`_led_styles`), and `TOOL_LEDS` redraws them.
-- Dock state on Fluidd's T0–T4 tool buttons ([`894763a`](https://github.com/prashnts/limn/commit/894763a)).
-- 🔧 Tag reads retry by nudging the spring-loaded reader through the holder: `_RFID_NUDGE`, `_HOLDER_REENTER` ([`6a66db0`](https://github.com/prashnts/limn/commit/6a66db0)).
-- **Test marks** after `LRT_CALIBRATE` / `LRT_PROBE_TOOL`: interlocking `+` corners that show XY disagreement between pens. `LRT_MARKS` ([`743758c`](https://github.com/prashnts/limn/commit/743758c)).
-- `REFERENCE` tag flag. After a bed move the calibration is rebased: the BLTouch re-probes the bed's z, and with the reference tool in holder 45 the full calibration is taken again ([`9408fc5`](https://github.com/prashnts/limn/commit/9408fc5)).
+- 🔧 **Bed MCU chain** (Dock → RTP bed → FSR bed over UART): a link protocol (`micropython/lib/link.py`) with tests; firmware updates over the chain with sha256 checks, commit/confirm, rollback and a rescue loop (`node.json` per MCU; `mcu.py` installs, updates and monitors the boards); any MCU on USB can drive the chain below it; per-node data lines from the Dock and an FSR matrix mode. Design notes: `micropython/STRATEGY.md`.
+- 🔧 **Touch trigger over DETECT**: bed nodes can raise a touch line, fired from a pen-down IRQ on the RTP. It stays off until the diodes are fitted.
+- 🔧 **Tool holder switches (MCP23017) and tag reader (PN532) read straight off the Pi's I2C bus** by the extension. New commands: `TOOL_HOLDERS`, `TOOL_HOLDER_CHECK`, `TOOL_TAG_READ`, `TOOL_TAG_WRITE`. Tag reads retry by nudging the spring-loaded reader through the holder.
+- 🔧 **LED strips driven by the extension**: the dock strip shows holder status; the UI strip shows the tool digit, tool change phase, tag and alert states. `klipper/leds.cfg` only holds the looks, and `TOOL_LEDS` redraws them. Dock state also shows on Fluidd's T0–T4 tool buttons.
+- **Test marks** after `LRT_CALIBRATE` / `LRT_PROBE_TOOL`: interlocking `+` corners that show XY disagreement between pens (`LRT_MARKS`). A `REFERENCE` tag flag: after a bed move the BLTouch re-probes the bed's z, and with the reference tool in holder 45 the full calibration is taken again.
 
 ### Changed
-- **The Klipper extension is now a package**, `ext/limn/` (`dock`, `samples`, `machine`, `geometry`, `beds`, `rtp`, `fsr`), with tests in `ext/tests/`. FSR tool alignment on BED_5 (two arrays at right angles) adds `LRT_FSR_Z` and `LRT_FSR_EDGE` ([`754bcdf`](https://github.com/prashnts/limn/commit/754bcdf)). Install: `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`.
+- **The Klipper extension is now a package**, `ext/limn/` (`dock`, `samples`, `machine`, `geometry`, `beds`, `rtp`, `fsr`), with tests in `ext/tests/`. FSR tool alignment on BED_5 (two arrays at right angles) adds `LRT_FSR_Z` and `LRT_FSR_EDGE`. Install: `ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn`.
 
 ### Removed
-- The ToF experiment, the Redis/web side process, `rfid.py` and `shell_output` ([`743758c`](https://github.com/prashnts/limn/commit/743758c)). The extension now reads the I2C devices itself.
+- The ToF experiment, the Redis/web side process, `rfid.py` and `shell_output`: the extension reads the I2C devices itself.
 
 ### Fixed
-- MCU main loops survive errors (`link.Guard`). Failed FSR calibrations are reported, and only settled RTP samples are sent ([`af17c5a`](https://github.com/prashnts/limn/commit/af17c5a)).
-- Meshing no longer refuses when holders are empty ([`1dd187d`](https://github.com/prashnts/limn/commit/1dd187d)). The tool is put away before every BLTouch probe of our own ([`4728baa`](https://github.com/prashnts/limn/commit/4728baa)).
+- MCU main loops survive errors (`link.Guard`); failed FSR calibrations are reported and only settled RTP samples are sent.
+- Meshing no longer refuses when holders are empty; the tool is put away before every BLTouch probe of our own.
 
 ## [2026.09.23] - FSR beds and bed detection
 
 ### Added
-- 🔧 **New bed with an FSR array** (FSR Alignment v2, BED_4 pinout). The firmware adds Z + coarse XY alignment ([`8c45c8a`](https://github.com/prashnts/limn/commit/8c45c8a)), and the bed art goes in `slicer/limn-bed-art-combined.svg`.
-- 🔧 **Bed detection**: the Dock MCU reports which bed is placed ([`7692964`](https://github.com/prashnts/limn/commit/7692964), [`ba5b9a1`](https://github.com/prashnts/limn/commit/ba5b9a1)).
+- 🔧 **New bed with an FSR array** (FSR Alignment v2, BED_4 pinout): the firmware adds Z + coarse XY alignment, and the bed art goes in `slicer/limn-bed-art-combined.svg`.
+- 🔧 **Bed detection**: the Dock MCU reports which bed is placed.
 
 ### Changed
-- Better FSR calibration in the firmware ([`0f2ae2d`](https://github.com/prashnts/limn/commit/0f2ae2d)). Extension checkpoints ([`4c4aa68`](https://github.com/prashnts/limn/commit/4c4aa68), [`b795fd7`](https://github.com/prashnts/limn/commit/b795fd7)).
+- Better FSR calibration in the firmware; extension checkpoints.
 
 ## [2026.09.06] - Loose belts, web server
 
 ### Fixed
-- 🔧 📓 [Loose Belts](https://hackaday.io/project/205431/log/250542-loose-belts) (2026-09-05): the dock parameter trouble was loose belts. Changes:
-  - The belt-tensioning "backpack" was redesigned with better tracks, more clearance and a chamfered track for the clip.
-  - Docking and undocking work reliably.
-  - Smallest legible text with a Micron 003: 1.5 mm.
-  - The ToF sensor was put aside for now.
+- 🔧 📓 [Loose Belts](https://hackaday.io/project/205431/log/250542-loose-belts) (2026-09-05): the dock parameter trouble was loose belts. The belt-tensioning "backpack" was redesigned (better tracks, more clearance, a chamfered track for the clip), docking and undocking work reliably, and the smallest legible text with a Micron 003 is 1.5 mm.
 
 ### Added
-- A small FastAPI web server and Redis pub/sub for the plotter state ([`d12bae0`](https://github.com/prashnts/limn/commit/d12bae0), [`c59cef3`](https://github.com/prashnts/limn/commit/c59cef3), `limn_web.conf`). Printer config tweaks ([`675c45d`](https://github.com/prashnts/limn/commit/675c45d)).
+- A small FastAPI web server and Redis pub/sub for the plotter state (`limn_web.conf`).
 
 ## [2026.08.16] - ToF sensing
 
 ### Added
-- 🔧 📓 [Calibrating the Dock Parameters Automatically with a ToF sensor](https://hackaday.io/project/205431/log/250031-calibrating-the-dock-parameters-automatically-with-tof-sensor): a VL53L5CX (8×8 distance matrix) on the Pi's I2C bus next to the dock switches. Also tried: a medical endoscope camera on the toolhead, and retroreflective patches. Code: `ext/tof.py` with the sensor driver and firmware blobs ([`e728ef8`](https://github.com/prashnts/limn/commit/e728ef8) … [`8beb5a1`](https://github.com/prashnts/limn/commit/8beb5a1)). It was removed again in 2026.09.27.
-- Camera config: the Pi camera was disabled in favour of the USB cameras ([`45bcf40`](https://github.com/prashnts/limn/commit/45bcf40)).
+- 🔧 📓 [Calibrating the Dock Parameters Automatically with a ToF sensor](https://hackaday.io/project/205431/log/250031-calibrating-the-dock-parameters-automatically-with-tof-sensor): a VL53L5CX (8×8 distance matrix) on the Pi's I2C bus next to the dock switches. Also tried: a medical endoscope camera on the toolhead, and retroreflective patches. Code in `ext/tof.py`; removed again in 2026.09.27. The Pi camera was disabled in favour of the USB cameras.
 
 ## [2026.08.13] - Tool dock update
 
 ### Added
-- 🔧 📓 [Updates to the Tool Dock & Printables Project](https://hackaday.io/project/205431/log/249977-updates-to-the-tool-dock-printables-project):
-  - The tool dock was redesigned so the RFID tags no longer get damaged.
-  - Each holder got a limit switch, read through an MCP23017 breakout, to detect whether a tool is present and when it is picked up.
-  - The toolhead and toolchanger parts are published on [Printables](https://www.printables.com/model/1786450-limn-pen-plotter-with-automatic-tool-changer-parti).
-  - Code: reading the holder state ([`4f0b104`](https://github.com/prashnts/limn/commit/4f0b104) … [`2a2dea0`](https://github.com/prashnts/limn/commit/2a2dea0)).
-
-## [2026.08.03] - Sync
+- 🔧 📓 [Updates to the Tool Dock & Printables Project](https://hackaday.io/project/205431/log/249977-updates-to-the-tool-dock-printables-project): the dock was redesigned so the RFID tags no longer get damaged; each holder got a limit switch, read through an MCP23017 breakout, to detect whether a tool is present; the toolhead and toolchanger parts are published on [Printables](https://www.printables.com/model/1786450-limn-pen-plotter-with-automatic-tool-changer-parti). Code: reading the holder state.
 
 ### Changed
-- `rfid.py` moved to `ext/`; this changelog was started ([`0e9096c`](https://github.com/prashnts/limn/commit/0e9096c)).
-- 🔧 LED strip effects reworked ([`ea4b2b8`](https://github.com/prashnts/limn/commit/ea4b2b8), 2026-08-08).
+- `rfid.py` moved to `ext/`; this changelog was started (2026-08-03). 🔧 LED strip effects reworked (2026-08-08).
 
 ## [2026.06.13] - Automatic tool alignment works
 
 ### Added
-- 📓 [Automatic Tool Alignment - Part 3 (it works!)](https://hackaday.io/project/205431/log/248422-automatic-tool-alignment-part-3-it-works):
-  - Tools are aligned to ~0.2 mm on the resistive panel.
-  - Sensor calibration plus a BLTouch bed mesh.
-  - XYZ offsets are stored on each tool's RFID tag.
-  - More than five tools work through manual swap points.
-  - Code:
-    - Full pen calibration with the resistive panel ([`fb66d28`](https://github.com/prashnts/limn/commit/fb66d28)).
-    - Applying it while drawing, with a slicer post-processor ([`e6d847d`](https://github.com/prashnts/limn/commit/e6d847d)).
-    - Calibrated plotting ([`af35e49`](https://github.com/prashnts/limn/commit/af35e49)).
-    - Slicer config ([`399cba0`](https://github.com/prashnts/limn/commit/399cba0)).
-  - Write-up: `notebooks/act-5-z-calib.ipynb`.
-- The FSR array evaluation was deferred.
+- 📓 [Automatic Tool Alignment - Part 3 (it works!)](https://hackaday.io/project/205431/log/248422-automatic-tool-alignment-part-3-it-works): tools are aligned to ~0.2 mm on the resistive panel with a sensor calibration plus a BLTouch bed mesh; XYZ offsets are stored on each tool's RFID tag; more than five tools work through manual swap points. Code: full pen calibration with the resistive panel, applying it while drawing with a slicer post-processor, calibrated plotting. Write-up: `notebooks/act-5-z-calib.ipynb`. The FSR array evaluation was deferred.
 
 ## [2026.05.26] - Bed MCUs and MicroPython firmware
 
 ### Added
-- 🔧 📓 [Automatic Tool Alignment - Part 2](https://hackaday.io/project/205431/log/247972-automatic-tool-alignment-part-2) (2026-05-24):
-  - The bed is now ~3.2 mm thick.
-  - An 8×4 Force Sensitive Resistor array (FS-ARR-4x8) is planned for precise XY.
-  - Two RP2040 boards read the sensors, and a third detects power through the pogo pins.
-  - Rough XY and precise Z come from 9 points × 3 samples on the resistive panel.
-  - Code: MicroPython firmware for the bed MCUs (`lrt_resistive_touch.py`, `lrt_fsr_array.py`) and notebooks ([`14fa56e`](https://github.com/prashnts/limn/commit/14fa56e)).
-- 🔧 Dock MCU firmware (`lrt_dock_mcu.py`, [`9c52bc8`](https://github.com/prashnts/limn/commit/9c52bc8) … [`6a4db74`](https://github.com/prashnts/limn/commit/6a4db74)) and UART OTA ([`85db1b9`](https://github.com/prashnts/limn/commit/85db1b9)). Extension updates ([`4d899e1`](https://github.com/prashnts/limn/commit/4d899e1), [`b4e9508`](https://github.com/prashnts/limn/commit/b4e9508)).
+- 🔧 📓 [Automatic Tool Alignment - Part 2](https://hackaday.io/project/205431/log/247972-automatic-tool-alignment-part-2) (2026-05-24): the bed is now ~3.2 mm thick; an 8×4 Force Sensitive Resistor array (FS-ARR-4x8) is planned for precise XY; two RP2040 boards read the sensors and a third detects power through the pogo pins; rough XY and precise Z come from 9 points × 3 samples on the resistive panel. Code: MicroPython firmware for the bed MCUs (`lrt_resistive_touch.py`, `lrt_fsr_array.py`), the dock MCU (`lrt_dock_mcu.py`) and UART OTA.
 
 ## [2026.05.21] - Klipper module for probing
 
 ### Added
-- `ext/limn.py`, the first Limn Klipper extension, for probing tools on the touch panel ([`778ee32`](https://github.com/prashnts/limn/commit/778ee32) … [`007807d`](https://github.com/prashnts/limn/commit/007807d)).
+- `ext/limn.py`, the first Limn Klipper extension, for probing tools on the touch panel.
 
 ## [2026.05.12] - Automatic tool alignment in XYZ
 
 ### Added
-- 🔧 📓 [Automatic Tool Alignment in XYZ](https://hackaday.io/project/205431/log/247807-automatic-tool-alignment-in-xyz):
-  - Hardware:
-    - A resistive touch panel salvaged from an old car GPS, read by the XPT2046 on a Cheap Yellow Display running ESPHome.
-    - Magnetic pogo pins connect the panel.
-    - An OR gate of two NPN transistors merges the touch pulse with the BLTouch signal.
-    - The bed is 2.5 mm.
-  - Code:
-    - `touchprobe.py` ([`3975273`](https://github.com/prashnts/limn/commit/3975273)).
-    - The `PROBE_TOOLS` flow, buzzer and Crowsnest camera config ([`1d566e5`](https://github.com/prashnts/limn/commit/1d566e5)).
+- 🔧 📓 [Automatic Tool Alignment in XYZ](https://hackaday.io/project/205431/log/247807-automatic-tool-alignment-in-xyz): a resistive touch panel salvaged from an old car GPS, read by the XPT2046 on a Cheap Yellow Display running ESPHome; magnetic pogo pins connect the panel; an OR gate of two NPN transistors merges the touch pulse with the BLTouch signal; the bed is 2.5 mm. Code: `touchprobe.py`, the `PROBE_TOOLS` flow, buzzer and Crowsnest camera config.
 
 ## [2026.05.01] - Applying tool parameters, tethered tools
 
 ### Added
-- 📓 [Applying Tool Parameters, Tethered Tools](https://hackaday.io/project/205431/log/247548-applying-tool-parameters-tethered-tools):
-  - Each tool's XYZ offset is read from its RFID tag and applied with `SET_GCODE_OFFSET`.
-  - `G1`/`G2`/`G3` are overridden with `ACT` (pen up/down) and `ALIGN` parameters. They were removed in `llm-v2`.
-  - Tethered tools work, e.g. a UVC camera.
-  - Code: `shell_output` Klipper module ([`6ceaa97`](https://github.com/prashnts/limn/commit/6ceaa97) … [`813dfc1`](https://github.com/prashnts/limn/commit/813dfc1)), output format ([`ba4fe8c`](https://github.com/prashnts/limn/commit/ba4fe8c)), CLI args for the tag reader ([`3cfc44b`](https://github.com/prashnts/limn/commit/3cfc44b)).
+- 📓 [Applying Tool Parameters, Tethered Tools](https://hackaday.io/project/205431/log/247548-applying-tool-parameters-tethered-tools): each tool's XYZ offset is read from its RFID tag and applied with `SET_GCODE_OFFSET`; `G1`/`G2`/`G3` are overridden with `ACT` (pen up/down) and `ALIGN` parameters (removed in 2026.09.30); tethered tools work, e.g. a UVC camera. Code: the `shell_output` Klipper module and CLI args for the tag reader.
 
 ## [2026.04.24] - New Z axis, plotter bed, STEP files
 
 ### Added
-- 🔧 📓 [New Z axis, Plotter Bed, STEP Files](https://hackaday.io/project/205431/log/247336-new-z-axis-plotter-bed-step-files) (2026-04-21):
-  - A lead-screw Z axis: a NEMA 8 driving a 35 mm M3 bolt, with a triangular slider inspired by optical drives. It has much less backlash and probes more accurately.
-  - Rotation distance is 0.03 mm, with no microstepping (the AVR's step rate limit).
-  - A magnetic A5 bed.
-- Design files: STEP and Fusion360 exports in `step/` ([`89f9882`](https://github.com/prashnts/limn/commit/89f9882), [`02224e8`](https://github.com/prashnts/limn/commit/02224e8)).
+- 🔧 📓 [New Z axis, Plotter Bed, STEP Files](https://hackaday.io/project/205431/log/247336-new-z-axis-plotter-bed-step-files) (2026-04-21): a lead-screw Z axis (a NEMA 8 driving a 35 mm M3 bolt, with a triangular slider inspired by optical drives) with much less backlash; rotation distance 0.03 mm, no microstepping (the AVR's step rate limit); a magnetic A5 bed.
+- Design files: STEP and Fusion360 exports in `step/`.
 
 ### Changed
-- License changed from MIT to GPL v3 ([`420503a`](https://github.com/prashnts/limn/commit/420503a)).
+- License changed from MIT to GPL v3.
 
 ## [2026.04.15] - Interactive plotting
 
@@ -354,21 +255,9 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 ## [2026.04.11] - Source on GitHub, RFID read
 
 ### Added
-- 📓 [RFID Read, Source available on GitHub](https://hackaday.io/project/205431/log/247188-rfid-read-source-available-on-github):
-  - Klipper config: printer, toolchanger, LEDs.
-  - Tag reader `rfid.py` and the PrusaSlicer config ([`efed1b3`](https://github.com/prashnts/limn/commit/efed1b3), [`7f745e3`](https://github.com/prashnts/limn/commit/7f745e3)).
-  - MIT license at first ([`59f1cc3`](https://github.com/prashnts/limn/commit/59f1cc3)).
-- 🔧 📓 [Under the Hood](https://hackaday.io/project/205431/log/247178-under-the-hood) (2026-04-10):
-  - The frame is MDF with steel rods, bearings and XY steppers from a Tronxy kit.
-  - Driver PCB with 4× A4982. Its 12 V trace is cut, so the Z and K drivers run on 5 V.
-  - Dual-Z pinout.
-  - The dock brackets also act as the LCD hinge.
-- 🔧 📓 [Detecting Tools, Tool Parameters, "Slicing"](https://hackaday.io/project/205431/log/247167-detecting-tools-tool-parameters-slicing) (2026-04-09):
-  - Hardware: a spring-loaded PN532 RFID reader by the first tool, wired over I2C.
-  - Software:
-    - PrusaSlicer set up as a multi-extruder printer, where retractions become pen up/down.
-    - T0–T4 tool change macros.
-    - A `G1` macro that ignores extrusion.
+- 📓 [RFID Read, Source available on GitHub](https://hackaday.io/project/205431/log/247188-rfid-read-source-available-on-github): Klipper config (printer, toolchanger, LEDs), the tag reader `rfid.py` and the PrusaSlicer config ([`efed1b3`](https://github.com/prashnts/limn/commit/efed1b3), [`7f745e3`](https://github.com/prashnts/limn/commit/7f745e3)); MIT license at first.
+- 🔧 📓 [Under the Hood](https://hackaday.io/project/205431/log/247178-under-the-hood) (2026-04-10): the frame is MDF with steel rods, bearings and XY steppers from a Tronxy kit; driver PCB with 4× A4982, its 12 V trace cut so the Z and K drivers run on 5 V; dual-Z pinout; the dock brackets also act as the LCD hinge.
+- 🔧 📓 [Detecting Tools, Tool Parameters, "Slicing"](https://hackaday.io/project/205431/log/247167-detecting-tools-tool-parameters-slicing) (2026-04-09): a spring-loaded PN532 RFID reader by the first tool, wired over I2C; PrusaSlicer set up as a multi-extruder printer, where retractions become pen up/down; T0–T4 tool change macros; a `G1` macro that ignores extrusion.
 
 ### Fixed
 - Shell command in the tag reader ([`c6ebe75`](https://github.com/prashnts/limn/commit/c6ebe75), [`4dc372a`](https://github.com/prashnts/limn/commit/4dc372a)).
@@ -376,39 +265,31 @@ Branch [`llm-v2`](https://github.com/prashnts/limn/tree/llm-v2), created 2026-09
 ## [2026.04.03] - Toolhead and Z axis
 
 ### Added
-- 🔧 📓 [NEMA 8: No Go & Backlash Correction](https://hackaday.io/project/205431/log/247060-nema-8-backlash-correction) (2026-04-03):
-  - A NEMA 8 couldn't move the Z (it buzzed even at 0.8 A), so it went back to the SRM1509.
-  - Embedded nuts on the pulley shafts.
-  - A `G1` macro corrects 1.8 mm of backlash on direction changes. The bed mesh is not corrected.
-- 🔧 📓 [Z Axis & Toolhead](https://hackaday.io/project/205431/log/247040-z-axis-toolhead) (2026-04-01):
-  - The loud MG14 servo is replaced by an SRM1509 geared stepper.
-  - 3 mm dowels and bushings, 603ZZ bearings, a GT2 belt; ~250 g in all.
+- 🔧 📓 [NEMA 8: No Go & Backlash Correction](https://hackaday.io/project/205431/log/247060-nema-8-backlash-correction) (2026-04-03): a NEMA 8 couldn't move the Z (it buzzed even at 0.8 A), so it went back to the SRM1509; embedded nuts on the pulley shafts; a `G1` macro corrects 1.8 mm of backlash on direction changes (the bed mesh is not corrected).
+- 🔧 📓 [Z Axis & Toolhead](https://hackaday.io/project/205431/log/247040-z-axis-toolhead) (2026-04-01): the loud MG14 servo is replaced by an SRM1509 geared stepper; 3 mm dowels and bushings, 603ZZ bearings, a GT2 belt; ~250 g in all.
 - Repository created ([`9d574ab`](https://github.com/prashnts/limn/commit/9d574ab), 2026-04-01).
 
 ## [2026.03.31] - First steps
 
 ### Added
-- 🔧 📓 [First Steps](https://hackaday.io/project/205431/log/247003-first-steps):
-  - Magnets on the coupling screws, so the tool lock closes and clicks when a tool leaves the rack.
-  - Work started on turning layered SVG into multi-tool G-code.
+- 🔧 📓 [First Steps](https://hackaday.io/project/205431/log/247003-first-steps): magnets on the coupling screws, so the tool lock closes and clicks when a tool leaves the rack. Work started on turning layered SVG into multi-tool G-code.
 - Project created on [Hackaday.io](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) (2026-03-30).
 
-[Unreleased]: https://github.com/prashnts/limn/compare/c824bc8...llm-v2
-[2026.10.01]: https://github.com/prashnts/limn/compare/e0ed019...llm-v2
-[2026.09.30]: https://github.com/prashnts/limn/compare/c824bc8...e0ed019
-[2026.09.29]: https://github.com/prashnts/limn/compare/b73db7d...c824bc8
-[2026.09.27]: https://github.com/prashnts/limn/compare/0f2ae2d...b73db7d
-[2026.09.23]: https://github.com/prashnts/limn/compare/675c45d...0f2ae2d
-[2026.09.06]: https://github.com/prashnts/limn/compare/8beb5a1...675c45d
-[2026.08.16]: https://github.com/prashnts/limn/compare/2a2dea0...8beb5a1
-[2026.08.13]: https://github.com/prashnts/limn/compare/ea4b2b8...2a2dea0
-[2026.08.03]: https://github.com/prashnts/limn/compare/399cba0...ea4b2b8
-[2026.06.13]: https://github.com/prashnts/limn/compare/b4e9508...399cba0
-[2026.05.26]: https://github.com/prashnts/limn/compare/007807d...b4e9508
-[2026.05.21]: https://github.com/prashnts/limn/compare/1d566e5...007807d
-[2026.05.12]: https://github.com/prashnts/limn/compare/3cfc44b...1d566e5
-[2026.05.01]: https://github.com/prashnts/limn/compare/02224e8...3cfc44b
-[2026.04.24]: https://github.com/prashnts/limn/compare/4dc372a...02224e8
+[2026.10.11]: https://github.com/prashnts/limn/compare/16c9d45...master
+[2026.10.07]: https://github.com/prashnts/limn/compare/01389dc...16c9d45
+[2026.10.01]: https://github.com/prashnts/limn/compare/d50cba3...01389dc
+[2026.09.30]: https://github.com/prashnts/limn/compare/597d804...d50cba3
+[2026.09.27]: https://github.com/prashnts/limn/compare/06a5880...597d804
+[2026.09.23]: https://github.com/prashnts/limn/compare/3e0301e...06a5880
+[2026.09.06]: https://github.com/prashnts/limn/compare/5b662f9...3e0301e
+[2026.08.16]: https://github.com/prashnts/limn/compare/0e7d106...5b662f9
+[2026.08.13]: https://github.com/prashnts/limn/compare/a5151d3...0e7d106
+[2026.06.13]: https://github.com/prashnts/limn/compare/88fc99e...3dc4751
+[2026.05.26]: https://github.com/prashnts/limn/compare/062106f...88fc99e
+[2026.05.21]: https://github.com/prashnts/limn/compare/8eb2b65...062106f
+[2026.05.12]: https://github.com/prashnts/limn/compare/a2d6c3b...8eb2b65
+[2026.05.01]: https://github.com/prashnts/limn/compare/c2abfd6...a2d6c3b
+[2026.04.24]: https://github.com/prashnts/limn/compare/4dc372a...c2abfd6
 [2026.04.15]: https://hackaday.io/project/205431/log/247271-interactive-plotting
 [2026.04.11]: https://github.com/prashnts/limn/compare/9d574ab...4dc372a
 [2026.04.03]: https://github.com/prashnts/limn/commit/9d574ab
