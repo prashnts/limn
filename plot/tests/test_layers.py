@@ -55,14 +55,16 @@ def test_a_colour_left_to_its_tool_fills_as_the_tool_does(write_svg, tools):
 
 
 def test_bleed_keeps_a_gap_from_another_tool_on_top(write_svg, tools):
-    # Red under a 4mm green line: cut at 48..52, and 0.5 further with a bleed of 0.5
+    # Red under a 4mm green line: cut at 48..52, and 0.5 further with a bleed of 0.5, ink to
+    # ink (its pen's round end kept off the green's ink: half its width more)
     p = write_svg('''
         <path d="M10 50 H90" stroke="#ff0000" stroke-width="0.5"/>
         <path d="M50 10 V90" stroke="#00ff00" stroke-width="4"/>''')
     groups = {'stroke #ff0000': Group(tool='T3'), 'stroke #00ff00': Group(tool='T0')}
     bled = {**tools, 'T3': tools['T3'].model_copy(update={'bleed': 0.5})}
     red = sorted(slice_object(Obj(id='d', svg=str(p), groups=groups), bled).paths['T3'], key=lambda a: a[0, 0])
-    assert red[0][:, 0].max() == pytest.approx(47.5) and red[1][:, 0].min() == pytest.approx(52.5)
+    edge = 47.5 - bled['T3'].width / 2
+    assert red[0][:, 0].max() == pytest.approx(edge, abs=1e-3) and red[1][:, 0].min() == pytest.approx(100 - edge, abs=1e-3)
     # The same tool on top: no gap, it is one ink
     same = {'stroke #ff0000': Group(tool='T3'), 'stroke #00ff00': Group(tool='T3')}
     lines = [a for a in slice_object(Obj(id='d', svg=str(p), groups=same), bled).paths['T3'] if np.ptp(a[:, 1]) < 1]

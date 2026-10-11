@@ -204,8 +204,9 @@ def planes(img, spec: RasterSpec, tools=None):
     else:
         c = unmix(rgb, [c for c, _ in ink])
         out = {colour: c[..., i] for i, (colour, _) in enumerate(ink)}
-    for x in [x for x in img.cache if isinstance(x, tuple) and x[0] == 'planes']:
-        del img.cache[x]                        # one separation kept at a time: they are big
+    for x in [x for x in list(img.cache) if isinstance(x, tuple) and x[0] == 'planes']:
+        img.cache.pop(x, None)                  # one separation kept at a time: they are big
+                                                # (list, pop: the slice and the canvas's shapes share it)
     img.cache[k] = out
     return out
 
@@ -328,11 +329,15 @@ def lines(img, spec: RasterSpec, scale=1.0, colour=None, angle=0, pen=None, tool
         if step * scale > cell * 1.01 or turns > pitch * 1.01:
             note = (f'halftone in {colour}: dots {step * scale:.2f} mm apart, their turns {turns:.2f} apart '
                     f'(asked {cell:.2f}, {pitch:.2f}), else too much to plot: lighter. Lines plot quickest with a fine pen')
+    if img.clip is not None and out:            # a clip-path, a mask; a gradient: its shape
+        area = img.clip
+        shapely.prepare(area)
+        out = [q for p in out for q in ([p] if area.contains(LineString(p)) else lines_of(LineString(p) & area))]
     if note and problems is not None:
         problems.append(note)
     if len(img.cache) > 24:
-        for x in [x for x in img.cache if isinstance(x, tuple) and x[0] != 'planes']:
-            del img.cache[x]
+        for x in [x for x in list(img.cache) if isinstance(x, tuple) and x[0] != 'planes']:
+            img.cache.pop(x, None)
     img.cache[k] = (out, note)
     return out
 

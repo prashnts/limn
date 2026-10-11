@@ -66,13 +66,15 @@ def ttfont(path):
 
 
 def outline_info(path) -> FontInfo:
-    f = ttfont(path)
+    f = TTFont(path, fontNumber=0, lazy=True)       # not ttfont(): reading hundreds would empty its cache
     name = f['name']
     os2 = f['OS/2'] if 'OS/2' in f else None
     style = name.getBestSubFamilyName() or 'Regular'
     italic = bool(os2 and os2.fsSelection & 1) or 'italic' in style.lower() or 'oblique' in style.lower()
-    return FontInfo(Path(path).name, 'outline', name.getBestFamilyName() or Path(path).stem, style,
+    info = FontInfo(Path(path).name, 'outline', name.getBestFamilyName() or Path(path).stem, style,
                     os2.usWeightClass if os2 else 400, italic)
+    f.close()
+    return info
 
 
 def _svg_font(path):
@@ -102,18 +104,26 @@ class FontStore:
     def __init__(self, folder):
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
+        self._info = {}         # (name, mtime, size) -> FontInfo, None: not a font. Each read once:
+        self._list = None       # (folder mtime, [FontInfo]); with hundreds of fonts, reading them all
+                                # for every text took seconds a change
+
+    def _read(self, p):
+        st = p.stat()
+        k = (p.name, st.st_mtime_ns, st.st_size)
+        if k not in self._info:
+            try:
+                self._info[k] = outline_info(p) if p.suffix.lower() in OUTLINE else line_info(p)
+            except Exception:
+                self._info[k] = None
+        return self._info[k]
 
     def fonts(self) -> list[FontInfo]:
-        out = []
-        for p in sorted(self.folder.iterdir()):
-            try:
-                if p.suffix.lower() in OUTLINE:
-                    out.append(outline_info(p))
-                elif p.suffix.lower() == '.svg':
-                    out.append(line_info(p))
-            except Exception:
-                continue
-        return out
+        mtime = self.folder.stat().st_mtime_ns
+        if self._list is None or self._list[0] != mtime:
+            out = [self._read(p) for p in sorted(self.folder.iterdir()) if p.suffix.lower() in (*OUTLINE, '.svg')]
+            self._list = (mtime, [f for f in out if f is not None])
+        return list(self._list[1])
 
     def add(self, filename, data: bytes) -> FontInfo:
         name = re.sub(r'[^\w.\- ]', '_', Path(filename).name)
@@ -121,6 +131,7 @@ class FontStore:
             raise ValueError(f'{name}: a font is .ttf, .otf, or an SVG font')
         path = self.folder / name
         path.write_bytes(data)
+        self._list = None               # the same name again doesn't change the folder's mtime
         try:
             return outline_info(path) if path.suffix.lower() in OUTLINE else line_info(path)
         except Exception as e:
@@ -129,6 +140,7 @@ class FontStore:
 
     def remove(self, name):
         (self.folder / Path(name).name).unlink(missing_ok=True)
+        self._list = None
 
     def path(self, name):
         p = self.folder / Path(name).name

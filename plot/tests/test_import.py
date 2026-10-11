@@ -86,7 +86,8 @@ def test_thin_parts_are_drawn_on_their_centre():
 
 
 def test_crossing_lines_keep_their_colours(write_svg, tools):
-    # Red under, then a 4mm yellow line over it: the red is cut where the yellow is
+    # Red under, then a 4mm yellow line over it: the red is cut where the yellow is, and its
+    # pen's round end (half its width) kept off the yellow's ink
     p = write_svg('''
         <path d="M10 50 H90" stroke="#ff0000" stroke-width="0.5"/>
         <path d="M50 10 V90" stroke="#21ff06" stroke-width="4"/>''')
@@ -94,7 +95,9 @@ def test_crossing_lines_keep_their_colours(write_svg, tools):
     s = slice_object(Obj(id='d', svg=str(p), groups=groups), tools)
     red = sorted(s.paths['T3'], key=lambda a: a[:, 0].min())
     assert len(red) == 2
-    assert red[0][:, 0].max() == pytest.approx(48) and red[1][:, 0].min() == pytest.approx(52)
+    yw, rw = tools['T0'].width, tools['T3'].width
+    edge = 48 + yw / 2 - (yw + rw) / 2         # the yellow's outer ring, less both half widths
+    assert red[0][:, 0].max() == pytest.approx(edge, abs=1e-3) and red[1][:, 0].min() == pytest.approx(100 - edge, abs=1e-3)
     # The yellow is 4mm wide, drawn as its area, the pen's centre half its width in
     yx, w = np.vstack(s.paths['T0'])[:, 0], tools['T0'].width
     assert yx.min() == pytest.approx(48 + w / 2) and yx.max() == pytest.approx(52 - w / 2)
@@ -110,12 +113,15 @@ def test_masks_hide_and_see_through_doesnt(write_svg, tools):
         <path d="M70 10 V90" stroke="#0000ff" stroke-width="4" stroke-opacity="0.5"/>''')
     groups = {'stroke #ff0000': Group(tool='T3'), 'fill #ffffff': Group(mask=True),
               'stroke #0000ff': Group(tool='T4')}
+    # Ink doesn't see through: the half-transparent blue is ink on top all the same (ink.guard)
     s = slice_object(Obj(id='d', svg=str(p), groups=groups), tools)
-    assert len(s.paths['T3']) == 2         # cut by the white circle only
-    assert 'T4' in s.paths
+    assert len(s.paths['T3']) == 3 and 'T4' in s.paths
+    # Let draw over: cut by the white circle only
+    over = {**tools, 'T3': tools['T3'].model_copy(update={'overdraw': 'draw'})}
+    assert len(slice_object(Obj(id='d', svg=str(p), groups=groups), over).paths['T3']) == 2
     # A colour that isn't drawn hides nothing
     groups['fill #ffffff'] = Group()
-    assert len(slice_object(Obj(id='d', svg=str(p), groups=groups), tools).paths['T3']) == 1
+    assert len(slice_object(Obj(id='d', svg=str(p), groups=groups), over).paths['T3']) == 1
 
 
 def test_object_coordinates_are_y_up(write_svg, tools):

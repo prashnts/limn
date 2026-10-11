@@ -5,26 +5,46 @@ from limn.leds import ToolLeds
 
 
 def test_clock_starts_and_stops():
-    d = Drying(idle=600, printing=1200)
+    d = Drying(idle=600)
     assert d.update({41}, 1000.0) and d.since == {41: 1000.0}
     assert not d.update({41}, 1100.0) and d.since[41] == 1000.0      # still in: the same clock
-    assert d.stage(41, 1599.0, False) == 0 and d.stage(41, 1600.0, False) == 1
-    assert d.stage(41, 1600.0 + 120, False) == 2 and d.stage(41, 1600.0 + 300, False) == 3
-    assert d.stage(41, 1700.0, True) == 0                         # printing: 20 minutes
-    assert d.stages(1700.0, False) == {41: 1}
+    assert d.stage(41, 1599.0) == 0 and d.stage(41, 1600.0) == 1
+    assert d.stage(41, 1600.0 + 120) == 2 and d.stage(41, 1600.0 + 300) == 3
+    assert d.stages(1700.0) == {41: 1}
     d.update(set(), 1800.0)                                       # a dock: in neither place for a moment
     assert not d.update({41}, 1800.5) and d.since == {41: 1000.0}  # the same clock (seen on the plotter)
     d.update(set(), 1900.0)                                       # taken out by hand: capped
     assert d.since == {41: 1000.0}
-    assert d.update(set(), 1925.0) and d.since == {} and d.stages(5000.0, False) == {}
+    assert d.update(set(), 1925.0) and d.since == {} and d.stages(5000.0) == {}
+
+
+def test_the_clock_stands_still_while_the_pens_are_wanted():
+    d = Drying(idle=600)
+    d.update({41}, 0.0)
+    assert not d.update({41}, 500.0, busy=True)                   # a print starts
+    assert d.stages(500.0) == {}
+    d.update({41}, 1000.0)                                        # busy: as before (TOOL_DRY)
+    assert d.busy and d.since == {41: 500.0} and d.stages(5000.0) == {}  # never overdue meanwhile
+    d.update({42}, 2000.0, busy=True)                             # a pen put in during the print
+    assert d.since[42] == 2000.0
+    assert d.update({41, 42}, 3000.0, busy=False)                 # done: the moved clocks are saved
+    assert d.since == {41: 2500.0, 42: 3000.0}
+    assert d.stage(41, 3099.0) == 0 and d.stage(41, 3100.0) == 1  # 500 s before + 600 s after
+    st = d.status(3100.0)
+    assert st['41'] == {'uncapped': 600, 'limit': 600.0, 'stage': 1, 'paused': False}
+    # A G-code of a moment moves the clocks but isn't worth a write
+    assert not d.update({41, 42}, 3105.0, busy=True) and not d.update({41, 42}, 3106.0, busy=False)
+    assert d.since[41] == 2501.0
+    d.update({41, 42}, 3107.0, busy=True)
+    assert d.status(3107.0)['41']['paused'] and d.stages(3107.0) == {}    # an overdue pen goes quiet
 
 
 def test_a_pen_of_its_own():
-    d = Drying(idle=600, printing=1200)
+    d = Drying(idle=600)
     d.update({41, 42}, 0.0)
     d.limits = {41: 240 * 60}                   # dry-safe ink
-    assert d.stages(700.0, False) == {42: 1}
-    assert d.limit(True, 41) == 480 * 60 and d.limit(True, 42) == 1200
+    assert d.stages(700.0) == {42: 1}
+    assert d.limit(41) == 240 * 60 and d.limit(42) == 600
 
 
 def test_reset_and_saved():
@@ -34,8 +54,8 @@ def test_reset_and_saved():
     d.reset(1000.0)
     assert set(d.since.values()) == {1000.0}
     assert Drying(since=d.saved()).since == d.since
-    st = d.status(1300.0, False)
-    assert st['41'] == {'uncapped': 300, 'limit': 600.0, 'stage': 0}
+    st = d.status(1300.0)
+    assert st['41'] == {'uncapped': 300, 'limit': 600.0, 'stage': 0, 'paused': False}
 
 
 def test_leds_show_a_drying_pen():

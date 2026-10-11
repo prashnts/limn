@@ -47,7 +47,8 @@ async function api(method, url, body) {
   const opts = { method, headers: {} };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const r = await fetch(url, opts);
+  let r;
+  try { r = await fetch(url, opts); } catch (e) { toast(`${method} ${url}: the server can't be reached (${e.message})`, true); throw e; }
   if (!r.ok) {
     let msg = r.statusText;
     try { const j = await r.json(); msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch { /* not json */ }
@@ -125,6 +126,26 @@ function toast(msg, bad = false) {
   toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 6000 : 3000);
 }
 
+// Something under way (an upload, reading a big drawing): a toast that stays until done(),
+// with a spinner; called again, it changes the text
+let workingN = 0;
+function working(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast busy';
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  const me = ++workingN;
+  return () => { if (me === workingN && t.classList.contains('busy')) t.hidden = true; };
+}
+// A drawing off the bed at once, the server told after (it brings it back if that fails)
+async function removeObject(id) {
+  const g = $(`#design-layer g.obj[data-id="${CSS.escape(id)}"]`);
+  if (g) g.style.display = 'none';
+  $('#paths-layer').classList.add('stale');
+  try { setState(await api('DELETE', `/api/objects/${id}`)); } catch (e) { if (g) g.style.display = ''; throw e; }
+}
+
 // Panels are redrawn whole. A redraw the printer poll brings (not something done
 // here) waits while you are in that panel: it would close an open select, drop a
 // half-typed value or end a drag. It comes once you leave the panel.
@@ -170,7 +191,7 @@ const HELP = {
   bleed: 'mm kept clear around what another tool (or a mask) draws on top: inks that run don\'t meet',
   layers: 'Light under dark: a lighter ink isn\'t cut out where a darker one draws over it, it is drawn whole and the light pens plot first, so the dark outlines over them stay crisp. Cut out: each ink only where it shows',
   small: 'Shapes too small or dense for the tool\'s line (it would fill them in: tiny handwriting, text): leave them out, draw them with a warning, or just draw them',
-  dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (twice that while printing)',
+  dry: 'Minutes it may stay out of its cap in the machine before the dock goes red and beeps (the clock stops while the pens are in use)',
   webcam: 'The camera\'s name in Moonraker\'s webcams',
   focus_z: 'Camera: the G-code z where what lies on the bed is sharpest',
   fov: 'Camera: mm across and down one shot, at its focus height',
@@ -512,6 +533,29 @@ function pickShapes(id, i, e) {
   } else shapeSel.idx = new Set(these);
   if (sel !== id) { sel = id; store.set('sel', sel); }
   render();
+  if (shapeSel.idx.has(i)) revealPicked(id, i);
+}
+// A shape picked: its settings in view. A picture's (an <image>, a gradient fill) are in
+// Images, a text's in Texts (Each text), the rest under Picked shapes
+function revealPicked(id, i) {
+  const I = info(id);
+  let el = null, open = [];
+  if ((I.images || []).some((im) => im.index === i)) {
+    imageSel[id] = String(i);
+    open = ['images'];
+  } else if ((I.texts || []).some((t) => t.index === i)) open = ['texts', 'texts-each'];
+  for (const k of open) store.set('sect:' + k, true);
+  if (open.length) renderObjectPanel();
+  if (typeof unfoldPanel === 'function') unfoldPanel('drawing');
+  const P = $('#object-panel');
+  if (open[0] === 'images') el = $('[data-sect="images"]', P);
+  else if (open[0] === 'texts') el = $(`.text-run[data-i="${i}"]`, P);
+  else el = $('.picked-head', P);
+  if (!el) return;
+  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  el.classList.remove('flash-in');
+  void el.offsetWidth;          // again from the start
+  el.classList.add('flash-in');
 }
 function boxShapes(a, b, add) {
   const o = sel && obj(sel), g = o && $(`#design-layer g.obj[data-id="${CSS.escape(o.id)}"]`);
@@ -823,12 +867,20 @@ function paintOf(g) {
 function geoSig(o) {
   return JSON.stringify([o.svg, o.scale, o.tolerance, o.text, o.texts, S.fonts.map((f) => f.file)]);
 }
-async function ensureGeo(o) {
-  const sig = geoSig(o);
-  if (geo[o.id] && geo[o.id].sig === sig) return geo[o.id].data;
-  const data = await api('GET', `/api/objects/${o.id}/shapes`);
-  geo[o.id] = { sig, data };
-  return data;
+// The drawing's shapes as the server makes them (cached by what changes them). A fetch under way
+// is shared; one that failed is asked again the next time
+function ensureGeo(o) {
+  const sig = geoSig(o), have = geo[o.id];
+  if (have && have.sig === sig) return have.pending;
+  const pending = api('GET', `/api/objects/${o.id}/shapes`).then((data) => {
+    if (geo[o.id] && geo[o.id].pending === pending) geo[o.id].data = data;
+    return data;
+  }, (e) => {
+    if (geo[o.id] && geo[o.id].pending === pending) delete geo[o.id];
+    throw e;
+  });
+  geo[o.id] = { sig, pending, data: null };
+  return pending;
 }
 
 function placeObject(o, k = 1) {
@@ -843,19 +895,41 @@ function renderObjects() {
 }
 async function drawObjects() {
   const L = $('#design-layer');
-  const ids = new Set(S.job.objects.map((o) => o.id));
+  const objs = S.job.objects;
+  const ids = new Set(objs.map((o) => o.id));
   for (const g of $$('g.obj', L)) if (!ids.has(g.dataset.id)) g.remove();
   const had = sel && geo[sel] && geo[sel].data;
-  for (const o of S.job.objects) {
-    const data = await ensureGeo(o);
+  // Until its new shapes come, a drawing shows its old ones at its new scale (a resize shows at once)
+  for (const o of objs) {
+    const g = $(`g.obj[data-id="${CSS.escape(o.id)}"]`, L);
+    if (g && g.dataset.sig !== geoSig(o) && +g.dataset.scale) placeObject(o, o.scale / +g.dataset.scale);
+  }
+  const got = await Promise.allSettled(objs.map(ensureGeo));      // all at once, not one after the other
+  objs.forEach((o, n) => {
+    if (got[n].status === 'rejected') return;           // (toasted) the others still drawn
+    const data = got[n].value;
     let g = $(`g.obj[data-id="${CSS.escape(o.id)}"]`, L);
-    if (!g || g.dataset.sig !== geo[o.id].sig) {
+    if (!g || g.dataset.sig !== geoSig(o)) {
       if (g) g.remove();
       g = svgEl('g', { class: 'obj', 'data-id': o.id }, L);
-      g.dataset.sig = geo[o.id].sig;
+      g.dataset.sig = geoSig(o);
+      g.dataset.scale = o.scale;
       svgEl('rect', { class: 'hit', x: 0, y: 0, width: data.size[0], height: data.size[1] }, g);
+      // The clip-paths and masks its shapes show through; its pictures (an <image>, a gradient
+      // fill) under the outline they are picked by
+      const cid = (k) => `clip-${o.id}-${k}`;
+      const defs = svgEl('defs', {}, g);
+      (data.clips || []).forEach((d, k) => svgEl('path', { d }, svgEl('clipPath', { id: cid(k) }, defs)));
+      const pics = new Map((data.pictures || []).map((pc) => [pc.i, pc]));
       for (const sh of data.shapes) {
-        svgEl('path', { class: 'shape', d: sh.d, 'data-i': sh.i, 'fill-rule': sh.rule === 'evenodd' ? 'evenodd' : 'nonzero' }, g);
+        const pc = sh.pic && pics.get(sh.i);
+        if (pc) {       // (clipped by a <g>: on the <image> the clip would be in its own, transformed, space)
+          const wrap = svgEl('g', pc.c != null ? { 'clip-path': `url(#${cid(pc.c)})` } : {}, g);
+          svgEl('image', { class: 'pic', href: pc.href, width: pc.wh[0], height: pc.wh[1], preserveAspectRatio: 'none',
+            transform: `matrix(${pc.m.join(' ')})`, 'data-i': pc.i }, wrap);
+        }
+        svgEl('path', { class: 'shape' + (sh.pic ? ' pic' : ''), d: sh.d, 'data-i': sh.i, 'fill-rule': sh.rule === 'evenodd' ? 'evenodd' : 'nonzero',
+          ...(sh.c != null ? { 'clip-path': `url(#${cid(sh.c)})` } : {}) }, g);
       }
     }
     placeObject(o);
@@ -863,7 +937,7 @@ async function drawObjects() {
     drawMasks(o, g);
     g.style.display = hiddenObjs.has(o.id) ? 'none' : '';
     L.appendChild(g);             // the job's order: later on top, as it plots (emit.hidden)
-  }
+  });
   markSmall();
   drawHandles();
   drawRulers();
@@ -903,8 +977,25 @@ function styleObject(o, g, data) {
   g.classList.toggle('with', o.id !== sel && !!sel && movers(sel).some((m) => m.id === o.id));
   g.classList.toggle('dim', view === 'paths');
   const picked = shapeSel.id === o.id ? shapeSel.idx : null;
+  // A picture shows as it is (original), faint where it isn't drawn (tools: its lines show when it is)
+  const drawnPic = new Map((data.pictures || []).map((pc) => [pc.i, pc.drawn]));
+  for (const im of $$('image.pic', g)) {
+    const on = view === 'original' || (view === 'tools' && !drawnPic.get(+im.dataset.i));
+    im.style.display = on ? '' : 'none';
+    im.setAttribute('opacity', view === 'original' ? 1 : 0.35);
+  }
   data.shapes.forEach((sh, n) => {
     const p = paths[n];
+    if (sh.pic) {         // only there to be picked: an outline when it is
+      const on = !!picked && picked.has(sh.i);
+      p.setAttribute('fill', 'transparent');
+      p.setAttribute('stroke', on ? 'var(--accent)' : 'none');
+      p.setAttribute('stroke-width', 0.3);
+      p.setAttribute('stroke-dasharray', on ? '1 .6' : '');
+      p.style.display = view === 'paths' ? 'none' : '';
+      p.classList.toggle('picked', on);
+      return;
+    }
     let stroke = 'none', fill = 'none', sw = Math.max(sh.w, 0.1), op = 1, sop = 1, fop = 1;
     if (view === 'paths') {
       // Only a faint outline, if at all (the drawing toggle): the paths are what to look at
@@ -1221,7 +1312,7 @@ $('#objects').addEventListener('click', async (e) => {
     return render();
   }
   if (act === 'del') {
-    if (twice(`del-${id}`, e.target, `Remove ${id} from the bed`)) setState(await api('DELETE', `/api/objects/${id}`));
+    if (twice(`del-${id}`, e.target, `Remove ${id} from the bed`)) await removeObject(id);
   } else if (act === 'dup') {
     const r = await api('POST', `/api/objects/${id}/duplicate`); sel = r.id; setState(r.state);
   } else { sel = id; store.set('sel', sel); render(); }
@@ -1356,7 +1447,14 @@ function pickedHtml(o) {
   const check = (k, label, title) => { const v = flag(k); return `<label class="check${v === undefined ? ' mixed' : ''}" title="${title}${v === undefined ? ' (mixed)' : ''}"><input type="checkbox" data-pf="${k}"${v ? ' checked' : ''}> ${label}</label>`; };
   const painted = shs.filter((sh) => o.shapes[String(sh.i)]).length;
   const inSets = new Set(shs.map((sh) => setOf(o, sh.i)).filter(Boolean));
-  return `<h3>${st ? `Group “${esc(st.name)}”` : 'Picked shapes'} (${shs.length})</h3>
+  const pics = shs.filter((sh) => sh.pic).length;
+  if (pics && pics === shs.length) {
+    return `<h3 class="picked-head">Picked ${pics > 1 ? `pictures (${pics})` : 'picture'}</h3>
+      <p class="note">An image or a gradient fill: how ${pics > 1 ? 'they are' : 'it is'} drawn is in <i>Images</i> below (its pen: the layer of its ink)</p>
+      <div class="buttons"><button data-act="unpick" title="Pick none (Esc)">Done</button></div>`;
+  }
+  return `<h3 class="picked-head">${st ? `Group “${esc(st.name)}”` : 'Picked shapes'} (${shs.length})</h3>
+    ${pics ? `<p class="note">${pics === shs.length ? (pics > 1 ? 'Pictures' : 'A picture') : `${pics} of them pictures`} (an image, a gradient fill): how ${pics > 1 ? 'they are' : 'it is'} drawn is in <i>Images</i></p>` : ''}
     <div class="form picked">
       <label>Pen</label>${pick('pen', penV, 'The whole shape with this pen: its outline and, if it is filled, its fill (a line: only its line). Too thin for the pen: left out all the same (outlined in red)')}
       ${lines.length ? `<label>Outline</label>${pick('line', lineV, 'Only the outlines, apart from their colour')}` : ''}
@@ -1520,7 +1618,7 @@ function imagesHtml(o, I) {
   const r = imageSpec(o), on = r.mode !== 'skip';
   const picker = ims.length > 1 || Object.keys(o.images).length ? `<div class="row wrap image-pick">
       <button class="small${k === 'all' ? ' on' : ''}" data-img="all" title="The drawing's settings: every image without its own">All images</button>
-      ${ims.map((im) => `<button class="small${k === String(im.index) ? ' on' : ''}" data-img="${im.index}" title="${esc(im.id || 'image')}: ${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm${o.images[im.index] ? ', its own settings' : ', as all'}">${esc((im.id || 'image ' + im.index).slice(0, 14))}${o.images[im.index] ? ' •' : ''}</button>`).join('')}</div>
+      ${ims.map((im) => `<button class="small${k === String(im.index) ? ' on' : ''}" data-img="${im.index}" title="${esc(im.id || 'image')}${im.gradient ? ' (a gradient fill)' : ''}: ${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm${o.images[im.index] ? ', its own settings' : ', as all'}">${im.gradient ? '◐ ' : ''}${esc((im.id || (im.gradient ? 'gradient ' : 'image ') + im.index).slice(0, 14))}${o.images[im.index] ? ' •' : ''}</button>`).join('')}</div>
       ${k === 'all' ? '' : own ? `<p class="note">Its own settings <button class="small" data-act="img-same" title="Draw it as all the others again">Same as all</button></p>`
         : '<p class="note">As all images: change anything below to give it its own</p>'}` : '';
   const inks = I.groups.filter((x) => x.images != null);       // a layer for each ink (raster.inks)
@@ -1531,7 +1629,9 @@ function imagesHtml(o, I) {
   const inkRows = inks.map((x) => `<div class="row ink" data-ink="${esc(x.key)}">${swatchOf('stroke', x.key.split(' ')[1])}
       <span class="mono">${esc(x.key.split(' ')[1])}</span><select data-ink="${esc(x.key)}" title="The pen that draws this ink">${pens(target(layerGroup(o, x.key)))}</select>
       <span class="note">${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'}</span></div>`).join('');
-  return sect('images', 'Images', `${picker}<div class="form raster">
+  const grads = ims.filter((im) => im.gradient).length;
+  const title = !grads ? 'Images' : grads === ims.length ? 'Gradients' : 'Images & gradients';
+  return sect('images', title, `${picker}<div class="form raster">
       <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
       ${on ? `<label for="r-sep">Inks</label><select id="r-sep" data-r="separate">
           ${SEPARATIONS.map(([v, l, t]) => `<option value="${v}" title="${esc(t)}"${v === r.separate ? ' selected' : ''}>${l}</option>`).join('')}</select>
@@ -1549,7 +1649,7 @@ function imagesHtml(o, I) {
           title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span>
           <label class="check"><input type="checkbox" data-r="invert"${r.invert ? ' checked' : ''}> invert</label></div>
         <label></label><div class="note">${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</div>` : ''}
-    </div>`, { n: ims.length, open: true, help: 'The SVG\'s pictures: a pen can\'t draw them as they are' });
+    </div>`, { n: ims.length, open: true, help: 'The SVG\'s pictures and gradient fills: a pen can\'t draw them as they are. A gradient is drawn inside its shape' });
 }
 
 $('#object-panel').addEventListener('change', async (e) => {
@@ -1996,7 +2096,7 @@ function renderTools() {
       k in S.job.draw ? S.job.draw[k] : S.draw[k], `data-k="${k}" data-sel="1"${k in o ? ' class="changed"' : ''}`)}</label>`).join('');
     const tuned = Object.keys(o).length;
     const dry = ((printer && printer.drying) || {})[String(holder)];
-    const dryBadge = dry ? `<span class="badge ${dry.stage ? 'bad' : 'warn'}" title="Out of its cap in the machine; ${Math.round(dry.limit / 60)} min allowed (TOOL_DRY RESET=1 T=${holder} after priming it)">uncapped ${Math.floor(dry.uncapped / 60)} min</span>` : '';
+    const dryBadge = dry ? `<span class="badge ${dry.stage ? 'bad' : 'warn'}" title="Out of its cap in the machine, left alone${dry.paused ? ' (in use now: the clock stands still)' : ''}; ${Math.round(dry.limit / 60)} min allowed (TOOL_DRY RESET=1 T=${holder} after priming it)">uncapped ${Math.floor(dry.uncapped / 60)} min</span>` : '';
     return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}">
       <div class="head"><span class="swatch" style="background:${esc(tool.color || '#000')}"></span><b>${esc(t)}</b>
         <span class="note">${holder}</span><span class="tname" title="${esc(tool.name)}">${esc((tag && tag.name) || tool.name || '')}</span>${badge}${dryBadge}</div>
@@ -2153,13 +2253,35 @@ $('#fonts').addEventListener('click', async (e) => {
   const f = e.target.dataset.del;
   if (f && twice(`font-${f}`, e.target, `Remove the font ${f}`)) setState(await api('DELETE', `/api/fonts/${encodeURIComponent(f)}`));
 });
+// Many at once, in batches of up to FONT_BATCH files or bytes: the drawings update once, at the end
+const FONT_BATCH = [60, 24e6];
 async function uploadFonts(files) {
+  const batches = [[]];
+  let bytes = 0;
   for (const f of files) {
-    const fd = new FormData(); fd.append('file', f);
-    const r = await api('POST', '/api/fonts', fd);
-    toast(`${r.font.family} ${r.font.style}: ${r.font.kind === 'line' ? 'line font' : 'source font'}`);
-    setState(r.state);
+    const b = batches[batches.length - 1];
+    if (b.length && (b.length >= FONT_BATCH[0] || bytes + f.size > FONT_BATCH[1])) { batches.push([]); bytes = 0; }
+    batches[batches.length - 1].push(f);
+    bytes += f.size;
   }
+  const added = [], bad = [];
+  let state = null;
+  const done = working(`Uploading ${files.length} font${files.length > 1 ? 's' : ''}…`);
+  try {
+    for (const b of batches) {
+      if (files.length > b.length) working(`Uploading fonts… ${added.length + bad.length} of ${files.length}`);
+      const fd = new FormData();
+      for (const f of b) fd.append('files', f);
+      const r = await api('POST', '/api/fonts', fd).catch(() => null);
+      if (!r) { bad.push(...b.map((f) => f.name)); continue; }
+      added.push(...r.fonts);
+      bad.push(...r.bad);
+      state = r.state;
+    }
+  } finally { done(); }
+  if (state) setState(state);
+  const one = added.length === 1 ? `${added[0].family} ${added[0].style}: ${added[0].kind === 'line' ? 'line font' : 'source font'}` : `${added.length} fonts added`;
+  if (added.length || !bad.length) toast(one + (bad.length ? ` · ${bad.length} not added: ${bad.slice(0, 3).join('; ')}${bad.length > 3 ? '…' : ''}` : ''), !!bad.length);
 }
 $('#font-input').addEventListener('change', (e) => { uploadFonts([...e.target.files]); e.target.value = ''; });
 
@@ -2203,7 +2325,7 @@ function renderPens() {
         <label>Key</label><input data-p="key" maxlength="8" value="${esc(penEdit.key)}"${penEdit.isNew ? '' : ' disabled'} placeholder="eg. uni-01" title="Goes on the tags: up to 8 of a-z 0-9 - _ . , never renamed">
         <label>Name</label><input data-p="name" value="${esc(sp.name || '')}" placeholder="Uni Pin 0.1">
         <label>Short</label><input data-p="short" maxlength="20" value="${esc(sp.short || '')}" placeholder="for tag names, ≤ 20" title="How tags name it, with the colour: up to 20 characters">
-        <label>Uncapped</label><input data-p="dry" type="number" min="1" value="${esc(sp.dry ?? '')}" placeholder="10 min (the dock's default)" title="Minutes it may stay out of its cap in the machine before the dock goes red and beeps; twice that while printing">
+        <label>Uncapped</label><input data-p="dry" type="number" min="1" value="${esc(sp.dry ?? '')}" placeholder="10 min (the dock's default)" title="Minutes it may stay out of its cap in the machine before the dock goes red and beeps; the clock stops while the pens are in use">
         <label>Kind</label><select data-p="kind">${Object.keys(S.kinds || { pen: 1 }).map((k) => opt(k, kind)).join('')}</select>
       </div>
       <div class="grid">${fields}</div>
@@ -2431,10 +2553,37 @@ $('#upload').addEventListener('click', () => send(false));
 $('#print').addEventListener('click', () => send(true));
 
 // --- files: drop on the bed -----------------------------------------------------
+// While a drawing goes up and is read: says so (the bigger ones take seconds), with how much is sent
+function postFile(url, fd, progress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', url);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) progress(e.loaded / e.total); };
+    x.upload.onload = () => progress(1);
+    x.onload = () => {
+      let j = null;
+      try { j = JSON.parse(x.responseText); } catch { /* not json */ }
+      if (x.status >= 200 && x.status < 300 && j) return resolve(j);
+      const msg = (j && typeof j.detail === 'string' && j.detail) || `${x.status} ${x.statusText}` + (x.status === 413 ? ': too big for the server (or the proxy before it)' : '');
+      toast(msg, true);
+      reject(new Error(msg));
+    };
+    x.onerror = () => { toast(`${url}: the server can't be reached`, true); reject(new Error('network')); };
+    x.send(fd);
+  });
+}
+const mb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} kB`);
 async function addSvgs(files, at) {
-  for (const f of files) {
+  for (const [n, f] of files.entries()) {
     const fd = new FormData(); fd.append('file', f);
-    const r = await api('POST', '/api/objects', fd);
+    const of = files.length > 1 ? ` (${n + 1} of ${files.length})` : '';
+    const done = working(`Uploading ${f.name}${of}, ${mb(f.size)}…`);
+    let r;
+    try {
+      r = await postFile('/api/objects', fd, (k) => working(k < 1 ? `Uploading ${f.name}${of}: ${Math.round(k * 100)}% of ${mb(f.size)}`
+        : `Reading ${f.name}${of}…`));
+    } catch { done(); continue; }
+    done();
     sel = r.id;
     if (at) {
       const s = r.state.objects[r.id].size;
@@ -2442,7 +2591,7 @@ async function addSvgs(files, at) {
       setState(await api('PATCH', `/api/objects/${r.id}`, { placement: { ...o.placement, x: +(at.x - s[0] / 2).toFixed(2), y: +(at.y - s[1] / 2).toFixed(2) } }));
     } else setState(r.state);
     toast(`${r.id} added` + (r.unreadable ? ` · ${r.unreadable} image${r.unreadable > 1 ? 's' : ''} linked, not embedded: left out` : ''));
-    if (r.images) await askImages(r.id, r.images);
+    if (r.images) await askImages(r.id, r.images, r.gradients || 0);
   }
 }
 // An SVG with pictures in it: a pen can't draw them as they are. Leave them out, or make
@@ -2452,10 +2601,11 @@ const RASTER_MODES = [['skip', 'Leave out', 'Not drawn: only the rest of the SVG
   ['dither', 'Dither', 'Dots of ink on a fine grid, joined along each row: the most detail, the longest plot'],
   ['lines', 'Lines', 'Rows of lines, more of them where it is darker: quick to plot, a drawn look'],
   ['halftone', 'Halftone', 'Dots on a grid, bigger where it is darker, each a small spiral: a printed look']];
-function askImages(id, n) {
+function askImages(id, n, grads = 0) {
   return new Promise((done) => {
     const el = $('#image-ask');
-    el.innerHTML = `<div class="card"><h2>${n} picture${n > 1 ? 's' : ''} in ${esc(id)}</h2>
+    const pics = n - grads, what = [pics && `${pics} picture${pics > 1 ? 's' : ''}`, grads && `${grads} gradient fill${grads > 1 ? 's' : ''}`].filter(Boolean).join(' and ');
+    el.innerHTML = `<div class="card"><h2>${what} in ${esc(id)}</h2>
       <p>A pen can't draw ${n > 1 ? 'them' : 'it'} as ${n > 1 ? 'they are' : 'it is'}: leave ${n > 1 ? 'them' : 'it'} out, or make ${n > 1 ? 'them' : 'it'} into lines.
         You can change this later (the drawing's <i>Images</i>).</p>
       <div class="buttons">${RASTER_MODES.map(([m, label, title]) => `<button data-raster="${m}" class="${m === 'skip' ? '' : 'primary'}" title="${esc(title)}">${label}</button>`).join('')}</div></div>`;
@@ -2487,16 +2637,32 @@ async function openJob(file) {
 $('#job-input').addEventListener('change', (e) => { if (e.target.files[0]) openJob(e.target.files[0]); e.target.value = ''; });
 window.addEventListener('dragover', (e) => { e.preventDefault(); $('#drop').classList.add('over'); });
 window.addEventListener('dragleave', () => $('#drop').classList.remove('over'));
+// A drop: SVG files (an SVG font, its name with "font" in it, goes to the fonts), fonts, a saved job;
+// or SVG markup dropped as text (from an app, not a file). Anything else: says so, not silently nothing
+function svgOf(name, type, text) {
+  if (!/<svg[\s>]/i.test(text || '')) return null;
+  return new File([text.slice(text.search(/<\?xml|<svg/i))], name, { type });
+}
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   $('#drop').classList.remove('over');
-  const files = [...e.dataTransfer.files];
-  const svgs = files.filter((f) => /\.svg$/i.test(f.name) && !/font/i.test(f.name));
-  const fonts = files.filter((f) => /\.(ttf|otf)$/i.test(f.name));
+  const dt = e.dataTransfer, files = [...dt.files];
+  const isSvg = (f) => /\.svg$/i.test(f.name) || f.type === 'image/svg+xml';
+  const svgs = files.filter((f) => isSvg(f) && !/font/i.test(f.name));
+  const fonts = files.filter((f) => /\.(ttf|otf)$/i.test(f.name) || (isSvg(f) && /font/i.test(f.name)));
   const saved = files.find((f) => /\.json$/i.test(f.name));
+  const at = e.target.closest && e.target.closest('#canvas') ? worldPt(e) : null;
   if (saved) return openJob(saved);
+  if (!files.length) {
+    const text = svgOf('dropped.svg', 'image/svg+xml', dt.getData('image/svg+xml') || dt.getData('text/plain') || dt.getData('text/html'));
+    if (text) return addSvgs([text], at);
+    const what = dt.getData('text/uri-list') || [...dt.types].join(', ');
+    return toast(`Nothing to add from this drop (${what || 'empty'}): drop .svg files, or save it as an SVG first`, true);
+  }
+  const left = files.filter((f) => !svgs.includes(f) && !fonts.includes(f));
+  if (left.length) toast(`Not added: ${left.map((f) => f.name).join(', ')} (SVGs, fonts or a saved job only)`, true);
   if (fonts.length) uploadFonts(fonts);
-  if (svgs.length) addSvgs(svgs, e.target.closest && e.target.closest('#canvas') ? worldPt(e) : null);
+  if (svgs.length) addSvgs(svgs, at);
 });
 
 // --- keys, view --------------------------------------------------------------------
@@ -2681,7 +2847,7 @@ window.addEventListener('keydown', async (e) => {
     const wc = toWorld(o.placement, c), a = (o.placement.rotate + (e.shiftKey ? 270 : 90)) % 360, r = rot(c, a);
     patchObj(o.id, { placement: { x: +(wc.x - r.x).toFixed(3), y: +(wc.y - r.y).toFixed(3), rotate: a } });
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
-    setState(await api('DELETE', `/api/objects/${o.id}`));
+    await removeObject(o.id);
     toast(`${o.id} removed · Ctrl+Z brings it back`);
   }
 });

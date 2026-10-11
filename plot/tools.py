@@ -38,7 +38,8 @@ from pydantic import BaseModel, ConfigDict
 REGISTRY: dict[str, type['Tool']] = {}
 # How a tool draws, apart from what its pen is: the job's `draw` gives them to every
 # tool (a kind without the field ignores it), its tool_overrides to one tool.
-DRAW = ('feed', 'plunge_feed', 'overlap', 'link', 'fill', 'angle', 'border', 'stroke', 'bleed', 'small', 'layers')
+DRAW = ('feed', 'plunge_feed', 'overlap', 'link', 'fill', 'angle', 'border', 'stroke', 'bleed', 'small', 'layers',
+        'dense', 'overdraw')
 
 
 def kind(name):
@@ -103,6 +104,8 @@ class Tool(BaseModel):
     bleed: float = 0.0          # mm kept clear around what another tool (or a mask) draws on top
     layers: bool = False        # a darker ink over it doesn't cut it: it goes under (light first, dark over it)
     small: Literal['skip', 'warn', 'draw'] = 'skip'     # shapes too small or too dense for its line
+    dense: Literal['exact', 'merge'] = 'exact'          # merge: small shapes whose inks touch, filled as one (ink.py)
+    overdraw: Literal['cut', 'warn', 'draw'] = 'cut'    # lines over ink already on top of them (ink.py)
 
     @property
     def call(self):

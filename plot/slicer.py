@@ -37,12 +37,14 @@ from pathlib import Path
 
 import numpy as np
 import shapely
+from shapely import affinity
 from shapely.geometry import MultiLineString, Polygon
 from shapely.ops import unary_union
 
 from . import svg
 from .fonts import CAP, cap_height, line_text, outline_text, shape_outline
 from .geometry import centerlines, fill, lines_of, margin, region, stroke_area
+from .ink import MERGE, Unit, across, guard, merge, refill
 from .job import Group, Obj
 from .raster import drawn, object_keys, raster_shapes
 from .surface import make
@@ -62,6 +64,7 @@ class Sliced:
     problems: list[str] = field(default_factory=list)
     cover: dict = field(default_factory=dict)   # tool ('': a mask) -> the area its opaque paint hides, object mm
     small: list[int] = field(default_factory=list)  # shapes too small or dense for their tool
+    dense: list[int] = field(default_factory=list)  # shapes merged with others, or cut where they'd go over ink
     orders: dict = field(default_factory=dict)  # emit's: (tool, order_time) -> its paths in drawing order, object mm
 
 
@@ -259,13 +262,13 @@ def text_shapes(d, obj, fonts, problems, tools=None):
             if mode == 'source':
                 rings, _ = outline_text(run, src, obj.tolerance)
                 out.append(svg.Shape(run.index, run.id, None, colour, 0, False, True, 'nonzero', 'butt', 'miter',
-                                     rings, [True] * len(rings)))
+                                     rings, [True] * len(rings), clip=run.clip))
             else:
                 cap = cap_height(src, run.size) if src else CAP * run.size
                 width = shape_outline(src, run.text, run.size)[1] if (src and spec.fit == 'width') else None
                 strokes = line_text(run, spec.line_font, cap, width, fonts)
                 out.append(svg.Shape(run.index, run.id, None, colour, 0, False, False, 'nonzero', 'butt', 'miter',
-                                     strokes, [False] * len(strokes), line=True))
+                                     strokes, [False] * len(strokes), line=True, clip=run.clip))
         except ValueError as e:
             problems.append(f'{obj.id}: {e}')
     return out
@@ -282,6 +285,21 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     def local(p):
         return np.column_stack([p[:, 0] * s, (height - p[:, 1]) * s])
 
+    clips = {}
+
+    def clip_of(sh):
+        '''Its clip-path or mask, as local() puts it (one for the many shapes that share it).'''
+        if sh.clip is None:
+            return None
+        if id(sh.clip) not in clips:
+            c = affinity.affine_transform(sh.clip, [s, 0, 0, -s, 0, height * s])
+            shapely.prepare(c)
+            clips[id(sh.clip)] = c
+        return clips[id(sh.clip)]
+
+    def within(geom, clip):
+        return geom if clip is None or geom is None else geom.intersection(clip)
+
     def tool_of(g):
         if g is None or g.tool is None:
             return None
@@ -297,9 +315,16 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
 
     small = {}                      # tool -> shapes too small or dense for it
 
+    deferred = set()                # (shape, tool): told once merged or not (dense 'merge')
+
     def too_small(sh, t, paths, ink):
         '''Whether to leave this part out: too small or dense for the tool (its `small`).'''
-        if t is None or t.small == 'draw' or sh.raster or lost_detail(paths, t.width, ink) < LOST:
+        if t is None or t.small == 'draw' or sh.raster:
+            return False
+        if t.dense == 'merge' and across(paths) < MERGE * t.width:
+            deferred.add((sh.index, t.id))
+            return False
+        if lost_detail(paths, t.width, ink) < LOST:
             return False
         small.setdefault(t.id, set()).add(sh.index)
         return t.small == 'skip'
@@ -310,6 +335,9 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         paths = [local(p) for p in sh.paths]
         sg = part_group(obj, sh, 'stroke', groups, sets)
         fg = part_group(obj, sh, 'fill', groups, sets)
+        clip = clip_of(sh)
+        if clip is not None and clip.is_empty:
+            continue                # its clip-path or mask hides all of it
         if sh.line:
             if too_small(sh, tool_of(fg), paths, None):
                 fg = None
@@ -320,7 +348,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         fill_area = None
         if fill_on:
             rings = [p if c else np.vstack([p, p[:1]]) for p, c in zip(paths, sh.closed)]
-            fill_area = region(rings, sh.rule)
+            fill_area = within(region(rings, sh.rule), clip)
             if too_small(sh, tool_of(fg), paths, fill_area):
                 fg, fill_on, fill_area = None, False, None
         st = tool_of(sg)
@@ -330,7 +358,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
                                                      stroke_area(paths, sh.closed, max(sh.width * s, 0.02))):
             sg, stroke_on, st = None, False, None
         stroke_covers = obj.occlude and stroke_on and sh.stroke_opaque
-        s_area = stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join) if (wide or stroke_covers) else None
+        s_area = within(stroke_area(paths, sh.closed, sh.width * s, sh.cap, sh.join), clip) if (wide or stroke_covers) else None
         covers = []                 # (area, tool id; '' a mask): what it hides of the shapes under it
         if obj.occlude and fill_on and (sh.fill_opaque or not sh.fill) and fill_area is not None:
             covers.append((fill_area, fg.tool or ''))
@@ -364,13 +392,21 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
     def less(geom, hide):
         return geom if hide is None else geom.difference(hide)
 
-    out: dict[str, list[np.ndarray]] = {}
+    units = []      # each shape's fill and stroke, in paint order (ink.Unit)
+
+    def line_unit(sh, part, t, paths, lines):
+        '''A line drawn on its centre: its ink the pen's width, filled again as the tool fills.'''
+        ink = shapely.buffer(lines, t.width / 2) if (sh.index, t.id) in deferred else None
+        how = (t.fill if t.fill != 'none' else 'hatch', t.spacing, t.angle, True)
+        units.append(Unit((sh.index, part), t.id, lines_of(lines), {sh.index}, ink, how,
+                          (paths, None) if ink is not None else None))
+
     for i, (sh, paths, sg, fg, fill_area, s_area, wide, stroke_covers, _) in enumerate(items):
         ft = tool_of(fg)
         if sh.line:
             if ft is not None:
-                lines = centerlines(paths, sh.closed)
-                out.setdefault(ft.id, []).extend(lines_of(less(lines, above(i, lines, ft))))
+                lines = within(centerlines(paths, sh.closed), clip_of(sh))
+                line_unit(sh, 0, ft, paths, less(lines, above(i, lines, ft)))
             continue
         st = tool_of(sg)
         if ft is not None and fill_area is not None:
@@ -379,16 +415,45 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
                 gap = ft.bleed if st is None or st.id != ft.id else 0
                 area = area.difference(s_area.buffer(gap) if gap > 0 else s_area)
             area = less(area, above(i, area, ft))
-            out.setdefault(ft.id, []).extend(
-                fill(area, ft.width, fg.spacing or ft.spacing, setting(fg, ft, 'fill'), setting(fg, ft, 'angle'),
-                     setting(fg, ft, 'border')))
+            how = (setting(fg, ft, 'fill'), fg.spacing or ft.spacing, setting(fg, ft, 'angle'), setting(fg, ft, 'border'))
+            units.append(Unit((sh.index, 0), ft.id, refill(area, ft.width, how), {sh.index}, area, how,
+                              (paths, fill_area) if (sh.index, ft.id) in deferred else None))
         if st is not None:
             if wide:
                 area = less(s_area, above(i, s_area, st))
-                out.setdefault(st.id, []).extend(fill(area, st.width, st.spacing, 'concentric', border=True))
+                how = ('concentric', st.spacing, 0, True)
+                units.append(Unit((sh.index, 1), st.id, refill(area, st.width, how), {sh.index}, area, how))
             else:
-                lines = centerlines(paths, sh.closed)
-                out.setdefault(st.id, []).extend(lines_of(less(lines, above(i, lines, st))))
+                lines = within(centerlines(paths, sh.closed), clip_of(sh))
+                line_unit(sh, 1, st, paths, less(lines, above(i, lines, st)))
+
+    units, merged = merge(units, tools)
+    dense = set()
+    for tid, (n, k) in merged.items():
+        problems.append(f'{obj.id}: {n} small shapes of {tid} that touch are drawn as {k} '
+                        f'area{"s" if k > 1 else ""} (dense: merge)')
+    kept = []
+    for u in units:
+        t = tools[u.tool]
+        if u.merged > 1:
+            dense |= u.shapes
+        if u.small is not None and lost_detail(u.small[0] if u.merged == 1 else u.paths, t.width,
+                                               u.small[1]) >= LOST:
+            small.setdefault(t.id, set()).update(u.shapes)
+            if t.small == 'skip':
+                continue
+        kept.append(u)
+    # What is on top hides (occlude): another tool's ink too; off, only its own ink is kept from twice over
+    units, over, cut_shapes = guard(kept, tools, goes_under if obj.occlude else lambda t, v: t.id != v.id)
+    dense |= cut_shapes
+    for (tid, top), (mm, (x, y)) in sorted(over.items()):
+        how = 'cut' if tools[tid].overdraw == 'cut' else 'drawn anyway'
+        whose = 'its own ink' if top == tid else f'{top}\'s ink'
+        problems.append(f'{obj.id}: {mm:.1f} mm of {tid} would go over {whose} on top, {how} '
+                        f'(the first at {x:.1f}, {y:.1f}, drawing mm)')
+    out: dict[str, list[np.ndarray]] = {}
+    for u in units:
+        out.setdefault(u.tool, []).extend(u.paths)
 
     for t, idx in small.items():
         how = 'left out' if tools[t].small == 'skip' else 'drawn anyway'
@@ -415,7 +480,7 @@ def slice_object(obj: Obj, tools, root=Path('.'), drawing=None, fonts=None) -> S
         a = np.vstack(pts)
         bounds = (*a[:, :2].min(axis=0), *a[:, :2].max(axis=0))
     return Sliced(draped, surface, bounds, len(d.texts), problems, cover,
-                  sorted(set().union(*small.values())) if small else [])
+                  sorted(set().union(*small.values())) if small else [], sorted(dense))
 
 
 class Cache:

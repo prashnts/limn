@@ -184,3 +184,17 @@ Fine tips: the taps pressed 0.08–0.10 mm, every contact repeated within 0.005�
 4. **An honest sigma:** fold the run-to-run scatter in (both directions of a sweep, or a repeat), so `max_sigma` means something.
 5. **The Y edge's weak (1, 2):** move the Y edge to a strong pair (the survey names (3, 7), (1, 6), (3, 4), (1, 3)), or check whether column 2 is the sheet or the ribbon.
 
+
+## A new reference, and a fine tip on the loaded sheet (2026-10-10)
+
+The user recalibrated with a **Micron 005 Black (holder 45) as the reference**: `LRT_CALIBRATE` at 22:26. Its tip is ~−1.13 in X from the toolhead (from the X edge), the X edge is at 117.13, the Y edge at 53.575, contact 5.380 ±0.010, tag dz 2.39. It went by the survey of 2026-10-09 18:57, which is still valid: the sheet and the loads haven't changed since. Every other pen's tag was measured against the Stabilo, so **all of them need probing again**.
+
+**Micron 01 Blue (holder 41), `LRT_PROBE_TOOL`:**
+- 22:53: it gave up on the X edge (1, 1)|(2, 1): 5, 0, 8, 0 and 2 of 31 taps answered, on five lines.
+- 23:11, the same with `VERBOSE=1`: **it passed**. dx −4.02, dy −0.88, dz 1.87 (`x` 113.106 ±0.001, `y` 52.692 ±0.002, contact 4.862 ±0.053 with a spread of 0.105). The Y edge failed its first line (2 of 31) and found the border on the second.
+- Locate was the same both times: (3, 4), z 4.90, tip [2.65, 1.38]. After the edges the tip is 2.89 in X, close to yesterday's Blue in holder 44 (~3.05).
+- Log: `~/limn-shot/fsr-2026-10-10-blue-probe-verbose.log`.
+
+**What the taps read:** at the press cap (0.10 mm), the cell under a Micron 01 reads **0–80**. Many taps right over (1, 1) or (1, 2) read 0, and `early` is 30. Meanwhile (1, 0) reads 20–120 for presses anywhere along row 1 (the column-0 leak from act-8), and (3, 1) up to 125. The vote is on the share of the two cells, so tiny readings still vote. But whether enough taps reach 30 is a coin toss: the same edge failed and then passed an hour apart.
+
+So the failure isn't XY (locate) or the survey: a fine tip at 0.10 mm barely lifts the loaded sheet. The ways out are those from the *Next* list above: more signal (a bigger load, 100k), a press targeted at a force instead of capped at 0.10 mm for fine tips, the Y edge on a stronger pair, and the column-0 leak.

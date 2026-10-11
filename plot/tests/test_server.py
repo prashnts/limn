@@ -126,6 +126,15 @@ def test_font_upload_draws_the_source_font(client):
     assert client.delete(f'/api/fonts/{FONT.name}').json()['fonts'] == []
 
 
+@needs_font
+def test_fonts_upload_many_at_once(client):
+    data = FONT.read_bytes()
+    r = client.post('/api/fonts', files=[('files', ('a.ttf', data, 'font/ttf')), ('files', ('b.ttf', data, 'font/ttf')),
+                                         ('files', ('c.ttf', b'nope', 'font/ttf'))]).json()
+    assert [f['file'] for f in r['fonts']] == ['a.ttf', 'b.ttf'] and len(r['bad']) == 1
+    assert sorted(f['file'] for f in r['state']['fonts']) == ['a.ttf', 'b.ttf']
+
+
 def test_printer(client, monkeypatch):
     add(client)
     sent = {}

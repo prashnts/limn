@@ -33,6 +33,14 @@ function setWhere(p, w) {
   saveLayout();
 }
 
+// Unfold a panel (app.js: picking a shape shows its settings)
+function unfoldPanel(name) {
+  const p = $(`section[data-panel="${name}"]`);
+  if (!p || !where(p).collapsed) return;
+  setWhere(p, { collapsed: false });
+  p.classList.remove('collapsed');
+}
+
 function makePanel(sec, dock, order) {
   home[sec.dataset.panel] = { dock, order };
   const head = document.createElement('div'), body = document.createElement('div');

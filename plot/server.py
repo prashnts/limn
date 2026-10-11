@@ -31,6 +31,7 @@ from .fonts import HERSHEY, FontStore
 from .job import Group, Job, Obj, PlanPen, Placement, ShapePaint
 from .preview import parse
 from .profile import bed_papers, bed_wipe, load_pens, reach
+from .raster import spec_of
 from .slicer import Cache, default_groups, fillable, image_keys, image_shapes, text_shapes
 from .tools import DRAW, Tool
 
@@ -48,6 +49,37 @@ def _d(p, closed):
     return s + ('Z' if closed else '')
 
 
+def _area_d(geom, local):
+    '''An area (shapely, page mm) as an SVG path, through local().'''
+    polys = getattr(geom, 'geoms', [geom])
+    out = []
+    for g in polys:
+        if g.geom_type == 'Polygon' and not g.is_empty:
+            for ring in [g.exterior, *g.interiors]:
+                out.append(_d(local(np.asarray(ring.coords)), True))
+        elif hasattr(g, 'geoms'):
+            out.append(_area_d(g, local))
+    return ' '.join(x for x in out if x)
+
+
+PICTURE_PX = 320    # a picture shown on the canvas, pixels across at most
+
+
+def _png(im):
+    '''A picture (an <image>, a gradient) as a small PNG data URL -> (url, its pixels per the picture's).'''
+    if 'png' not in im.cache:
+        from io import BytesIO
+        from PIL import Image
+        h, w = im.rgb.shape[:2]
+        k = max(1.0, max(w, h) / PICTURE_PX)
+        px = im.rgb if im.alpha is None else np.dstack([im.rgb, np.clip(im.alpha * 255 + 0.5, 0, 255).astype(np.uint8)])
+        pic = Image.fromarray(px).resize((max(1, round(w / k)), max(1, round(h / k))), Image.BOX)
+        buf = BytesIO()
+        pic.save(buf, 'PNG', optimize=True)
+        im.cache['png'] = ('data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode(), w / pic.width)
+    return im.cache['png']
+
+
 class Workspace:
     def __init__(self, data):
         self.data = Path(data)
@@ -60,6 +92,8 @@ class Workspace:
         self.cache = Cache()
         self.lock = threading.RLock()
         self.gcode, self.name = None, None
+        self.sliced_for = None      # the job (its JSON) self.gcode was sliced from
+        self.slice_lock = threading.Lock()      # never taken inside self.lock: slice() takes that
         self.unsafe = []            # the sliced G-code breaks safe_z: it isn't sent
         self.undos, self.redos = [], []
         self.tags = None            # printer.limn.tools: what the tools' tags say, None: not asked yet
@@ -143,7 +177,7 @@ class Workspace:
                        'length': g['length'] * o.scale, 'widths': sorted(w * o.scale for w in g['widths']),
                        'default': defaults[k].model_dump()}
                       for k, g in sorted(stats.items(), key=lambda kv: -kv[1]['length'])]
-            images = [{'index': im.index, 'id': im.id, 'px': list(im.rgb.shape[1::-1]),
+            images = [{'index': im.index, 'id': im.id, 'px': list(im.rgb.shape[1::-1]), 'gradient': im.gradient,
                        'size': (np.ptp(im.corners(), axis=0) * o.scale).round(1).tolist()} for im in d.images]
             texts = []
             for t in d.texts:
@@ -170,40 +204,83 @@ class Workspace:
                 'objects': objects}
 
     def shapes(self, o):
-        '''What the drawing looks like, for the UI: its shapes, object mm (y up).'''
+        '''What the drawing looks like, for the UI: its shapes, object mm (y up). The clip-paths and
+        masks they show through (`clips`, a shape's `c`), its pictures and gradients (`pictures`,
+        each also a shape `pic` to pick it by).'''
         d = self.drawing(o)
         h, s = d.size[1], o.scale
         local = lambda p: np.column_stack([p[:, 0] * s, (h - p[:, 1]) * s])
+        clips, clip_n = [], {}
+
+        def clip(geom):
+            if geom is None:
+                return None
+            if id(geom) not in clip_n:
+                clip_n[id(geom)] = len(clips)
+                clips.append(_area_d(geom, local))
+            return clip_n[id(geom)]
         out = []
         _, tools = load(self.job, self.tags)
         for sh in sorted(d.shapes + text_shapes(d, o, self.fonts, [], tools) + image_shapes(d, o, tools),
                          key=lambda sh: sh.index):
             out.append({'i': sh.index, 'stroke': sh.stroke, 'fill': sh.fill, 'w': sh.width * s,
                         'so': sh.stroke_opaque, 'fo': sh.fill_opaque, 'line': sh.line, 'fillable': fillable(sh),
-                        'bg': sh.background,
+                        'bg': sh.background, 'c': clip(sh.clip),
                         'text': sh.line or any(t.index == sh.index for t in d.texts), 'rule': sh.rule, 'raster': sh.raster,
                         'd': ' '.join(_d(local(p), c) for p, c in zip(sh.paths, sh.closed))})
-        return {'size': [d.size[0] * s, d.size[1] * s], 'shapes': out}
+        pictures = []
+        for im in d.images:
+            area = im.area()
+            href, k = _png(im)
+            a, b, c, dd, e, f = im.matrix
+            ph, pw = im.rgb.shape[:2]
+            pictures.append({'i': im.index, 'id': im.id, 'gradient': im.gradient, 'href': href, 'c': clip(im.clip),
+                             'wh': [round(pw / k), round(ph / k)],
+                             'm': [s * a * k, -s * b * k, s * c * k, -s * dd * k, s * e, s * (h - f)],
+                             'drawn': spec_of(o, im).mode != 'skip'})
+            out.append({'i': im.index, 'pic': True, 'stroke': None, 'fill': None, 'w': 0, 'so': False, 'fo': False,
+                        'line': False, 'fillable': False, 'bg': False, 'c': None, 'text': False, 'rule': 'nonzero',
+                        'raster': False, 'd': _area_d(area, local)})
+        out.sort(key=lambda x: (x['i'], not x.get('pic')))
+        return {'size': [d.size[0] * s, d.size[1] * s], 'shapes': out, 'clips': clips, 'pictures': pictures}
 
     def slice(self):
-        t0 = time.monotonic()
-        result, sliced = plot(self.job, self.cache, self.fonts, self.tags)
-        self.gcode = result.gcode
-        self.name = 'limn-' + '-'.join(o.id for o in self.job.objects)[:60] + '.gcode'
-        sim = result.sim or parse(result.gcode)
-        runs = [[k, t, n, np.round(pts[:, :2], 3).ravel().tolist()] for k, t, pts, n in sim.runs()]
-        bounds = {}
-        for o in self.job.objects:
-            b = sliced[o.id].bounds
-            if b:
-                c = o.placement.apply([[b[0], b[1], 0], [b[2], b[1], 0], [b[2], b[3], 0], [b[0], b[3], 0]])
-                bounds[o.id] = [*c[:, :2].min(axis=0).tolist(), *c[:, :2].max(axis=0).tolist()]
-        self.unsafe = result.unsafe
-        return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
-                'plan': result.plan,
-                'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
-                'small': {o.id: sliced[o.id].small for o in self.job.objects if sliced[o.id].small},
-                'ms': round((time.monotonic() - t0) * 1000)}
+        '''Slices the job as it is now. Outside self.lock (a big drawing takes seconds; the
+        changes, deleting, the shapes for the canvas don't wait for it), one at a time.'''
+        with self.slice_lock:
+            with self.lock:
+                job = self.job.model_copy(deep=True)
+                job._root = self.data
+                tags, made_of = self.tags, self.job.model_dump_json()
+            t0 = time.monotonic()
+            result, sliced = plot(job, self.cache, self.fonts, tags)
+            sim = result.sim or parse(result.gcode)
+            runs = [[k, t, n, np.round(pts[:, :2], 3).ravel().tolist()] for k, t, pts, n in sim.runs()]
+            bounds = {}
+            for o in job.objects:
+                b = sliced[o.id].bounds
+                if b:
+                    c = o.placement.apply([[b[0], b[1], 0], [b[2], b[1], 0], [b[2], b[3], 0], [b[0], b[3], 0]])
+                    bounds[o.id] = [*c[:, :2].min(axis=0).tolist(), *c[:, :2].max(axis=0).tolist()]
+            with self.lock:
+                self.gcode = result.gcode
+                self.name = 'limn-' + '-'.join(o.id for o in job.objects)[:60] + '.gcode'
+                self.unsafe = result.unsafe
+                self.sliced_for = made_of
+            return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
+                    'plan': result.plan,
+                    'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
+                    'small': {o.id: sliced[o.id].small for o in job.objects if sliced[o.id].small},
+                    'ms': round((time.monotonic() - t0) * 1000)}
+
+    def sliced(self):
+        '''(gcode, name, unsafe) of the job as it is now: sliced again if it changed since.'''
+        with self.lock:
+            if self.gcode is not None and self.sliced_for == self.job.model_dump_json():
+                return self.gcode, self.name, self.unsafe
+        self.slice()
+        with self.lock:
+            return self.gcode, self.name, self.unsafe
 
 
 def _unique(names, stem):
@@ -246,7 +323,8 @@ def create_app(data=None):
         data = await file.read()          # its <image>s stay: left out, or made into lines (Obj.raster)
         with ws.lock:
             oid = _unique({o.id for o in ws.job.objects}, Path(file.filename or 'drawing').stem)
-            path = ws.uploads / f'{oid}.svg'
+            # its own file: a deleted drawing's stays, for undo
+            path = ws.uploads / f'{_unique({p.stem for p in ws.uploads.glob("*.svg")}, oid)}.svg'
             path.write_bytes(data)
             try:
                 d = svg.load_cached(path)
@@ -262,7 +340,7 @@ def create_app(data=None):
             ws.remember()
             ws.job.objects.append(obj)
             ws.save()
-            return {'id': oid, 'images': len(d.images), 'unreadable': d.skipped.get('image (not embedded)', 0),
+            return {'id': oid, 'images': len(d.images), 'gradients': sum(im.gradient for im in d.images), 'unreadable': d.skipped.get('image (not embedded)', 0),
                     'state': ws.state()}
 
     @app.patch('/api/objects/{oid}')
@@ -520,30 +598,35 @@ def create_app(data=None):
 
     @app.post('/api/slice')
     def slice_():
-        with ws.lock:
-            return ws.slice()
+        return ws.slice()
 
     @app.get('/api/gcode')
     def gcode(inline: bool = False):
-        with ws.lock:
-            if ws.gcode is None:
-                ws.slice()
-            headers = {} if inline else {'Content-Disposition': f'attachment; filename="{ws.name}"'}
-            return PlainTextResponse(ws.gcode, headers=headers)
+        text, name, _ = ws.sliced()
+        headers = {} if inline else {'Content-Disposition': f'attachment; filename="{name}"'}
+        return PlainTextResponse(text, headers=headers)
 
     @app.get('/api/fonts')
     def fonts():
         return [f.__dict__ for f in ws.fonts.fonts()]
 
     @app.post('/api/fonts')
-    async def add_font(file: UploadFile = File(...)):
-        data = await file.read()
+    async def add_font(file: UploadFile | None = File(None), files: list[UploadFile] = File([])):
+        '''One font (file) or many (files) at once: the state once, after them all. Fonts that
+        aren't: in `bad`, the rest still added.'''
+        got = [(f.filename or 'font', await f.read()) for f in ([file] if file else []) + files]
+        if not got:
+            raise HTTPException(400, 'no font sent')
+        added, bad = [], []
         with ws.lock:
-            try:
-                info = ws.fonts.add(file.filename or 'font', data)
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-            return {'font': info.__dict__, 'state': ws.state()}
+            for name, data in got:
+                try:
+                    added.append(ws.fonts.add(name, data).__dict__)
+                except ValueError as e:
+                    bad.append(str(e))
+            if not added and len(bad) == 1:
+                raise HTTPException(400, bad[0])
+            return {'font': added[0] if added else None, 'fonts': added, 'bad': bad, 'state': ws.state()}
 
     @app.delete('/api/fonts/{name}')
     def delete_font(name: str):
@@ -1258,10 +1341,7 @@ def create_app(data=None):
     @app.post('/api/printer/upload')
     def upload(body: dict = Body(default={})):
         '''Send the G-code to Klipper; {"start": true} starts it too.'''
-        with ws.lock:
-            if ws.gcode is None:
-                ws.slice()
-            gcode, name, bad = ws.gcode, ws.name, ws.unsafe
+        gcode, name, bad = ws.sliced()
         if bad:
             raise HTTPException(409, f'not sending it, the pen would be too low off the paper: {bad[0]}')
         url = moonraker()

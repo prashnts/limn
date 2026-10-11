@@ -114,7 +114,7 @@ The art (`docs/led-matrix-ui.svg`, 40 px a LED) is what the matrix means: the al
 | | amber, breathing | a tool is unaccounted for, or the carried tool's tag failed |
 | | green, breathing | carrying a tool with its tag read: ready |
 | | dim green, slow | all tools home |
-| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: its pen's `dry` minutes in `plot/profiles/pens.toml` (fineliners 10, the Stabilo 88's dry-safe ink 240), else 10 min (`tool_dry_idle`); twice that while printing (`tool_dry_printing`). It beeps every 3 s (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
+| Holder, UI digit, UI alert | amber, orange, red, blinking faster; the alert's 2x2 goes round red and amber | a known pen has been out of its cap too long: its pen's `dry` minutes in `plot/profiles/pens.toml` (fineliners 10, the Stabilo 88's dry-safe ink 240), else 10 min (`tool_dry_idle`). The clock only runs while the machine leaves the pens alone: a print, G-code running (a calibration, a homing) or a tool change stops it, and the pen on the carriage starts afresh while it draws; a paused print doesn't. It beeps as a pen gets worse and once a minute meanwhile (`tool_dry_beep`). `TOOL_DRY` shows the clocks, `TOOL_DRY RESET=1 T=41` restarts one (primed), `SILENCE=1` stops the beeps; taking the pen out by hand stops its clock |
 
 ## Toolhead wiring and the endoscope
 

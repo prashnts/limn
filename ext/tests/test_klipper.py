@@ -70,6 +70,14 @@ class FakeGcmd:
         return GcodeError(msg)
 
 
+class FakeMutex:
+    def __init__(self):
+        self.locked = False
+
+    def test(self):
+        return self.locked
+
+
 class FakeGcode:
     error = GcodeError
 
@@ -78,6 +86,10 @@ class FakeGcode:
         self.said = []
         self.scripts = []
         self.on_script = None
+        self.mutex = FakeMutex()
+
+    def get_mutex(self):
+        return self.mutex
 
     def register_command(self, name, handler, desc=None):
         self.commands[name] = handler
@@ -97,7 +109,11 @@ class FakeGcode:
         return FakeGcmd(self, params)
 
     def run(self, name, **params):
-        self.commands[name](FakeGcmd(self, params))
+        self.mutex.locked = True
+        try:
+            self.commands[name](FakeGcmd(self, params))
+        finally:
+            self.mutex.locked = False
 
 
 class FakeSaveVariables:
@@ -696,6 +712,16 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     mcp.low.add(11)                                     # scanned, into holder 44: a known pen, uncapped
     wait(printer, 2)
     assert ext.get_status(0)['drying']['44']['stage'] == 0 and svv['pen_since'] == {'44': 1000.0}
+    printing = {'state': 'printing'}
+    printer.objects['print_stats'] = type('PS', (), {'get_status': lambda self, t: printing})()
+    wait(printer, 2)
+    clock[0] += 3600                                    # an hour's print: the pens are wanted
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'occupied' and ext.get_status(0)['drying']['44']['paused']
+    assert not [s for s in gcode.scripts if s.startswith('SET_PIN PIN=beeper')]
+    printing['state'] = 'complete'
+    wait(printer, 2)
+    assert svv['pen_since']['44'] > 1000.0 + 3600 - 5   # the clock stood still, saved
     clock[0] += 601                                     # 10 minutes on, nothing printing
     wait(printer, 2)
     assert leds['holder_44'].state == 'drying_1' and leds['ui_tool_44'].state == 'drying_1'
@@ -705,9 +731,18 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     clock[0] += 400
     wait(printer, 2)
     assert leds['holder_44'].state == 'drying_3'
+    n = len([s for s in gcode.scripts if s.startswith('SET_PIN')])
+    wait(printer, 8)                                    # a beep a minute, not every few seconds
+    assert len([s for s in gcode.scripts if s.startswith('SET_PIN')]) == n
+    gcode.mutex.locked = True                           # G-code running (a calibration): quiet
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'occupied'
+    gcode.mutex.locked = False
+    wait(printer, 2)
+    assert leds['holder_44'].state == 'drying_3'
     gcode.run('TOOL_DRY', SILENCE=1)
     n = len([s for s in gcode.scripts if s.startswith('SET_PIN')])
-    wait(printer, 8)
+    wait(printer, 70)
     assert len([s for s in gcode.scripts if s.startswith('SET_PIN')]) == n
     gcode.run('TOOL_DRY', RESET=1, T=44)
     wait(printer, 2)

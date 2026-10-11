@@ -11,9 +11,11 @@
 #   tool_holder_tag_address: 0x24
 #   tool_holder_macros: 41:T0, 42:T1, 43:T2, 44:T3, 45:T4     # Fluidd's tool buttons
 #   tool_holder_tag_retries: 2              # reads again after _RFID_NUDGE
-#   tool_dry_idle: 600                      # s a known pen may be out of its cap in the machine,
-#   tool_dry_printing: 1200                 #   idle / printing; then its LEDs go red and it beeps
-#   tool_dry_beep: 3                        # s between beeps (0: none), on [pwm_cycle_time beeper]
+#   tool_dry_idle: 600                      # s a known pen may be out of its cap in the machine
+#                                           #   left alone (the clock stops while a print, G-code or a
+#                                           #   tool change runs); then its LEDs go red and it beeps
+#   tool_dry_beep: 60                       # s between beeps (0: none), on [pwm_cycle_time beeper];
+#                                           #   it beeps at once as a pen gets worse
 #   tool_dry_pens: ~/limn/plot/profiles/pens.toml   # a pen's own `dry` minutes, by the pen on its tag
 #   tool_holder_scan_idle: 2                # s between listens for a tag held to the reader
 #   tool_holder_scan_printing: 5            #   by hand, idle / printing; 0: only after a hand
@@ -146,7 +148,7 @@ class Limn:
         self._dry_stages = {}       # tool -> stage, what the LEDs show
         self._dry_silenced = set()  # overdue pens TOOL_DRY SILENCE=1 was given for
         self._dry_beep_at = 0.0
-        self.dry_idle, self.dry_printing, self.dry_beep = 600.0, 1200.0, 3.0
+        self.dry_idle, self.dry_beep = 600.0, 60.0
         self.dry_pens = PENS_FILE
         self.fsr_map_dir = os.path.expanduser("~/printer_data/logs/fsr-maps")   # LRT_FSR_MAP writes there (fsr_map_dir)
         # (mtime, {pen key: dry minutes}, keys with no ink, {pen key: press}) of the pen library
@@ -169,8 +171,8 @@ class Limn:
             self.tool_macros = parse_macros(config.get('tool_holder_macros', HOLDER_MACROS))
             self.tag_retries = config.getint('tool_holder_tag_retries', 2)
             self.dry_idle = float(config.get('tool_dry_idle', 600))
-            self.dry_printing = float(config.get('tool_dry_printing', 1200))
-            self.dry_beep = float(config.get('tool_dry_beep', 3))
+            config.get('tool_dry_printing', None)      # no longer used: the clocks stop while printing
+            self.dry_beep = float(config.get('tool_dry_beep', 60))
             self.dry_pens = os.path.expanduser(config.get('tool_dry_pens', PENS_FILE))
             self.scan_idle = float(config.get('tool_holder_scan_idle', 2.0))
             self.scan_printing = float(config.get('tool_holder_scan_printing', 5.0))
@@ -1703,12 +1705,24 @@ class Limn:
         return {int(h) for h, t in self._tags().items()
                 if not t.get('stale') and t.get('pen') not in never and (int(h) in occupied or int(h) == carried)}
 
-    def _sync_drying(self):
+    def _pens_wanted(self):
+        '''The machine is using the pens: a print, G-code running (a calibration, a
+        homing, a move) or one of our tool changes. A paused print isn't.'''
+        if self._printing() or self.gcode.get_mutex().test():
+            return True
+        if self.holder.busy() or (self.leds and self.leds.phase in CHANGE_PHASES):
+            return True
+        idle = self.printer.lookup_object('idle_timeout', None)
+        return idle is not None and idle.get_status(self.reactor.monotonic())['state'] == 'Printing'
+
+    def _sync_drying(self, busy=None):
+        '''busy: the pens are wanted (_pens_wanted), None: as the last tick saw it (a
+        G-code like TOOL_DRY is itself running).'''
         if not self.holder or self.holder.occupied is None:
             return
         if self.drying is None:
-            self.drying = Drying(self.dry_idle, self.dry_printing, self._vars().get('pen_since'))
-        if self.drying.update(self._pens_in(), self.clock()):
+            self.drying = Drying(self.dry_idle, self._vars().get('pen_since'))
+        if self.drying.update(self._pens_in(), self.clock(), busy):
             self._save_vars({'pen_since': self.drying.saved()})
         dry = self._pen_dry()
         self.drying.limits = {int(h): dry[t['pen']] * 60 for h, t in self._tags().items()
@@ -1734,17 +1748,25 @@ class Limn:
         return self._pens[1]
 
     def _dry_tick(self, eventtime):
-        self._sync_drying()
+        if not self.holder or self.holder.occupied is None:
+            return eventtime + 1.0
+        busy = self._pens_wanted()
+        self._sync_drying(busy)
         if self.drying is None:
             return eventtime + 1.0
-        stages = self.drying.stages(self.clock(), self._printing())
+        now = self.clock()
+        carried = self._carried()
+        if self._printing() and carried in self.drying.since:
+            self.drying.reset(now, carried)     # drawing: its tip is wet
+        stages = self.drying.stages(now)        # none while the pens are wanted
         turn = len(stages) > 1 and int(eventtime) % 2 == 0          # several: their digits take turns
+        worse = any(s > self._dry_stages.get(t, 0) for t, s in stages.items())
         if stages != self._dry_stages or turn:
             self._dry_stages = stages
             self._request_leds()
         self._dry_silenced &= set(stages)
         loud = set(stages) - self._dry_silenced
-        if loud and self.dry_beep > 0 and eventtime - self._dry_beep_at >= self.dry_beep:
+        if loud and self.dry_beep > 0 and (worse or eventtime - self._dry_beep_at >= self.dry_beep):
             self._dry_beep_at = eventtime
             self._beep_twice()
         return eventtime + 1.0
@@ -1773,17 +1795,18 @@ class Limn:
             tool = gcmd.get_int('T', None)
             self.drying.reset(now, tool)
             self._save_vars({'pen_since': self.drying.saved()})
-            self._dry_stages = self.drying.stages(now, self._printing())
+            self._dry_stages = self.drying.stages(now)
             self._request_leds()
         if gcmd.get_int('SILENCE', 0):
-            self._dry_silenced = set(self.drying.stages(now, self._printing()))
-        status = self.drying.status(now, self._printing())
+            self._dry_silenced = set(self.drying.stages(now))
+        status = self.drying.status(now)
         if not status:
             gcmd.respond_info("[Tool holder] No known pen is out of its cap")
             return
         gcmd.respond_info("[Tool holder] Out of their caps:\n" + "\n".join(
             f"{h}: {s['uncapped'] // 60} min of {s['limit'] // 60:.0f}"
-            + (f", OVERDUE (stage {s['stage']})" if s['stage'] else '') for h, s in status.items()))
+            + (f", OVERDUE (stage {s['stage']})" if s['stage'] else '') for h, s in status.items())
+            + ("\n(the clocks stand still while the pens are in use)" if self.drying.busy else ''))
 
     def get_status(self, eventtime):
         holder = self.holder
@@ -1804,7 +1827,7 @@ class Limn:
             },
             'tag': self.tag,
             'scan': self._scan_status(eventtime),
-            'drying': self.drying.status(self.clock(), self._printing()) if self.drying else {},
+            'drying': self.drying.status(self.clock()) if self.drying else {},
             'tools': self._tags() if self._holder_tags is not None or self.holder else {},
             'manual': self.manual,      # the tool docked by hand (its tags entry; also tools['90']), None: none
             'swap': self._swap_status(),    # TOOL_SWAP waiting for a pen by hand, None: not
