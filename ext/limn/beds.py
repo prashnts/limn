@@ -97,19 +97,24 @@ BEDS = {
                  'dead_rows': (), 'faulty_cols': (), 'crosstalk_rows': (0,)},
             ],
             'pitch': 2.5,
-            # z and the edges on cells 1-2: clear of the array's sides (a survey warns when
-            # one of them is weak or faulty on the sheet there is)
-            'z_cell': (1, 1, 1),                # hop, row, col used for z
+            # z and the edges on the sheet's strong cells (a survey warns when one of them is
+            # weak or faulty on the sheet there is). The survey of 2026-10-09 (0.04/0.08mm in):
+            # (1, 6) 165/216, (2, 6) 136/168, (1, 7) 159/201, (2, 5) 176/196, (3, 5) 161/186,
+            # (1, 3) 165/201, (1, 4) 154/187. Until 2026-10-11 all on (1, 1) 56/72 and (1, 2)
+            # 40/56, two of the weakest: the Stabilo never reached press_strength by 0.2mm there.
+            'z_cell': (1, 1, 6),                # hop, row, col used for z
             # hop, (row, col) of a cell, (row, col) of its neighbour. The rows
             # run along X here: an edge between rows gives X, between cols Y.
-            'x_edges': [(1, (1, 1), (2, 1))],
-            'y_edges': [(1, (1, 1), (1, 2))],
+            # Two borders an axis, averaged (fsr.py, measure): one cell's ripple or a stray
+            # tap counts half, and the two disagreeing shows in the sigma.
+            'x_edges': [(1, (1, 6), (2, 6)), (1, (2, 5), (3, 5))],
+            'y_edges': [(1, (1, 6), (1, 7)), (1, (1, 3), (1, 4))],
             # Where a tool can touch, over the BLTouch z (like DZ on the tool
             # tags; the reference tool is ~1.0). The jog starts above the top
             # and never goes below the bottom.
             'tool_z': (-0.5, 3.0),
             'step': 0.1,            # mm, coarse z steps: a step can go this far past contact before it is seen
-            'confirm': 2,           # fine steps on past a touch: it must grow there, or it was a reading in the air
+            'confirm': 5,           # fine steps on past a touch at most: it must grow by then, or it was a reading in the air
             # mm off every dz the FSR writes to a tag, the reference's and the pens' alike (DZ_TRIM=):
             # contact is where the sheet starts to rise, and the reference at Z1 there drew nothing
             # (2026-10-09). A guess to tune with the test marks: more, every pen presses deeper.

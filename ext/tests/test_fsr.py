@@ -21,7 +21,9 @@ def bed_z(x, y):
 # measured then (gain 2000, bed5, fresh), so the tests run them with these; loaded_cfg() is the
 # config as it is, for the loaded model (test_the_loaded_sheet).
 UNLOADED = {'respond': 150, 'early': 60, 'sure': 450, 'press_limit': 950, 'press_strength': 450,
-            'locate_strength': 180}
+            'locate_strength': 180, 'confirm': 2,
+            # and its cells, z and one edge an axis on (1, 1), until 2026-10-11
+            'z_cell': (1, 1, 1), 'x_edges': [(1, (1, 1), (2, 1))], 'y_edges': [(1, (1, 1), (1, 2))]}
 
 
 def loaded_cfg():
@@ -871,7 +873,8 @@ def test_the_loaded_sheet():
     profile = fsr.calibrate()
     assert 0.06 <= fsr.depth[1] <= 0.12, fsr.depth
     ref = profile['fsr_ref']
-    assert abs(ref['x'] - 116.0) < 0.03 and abs(ref['y'] - 54.6) < 0.03, ref
+    # Two borders an axis: rows 1|2 and 2|3 (X 116.0, 118.5), cols 6|7 and 3|4 (Y 42.1, 49.6)
+    assert abs(ref['x'] - 117.25) < 0.03 and abs(ref['y'] - 45.85) < 0.03, ref
     for tip in ((0.35, -0.2), (-1.3, 0.95)):
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, tool_length=2.2, **fine)
         fsr.press_cap = 0.2
@@ -888,6 +891,25 @@ def test_the_loaded_sheet():
     bed.tool = 'T4'
     _, _, ref_dz = fsr.probe_tool(profile)
     assert 0.4 - 0.08 < dz - ref_dz < 0.4 + 0.01, (ref_dz, dz)
+
+
+def test_a_crosstalk_cell_leading_at_first_touch_doesnt_push_contact_down():
+    '''2026-10-11, LRT_CALIBRATE: at first touch (3, 1) rose to 41 and stayed at 41-45, while (1, 1)
+    under the tip grew 18, 24, 30. Judged by the strongest cell the press "didn't grow": two of
+    three contacts were taken for readings in the air, and came out 0.12-0.18mm low. Here a
+    column's row 3 at 42 from first touch on, flat, and a weak cell under the tip.'''
+    cfg = loaded_cfg()
+    weak = dict(gain=300, top=230)
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), gain=1350, top=230)
+    fsr.press_cap = 0.2
+    profile = fsr.calibrate()
+    bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), ghost=(-0.5, 0.01, (3, 6), 42), **weak)
+    fsr.press_cap = 0.2
+    bed.tool = 'T1'
+    m = fsr.measure(bed_z)
+    touch = bed.sheet(*fsr.array(1).center(1, 6)) + bed.tool_length       # the tip meets the sheet there
+    assert -0.005 < m['z'] - touch < 0.03, (m['z'], touch)
 
 
 if __name__ == '__main__':

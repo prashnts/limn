@@ -355,6 +355,13 @@ class Fsr:
         read() gives them so (self.air). The sheet's own level drifts by tens, cell by cell.'''
         return max(strengths.values(), default=0.0)
 
+    def growth(self, strengths, before):
+        '''The most any cell rose since `before`, over its own reading there: a press grows under
+        the tip, a reading in the air stays. Only cells now over half of `early`: the rest is
+        the sheet's noise, and 32 cells of it would always show some cell rising.'''
+        floor = 0.5 * self.cfg.get('early', self.cfg['respond'])
+        return max((v - before.get(c, 0.0) for c, v in strengths.items() if v >= floor), default=0.0)
+
     def baseline(self, hop, z):
         '''The readings in the air here, before a descent: what the cells rise from (self.air).
         Already pressing firmly (`sure`): not in the air, stop.'''
@@ -446,9 +453,12 @@ class Fsr:
         used on another pressed the taps that much deeper; `early` is ~0.01 on either. Whichever
         cell: which one lights up first is the sheet's business (a column's crosstalk leads at
         first touch, a neighbour of a tip near its border), that the tip touched is not.
-        Confirmed `confirm` fine steps on: a press grows as it goes deeper (every ladder on
-        BED_5, 2026-10-07), a reading in the air doesn't (a bent liner, 2026-09-30), and then
-        it goes on down. z is where it rose `early`, between the step before and the first over
+        Confirmed within `confirm` fine steps on: a press grows as it goes deeper (every ladder
+        on BED_5, 2026-10-07), a reading in the air doesn't (a bent liner, 2026-09-30), and then
+        it goes on down. The growth is each cell's over its own reading at the onset (growth()):
+        not the strongest cell's. On 2026-10-11 (3, 1) led at first touch and stayed at 41-45
+        while (1, 1), under the tip, grew 18, 24, 30: judged by the strongest, two of three
+        contacts were taken for readings in the air and came out 0.12-0.18mm low. z is where it rose `early`, between the step before and the first over
         it as their readings say: a step late, every press past contact was that much deeper.
         early (the coarse steps): back at once, unconfirmed: the fine steps find where.'''
         cfg = self.cfg
@@ -467,12 +477,13 @@ class Fsr:
             if early:
                 return z, self.touched(strengths, hop)
             first = z + step * (level - onset) / max(level - before, 1e-9)
-            for _ in range(cfg.get('confirm', 2)):
+            at_onset = strengths
+            for _ in range(cfg.get('confirm', 5)):
                 z -= cfg['fine_step']
                 self.machine.move(z=z, speed=JOG_SPEED)
                 strengths = self.read(hop)
-            if self.rise(strengths) >= level + 0.1 * cfg['respond']:
-                return first, self.touched(strengths, hop, onset) or sorted(strengths, key=lambda c: -strengths[c])[:1]
+                if self.growth(strengths, at_onset) >= 0.1 * cfg['respond']:
+                    return first, self.touched(strengths, hop, onset) or sorted(strengths, key=lambda c: -strengths[c])[:1]
             self.machine.say(f"[LRT] the sheet rose at z={first:.3f} but no more deeper ({self.top(strengths)}): "
                              f"in the air, going on down")
 
@@ -857,7 +868,7 @@ class Fsr:
             self.before_measure()
         self.matrix(True)
         try:
-            points, gaps, sigmas = {'x': [], 'y': []}, [], {'x': [], 'y': []}
+            points, gaps, sigmas, tips = {'x': [], 'y': []}, [], {'x': [], 'y': []}, {'x': [], 'y': []}
             for axis, edges in (('x', cfg['x_edges']), ('y', cfg['y_edges'])):
                 for edge in edges:
                     hop, cell_a, cell_b = edge
@@ -872,8 +883,10 @@ class Fsr:
                     ca, cb = (np.asarray(array.center(*c), float) for c in (cell_a, cell_b))
                     u = (cb - ca) / np.linalg.norm(cb - ca)
                     s = found[hop]['shift']
-                    found[hop]['shift'] = s + (np.dot((ca + cb) / 2 - point, u) - np.dot(s, u)) * u
-                    self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} ±{sigma:.3f} gap={gap:.3f}")
+                    tips[axis].append(float(np.dot((ca + cb) / 2 - point, u)))
+                    found[hop]['shift'] = s + (tips[axis][-1] - np.dot(s, u)) * u
+                    self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} ±{sigma:.3f} gap={gap:.3f}, "
+                                     f"the tip {tips[axis][-1]:.3f} across it")
             z_top, _ = over(z_hop, (z_row, z_col))
             z, sigma_z = self.contact_z(z_hop, z_row, z_col, bed_z[tuple(cfg['z_cell'])], found[z_hop]['shift'],
                                         z_top + cfg['back_off'], prior)
@@ -881,14 +894,21 @@ class Fsr:
             self.matrix(False)
             if self.after_measure:
                 self.after_measure()        # it touched the sheet, even when it stopped
-        mean = lambda v: float(np.sqrt(np.mean(np.square(v))) / np.sqrt(len(v)))
+        def mean(axis):
+            '''How sure the mean of an axis' edges is: each edge's own sigma, and with two or more
+            how far apart the tip offsets they imply are (the same tip, different borders: the
+            sheet's ripple, a cell's gain, a stray tap; what one edge's sigma can't see).'''
+            v, t = sigmas[axis], tips[axis]
+            spread = float(np.var(t, ddof=1)) if len(t) > 1 else 0.0
+            return float(np.sqrt((np.mean(np.square(v)) + spread) / len(v)))
         return {
             'z': z,
             'x': float(np.mean(points['x'])),
             'y': float(np.mean(points['y'])),
             'gaps': gaps,
             'tip': [float(v) for v in found[z_hop]['shift']],
-            'sigma': {'x': mean(sigmas['x']), 'y': mean(sigmas['y']), 'z': sigma_z},
+            'sigma': {'x': mean('x'), 'y': mean('y'), 'z': sigma_z},
+            'edge_tips': tips,
         }
 
     def z_cell_of(self, hop):
