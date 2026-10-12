@@ -1004,3 +1004,27 @@ def test_a_wrong_cell_from_locate_is_caught_on_the_sheet():
         assert abs(ref['edge_tips']['x'][0] + 1.08) < 0.05 and abs(ref['tip'][1] - 1.14) < 0.05, (seed, ref['edge_tips'])
         assert not bed.off_sheet, (seed, bed.off_sheet[:3])
     assert corrected, 'locate named (3, 4) in none of them: the check went untested'
+
+
+def test_row_3_lift_doesnt_vote_on_its_edge():
+    '''The plotter's own taps on (2, 5)|(3, 5) (2026-10-12, the Micron 005 reference): on the
+    (1, 5)|(2, 5) border, 2.3mm off, (1, 5) read 22 and (2, 5) 6, and (3, 5)'s lift of 62 led them:
+    a vote for (3, 5)'s side, ±0.43, the reference unsure and the Blue's tag refused. Judged with
+    (3, 5) less its lift, that tap doesn't vote; the border is where it was, as sure as the other runs.'''
+    import json, os
+    from limn.fsr import border, judge_taps
+    with open(os.path.join(os.path.dirname(__file__), 'fsr-2026-10-12-row3-edge.json')) as f:
+        sweeps = json.load(f)['sweeps']
+    cfg = loaded_cfg()
+    cell = lambda k: tuple(int(v) for v in k.split(','))
+    found = []
+    for sweep in sweeps:
+        taps = {x: {cell(k): float(v) for k, v in s.items()} for x, s in sweep['taps']}
+        as_read = border({x: (s.get((2, 5), 0.0), s.get((3, 5), 0.0), max(s.values())) for x, s in taps.items()},
+                         cfg['early'], cfg['dominance'])
+        t0, _, sigma, wrong, _ = border(judge_taps(taps, (2, 5), (3, 5), (3,), cfg['early'], cfg['dominance']),
+                                        cfg['early'], cfg['dominance'])
+        assert wrong == 0 and sigma < 0.05 and abs(t0 - as_read[0]) < 0.01, (sweep['said'], t0, sigma, as_read)
+        found.append(t0)
+    assert as_read[3] == 1 and as_read[2] > 0.4         # the second, as the plotter judged it
+    assert abs(found[0] - found[1]) < 0.05, found

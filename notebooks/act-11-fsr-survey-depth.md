@@ -75,3 +75,19 @@ The user's idea: once locate has a cell, the tip is within that cell (±1.25mm),
 - Simulator: `crosstalk={'other': 0.15, 'lift': {3: 55}}`, row 3's flat lift as in tonight's sweeps. With `lifted_rows` off, locate still named (3, 4) in 2/20 runs, and the check moved both to (1, 4). The first X edge's tip came out −1.11 to −1.07 for −1.08, and nothing pressed off the sheet. Test: test_a_wrong_cell_from_locate_is_caught_on_the_sheet, which fails without the check and without the margin.
 - Still off the sheet by design: a tool >3.75mm off (locate's first descent misses the sheet: tests `test_off_the_array_*`, `test_prior_z_*`) and LRT_FSR_MAP.
 - Seen in the simulator only: the (2, 5)|(3, 5) X edge is pulled ~0.17mm by row 3's lift (b reads +55 whenever a is pressed). On the plotter the two X edges agreed (−1.075/−1.081), but it is the edge to watch.
+
+### 22:36 deploy: the Blue refused, the (2, 5)|(3, 5) edge unsure
+
+With 84d6dd0 on the plotter, locate was right for the Micron 01 Blue. Its tip is ~+3.1 in X (tag dx −4.36 against the reference's −1.08; edge tips 3.22 and 3.00), so it lands on row 3, and (3, 4) was its cell. LIMN_TOOL_CALIBRATE refused the tag instead: dx ±0.327, all of it from (2, 5)|(3, 5) at ±0.41, "1 on the wrong side". The Micron 005 reference just before had the same edge at ±0.426 (reference X ±0.23).
+
+From the verbose taps of the reference's sweep: at toolhead X117.194 the tip sat on the (1, 5)|(2, 5) border, with (1, 5)=22 and (2, 5)=6. (3, 5)'s lift of 62 led them both, and a + b = 68 just passed the vote floor of 67.8. That was a vote for (3, 5)'s side 2.3mm from the border, and the one wrong vote set sigma.
+
+Fix: `judge_taps()` (fsr.py, used by find_edge). A row-3 cell on an edge is judged less its lift (its median on the taps where its column partner is the pressed cell, ~43-46 here) only for "is the tip on a or b, or on a third cell". Its share of a + b stays as read. Replayed on the logged taps:
+- as before: X119.556 ±0.002 and X119.525 ±0.426 (1 wrong)
+- share less the lift too: X119.834 and X120.031: the border moved and the runs went 0.2 apart (rejected)
+- third-cell test less the lift (kept): X119.556 ±0.002 and X119.525 ±0.002, 0 wrong
+
+Test: test_row_3_lift_doesnt_vote_on_its_edge, on the plotter's taps (tests/fsr-2026-10-12-row3-edge.json).
+
+Still to watch: the two X edges differ by ~0.2mm on every pen ((1, 6)|(2, 6) against (2, 5)|(3, 5): −1.194/−1.025 for the reference, 3.219/2.998 for the Blue). It's the same on both, so it cancels in dx, but it's either the sheet's geometry or row 3's lift.
+The Blue's first try, as tool 0 (its tag not read), found no contact down to z=2.35.

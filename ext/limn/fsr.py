@@ -133,6 +133,27 @@ def border(taps, floor, lead=0.9):
     return t0, hi - lo, float(np.sqrt(var)), len(wrong), (end_a, end_b)
 
 
+def judge_taps(taps, cell_a, cell_b, lifted_rows, onset, lead):
+    '''taps: {t: {cell: rise}} along an edge from a into b -> {t: (a, b, top)} for border(). Whether the
+    tip is on a or b, not on a third cell, goes by a lifted row's cell less its lift: what it reads on
+    the taps where the other cell, in its column, is the one pressed. Its lift (~40-65 with any press
+    up its column) led a weak (1, 5) and (2, 5) on their border, 2.3mm away, and voted (3, 5)'s side:
+    ±0.43 on (2, 5)|(3, 5), twice (2026-10-12). Its share of a + b stays as read: less its lift, the
+    border moved 0.3-0.5mm and two runs went 0.2mm apart (as read: 0.03).'''
+    lift = {}
+    for c, o in ((cell_a, cell_b), (cell_b, cell_a)):
+        if c[0] in lifted_rows and o[0] not in lifted_rows and c[1] == o[1]:
+            under = [s.get(c, 0.0) for s in taps.values() if s.get(o, 0.0) >= onset and s.get(o, 0.0) >= max(s.values())]
+            lift[c] = float(np.median(under)) if under else 0.0
+    out = {}
+    for t, s in taps.items():
+        a, b = s.get(cell_a, 0.0), s.get(cell_b, 0.0)
+        own = [max(s.get(c, 0.0) - lift.get(c, 0.0), 0.0) for c in (cell_a, cell_b)]
+        third = max((v for c, v in s.items() if c not in (cell_a, cell_b)), default=0.0)
+        out[t] = (a, b, max(a, b, third) if max(own) >= lead * max(own + [third]) else float('inf'))
+    return out
+
+
 class Fsr:
 
     def __init__(self, machine, dock, samples, cfg):
@@ -842,6 +863,10 @@ class Fsr:
             z_press = z_contact - self.depth[hop]
             self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
             self.baseline(hop, z_lift)              # in the air over a: what the taps rise from
+            lifted_rows = spec.get('lifted_rows', ())
+
+            judged = lambda: judge_taps(taps, cell_a, cell_b, lifted_rows, onset, cfg['dominance'])
+
             for side in np.array([0.0, 0.4, -0.4, 0.8, -0.8]) * array.pitch:
                 line, taps = (a + b) / 2 + side * across, {}
 
@@ -852,22 +877,22 @@ class Fsr:
                         if t in taps or abs(t) > reach + 1e-9 or not inside(p):
                             continue
                         s = self.tap(hop, p, z_press, z_lift, at)
-                        taps[t] = (s.get(cell_a, 0.0), s.get(cell_b, 0.0), max(s.values(), default=0.0))
+                        taps[t] = s
                         if self.verbose:
                             self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: "
-                                             f"{cell_a}={taps[t][0]:.0f} {cell_b}={taps[t][1]:.0f} ({self.top(s)})")
+                                             f"{cell_a}={s.get(cell_a, 0.0):.0f} {cell_b}={s.get(cell_b, 0.0):.0f} ({self.top(s)})")
                 sweep(np.arange(-reach, reach + 1e-9, coarse))
-                found = border(taps, onset, cfg['dominance'])
+                found = border(judged(), onset, cfg['dominance'])
                 if found is not None:
                     sweep(np.arange(found[0] - span, found[0] + span + 1e-9, fine))
-                    found = border(taps, onset, cfg['dominance'])
+                    found = border(judged(), onset, cfg['dominance'])
                 for _ in range(2 if found is not None else 0):    # each end's span halved, twice
                     sweep([sum(end) / 2 for end in found[4]])
-                    found = border(taps, onset, cfg['dominance']) or found
+                    found = border(judged(), onset, cfg['dominance']) or found
                 if found is not None:
                     break
                 self.machine.say(f"[LRT] no border from {cell_a} to {cell_b} {side:+.2f}mm across: "
-                                 f"{sum(a_ + b_ >= onset for a_, b_, _ in taps.values())} of {len(taps)} taps "
+                                 f"{sum(a_ + b_ >= onset for a_, b_, _ in judged().values())} of {len(taps)} taps "
                                  f"answered, again beside it")
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
