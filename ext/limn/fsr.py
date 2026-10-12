@@ -438,7 +438,16 @@ class Fsr:
     def touched(self, strengths, hop, level=None):
         '''The cells that respond (see responds()), strongest first. A cell in one of the array's
         crosstalk_rows only when no other row of its column responds, or when
-        it is a real press: a press elsewhere in the column lifts it too.'''
+        it is a real press: a press elsewhere in the column lifts it too.
+        A cell in one of the array's lifted_rows under `sure` is no press at all while another row
+        of its column reads `level`: it lifts with every press up its column about as much as a fine
+        tip's own cell, and, left in, it outread (1, 4) under a Micron 005 and put the tip two rows
+        out, beside the sheet (2026-10-12).'''
+        level_ = level or self.cfg['respond']
+        lifted_rows = self.arrays[hop].get('lifted_rows', ())
+        lifted = {c for c, s in strengths.items() if c[0] in lifted_rows and s < self.cfg['sure']
+                  and any(o[1] == c[1] and o[0] not in lifted_rows and v >= level_ for o, v in strengths.items())}
+        strengths = {c: s for c, s in strengths.items() if c not in lifted}
         cells = [c for c in strengths if self.responds(strengths, c, level)]
         crosstalk = self.arrays[hop].get('crosstalk_rows', ())
         cells = [c for c in cells if c[0] not in crosstalk or strengths[c] >= self.cfg['sure']
@@ -554,12 +563,66 @@ class Fsr:
             # all the edge sweeps need (they reach a cell either way). Bounding it here by where
             # the cell stops answering was a threshold search on one reading a tap, and gave up
             # or went 1-2mm out with the sheet's ripple and crosstalk (2026-10-07).
-            shift = np.asarray(array.center(*touched[0]), float) - aim
+            cell = self._check_cell(hop, aim, z_press, z_lift, strengths, touched[0])
+            shift = np.asarray(array.center(*cell), float) - aim
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
-        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead, on {touched[0]} "
+        self.machine.say(f"[LRT] tip at about {shift.round(2).tolist()} from the toolhead, on {cell} "
                          f"(cells {touched}), taps press {self.depth[hop]:.2f}mm")
         return shift, z, aim
+
+    def _check_cell(self, hop, aim, z_press, z_lift, strengths, cell):
+        '''The cell locate named, checked before anything goes by it -> the cell the tip is on.
+        Every cell close to the strongest in its tap could be the one (row 3 lifts with its column as
+        much as a fine tip's own cell; a row lifts along it): a cell a step along each axis is
+        tapped, the step one that keeps the tip on the sheet whichever of them it is on, and the
+        cell that answers there says which. Without it a wrong cell put the tip 5mm out and the
+        sweeps pressed beside the sheet (2026-10-12). No step that is safe for all of them, while
+        they differ along that axis: stop, nothing pressed off the sheet.'''
+        array, spec = self.array(hop), self.arrays[hop]
+        unread = {tuple(c) for c in spec.get('faulty_cells', ())}
+
+        def on(c):
+            return 0 <= c[0] < array.rows and 0 <= c[1] < array.cols
+
+        def readable(c):
+            return on(c) and c[0] not in spec.get('dead_rows', ()) and c[1] not in spec.get('faulty_cols', ()) \
+                and c not in unread
+        onset = self.cfg.get('early', self.cfg['respond'])
+        # Could be the one: close to the strongest as read, a lifted row too (responds). Not every
+        # cell over `early`: a press lifts its whole column and row that far.
+        candidates = sorted({c for c in strengths if readable(c) and self.responds(strengths, c, onset)} | {cell})
+        lifted = spec.get('lifted_rows', ())
+        for axis in (0, 1):
+            def moved(c, d):
+                return (c[0] + d, c[1]) if axis == 0 else (c[0], c[1] + d)
+            steps = [d for d in (-1, 1) if all(on(moved(c, d)) for c in candidates)]
+            if not steps:
+                if len({c[axis] for c in candidates}) > 1:
+                    raise FsrError(f"[LRT] the tip is on one of {candidates} ({self.top(strengths)}), and no tap a "
+                                   f"{'row' if axis == 0 else 'column'} over tells which without pressing beside "
+                                   f"the sheet: stopped before the edges")
+                continue
+            # Where every cell said is read, none on a lifted row (its lift reads as a press); then roomier
+            d = min(steps, key=lambda d: (not all(readable(moved(c, d)) for c in candidates),
+                                          any(moved(c, d)[0] in lifted for c in candidates),
+                                          d != self._roomier(hop, axis, cell[axis] + 0.5)))
+            step = d * array.pitch * (array.row_dir if axis == 0 else array.col_dir)
+            there = self.tap(hop, aim + step, z_press, z_lift, aim)
+            # Each cell the tip could be on says which cell answers there: the one that does, clearly.
+            # Along an axis they don't differ on, the step tells none of them apart: only that the
+            # named cell's neighbour answers.
+            differ = len({c[axis] for c in candidates}) > 1
+            said = {c: there.get(moved(c, d), 0.0) for c in (candidates if differ else [cell])}
+            best = max(said, key=said.get)
+            if said[best] < onset or any(said[c] >= self.cfg['dominance'] * said[best] for c in said if c != best):
+                raise FsrError(f"[LRT] the tip isn't on {cell} as far as a {'row' if axis == 0 else 'column'} over "
+                               f"says ({self.top(there)}; cells at locate: {candidates}): stopped before the edges")
+            if best != cell:
+                self.machine.say(f"[LRT] not {cell}: a {'row' if axis == 0 else 'column'} over {moved(best, d)} "
+                                 f"answered ({self.top(there)}), so the tip is on {best}")
+            cell = best
+        return cell
 
     def _descend_spots(self, hop, points, z, step, floor):
         '''Coarse steps down, at each of `points` by turns, lifted between: -> (z, the point
@@ -595,7 +658,10 @@ class Fsr:
             depth = round(min(depth + cfg['fine_step'], most), 3)
             self.machine.move(z=z - depth, speed=JOG_SPEED)
             strengths = self.read(hop)
-            strength = strengths.get(tuple(cell), 0) if cell else max(strengths.values(), default=0)
+            # The strongest: not a lifted row's lift (row 3 reads ~55 at once, the taps came out shallow)
+            lifted = self.arrays[hop].get('lifted_rows', ())
+            strength = strengths.get(tuple(cell), 0) if cell else \
+                max((v for c, v in strengths.items() if c[0] not in lifted or v >= cfg['sure']), default=0)
             if strength >= target:
                 break
         return depth
@@ -720,7 +786,7 @@ class Fsr:
         self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
         return strengths
 
-    def find_edge(self, edge, z_contact, shift=(0, 0), at=None):
+    def find_edge(self, edge, z_contact, shift=(0, 0), at=None, unsure=(0.0, 0.0)):
         '''edge: (hop, (row, col) of cell a, (row, col) of its neighbour b) -> (edge point, gap,
         sigma): where the toolhead is when the tip is on the border from a to b, the dead
         zone's width there, and how sure that point is (mm, one sigma).
@@ -734,7 +800,9 @@ class Fsr:
         in the middle of where each side ends, twice. A line that finds no border (along the dead
         zone beside the two cells, or beyond them: locate a cell off across it) is swept again
         to either side, up to most of a cell.
-        z_contact: contact z with the toolhead at `at` (default: over a's centre).'''
+        z_contact: contact z with the toolhead at `at` (default: over a's centre).
+        unsure: (along the rows, along the cols) mm the tip may be from `shift`, kept clear of the
+        sheet's end too: locate's is half a cell until an edge has put the tip across it.'''
         cfg = self.cfg
         hop, cell_a, cell_b = edge
         cell_a, cell_b = tuple(cell_a), tuple(cell_b)
@@ -758,7 +826,8 @@ class Fsr:
             cells evenly, a and b alike: a coin toss for a vote, BED_5's old row 3).'''
             local = p + np.asarray(shift, float) - array.origin
             u_, v_ = np.dot(local, array.col_dir), np.dot(local, array.row_dir)
-            if not (margin <= u_ <= array.cols * array.pitch - margin and margin <= v_ <= array.rows * array.pitch - margin):
+            mu, mv = margin + unsure[1], margin + unsure[0]
+            if not (mu <= u_ <= array.cols * array.pitch - mu and mv <= v_ <= array.rows * array.pitch - mv):
                 return False
             row, col = int(v_ // array.pitch), int(u_ // array.pitch)
             return row not in spec.get('dead_rows', ()) and col not in spec.get('faulty_cols', ()) and (row, col) not in unread
@@ -883,7 +952,11 @@ class Fsr:
                     z_b, xy_b = over(hop, cell_b)
                     self.depth[hop] = max(self.depth_on(hop, xy_a, z_a, cell_a),
                                           self.depth_on(hop, xy_b, z_b, cell_b))
-                point, gap, sigma = self.find_edge(edge, z_a, found[hop]['shift'], at=xy_a)
+                # Where no edge has put the tip yet, it is anywhere on locate's cell: half a cell either
+                # way, clear of the sheet's end too (a Y sweep went 0.19mm past col 7's end, simulated)
+                half = self.array(hop).pitch / 2
+                unsure = (0.0 if 'x' in f['axes'] else half, 0.0 if 'y' in f['axes'] else half)
+                point, gap, sigma = self.find_edge(edge, z_a, found[hop]['shift'], at=xy_a, unsure=unsure)
                 points[axis].append(point[0 if axis == 'x' else 1])
                 gaps.append(gap)
                 sigmas[axis].append(sigma)

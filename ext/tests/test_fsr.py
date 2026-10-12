@@ -87,6 +87,7 @@ class FsrBed:
         self.rng = np.random.default_rng(7)
         self.lowest_z = 99.0
         self.dragged = False
+        self.off_sheet = []                     # tip positions pressed where no array is
         self.ran = []
 
     def tip_xy(self):
@@ -117,6 +118,13 @@ class FsrBed:
                 self.pos[i] = float(v)
         if self.tool is not None:
             self.lowest_z = min(self.lowest_z, self.pos[2])
+        if self.press() > 0 and not any(self.on_array(a) for a in self.arrays):
+            self.off_sheet.append(tuple(self.tip_xy().round(3)))
+
+    def on_array(self, array):
+        local = self.tip_xy() - array.origin
+        u, v = np.dot(local, array.col_dir), np.dot(local, array.row_dir)
+        return 0 <= u <= array.cols * array.pitch and 0 <= v <= array.rows * array.pitch
 
     def wait_moves(self):
         pass
@@ -219,6 +227,9 @@ class FsrBed:
                     first = 1 / (1 + (max(self.press(), 0) / 0.035) ** 4)
                     column = max(min(self.top, self.press() * self.gain) * v for (r_, c), v in shares.items() if c == col)
                     base, extra = {3: (0.95, 0.0), 0: (0.40, 0.55)}.get(row, (0.37, 0.45))
+                    if isinstance(self.crosstalk, dict):        # {row: share}, 'other': the rest, 'lift': {row: flat}
+                        base, extra = self.crosstalk.get(row, self.crosstalk['other']), 0.0
+                        s += self.crosstalk.get('lift', {}).get(row, 0) if column > 0 else 0
                     s += column * (base + extra * first)
                 elif row in rows:
                     s += self.row_crosstalk * pressed * rows[row]
@@ -943,3 +954,53 @@ def test_a_crosstalk_cell_leading_at_first_touch_doesnt_push_contact_down():
 
 if __name__ == '__main__':
     run_tests(globals())
+
+
+def test_row_3_lifted_by_its_column_is_not_the_tip():
+    '''2026-10-12 22:05: the Micron 005 came down on (1, 4), and row 3 of that column, which lifts
+    with every press up it about as much as a fine tip's own cell, read more in locate's tap: it named
+    (3, 4), put the tip two rows (5mm) out in X, and the first edge's sweeps pressed beside the sheet.
+    The run before had named (1, 4) and passed. The tip is where a row that is not lifted answers.'''
+    cfg = loaded_cfg()
+    # Row 3 lifted ~55 whatever the press (the sweeps that night: (3, 6) 45-65 for (1, 6) 22-312), as
+    # much as a fine tip's own cell; the rows ~0.15 of it (the new sheet, 2026-10-07). A tip really on
+    # row 3 is still found there.
+    loaded = {'other': 0.15, 'lift': {3: 55}}
+    # The aim (1.5, 5.5) is X114.75 Y45.85: the Micron's tip on (1, 4), the other's mid (3, 5)
+    for tip in ((-1.08, 1.14), (5.0, 0.3)):
+        for felt in (False, True):
+            for seed in range(6):
+                pen = dict(gain=1350, top=230) if felt else dict(gain=450, top=230, width=0.1)
+                fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, crosstalk=loaded, **pen)
+                bed.rng = np.random.default_rng(seed)
+                fsr.press_cap = 0.2
+                bed.tool = 'T4'
+                fsr.matrix(True)
+                aim = fsr.array(1).point(*cfg['arrays'][0]['aim'])
+                shift, _, _ = fsr.locate(1, bed_z(*aim))
+                assert abs(shift[0] - tip[0]) < 1.25 and abs(shift[1] - tip[1]) < 1.25, (tip, felt, seed, shift)
+                assert not bed.off_sheet, (seed, bed.off_sheet[:3])
+
+
+def test_a_wrong_cell_from_locate_is_caught_on_the_sheet():
+    '''The check after locate: a cell a step over, the step on the sheet whichever close cell the tip
+    is on. With row 3 not known as lifted (as before 2026-10-12), locate names (3, 4) for (1, 4) at
+    times; the tap a row towards row 0 shows (0, 4), not (2, 4), and the tip goes to (1, 4). The whole
+    calibration goes on from there (the survey's aim, as on the plotter), and nothing presses beside
+    the sheet: not the check, nor the sweeps, which keep half a cell clear of the sheet's end until an
+    edge has put the tip across that axis (a Y sweep went 0.19mm past col 7's end).'''
+    cfg = loaded_cfg()
+    cfg['arrays'][0].update(lifted_rows=(), aim=(1.94, 5.33))
+    loaded = {'other': 0.15, 'lift': {3: 55}}
+    corrected = 0
+    for seed in range(20):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(-1.08, 1.14), crosstalk=loaded, gain=450, top=230, width=0.1)
+        bed.rng = np.random.default_rng(seed)
+        fsr.press_cap = 0.2
+        said = []
+        bed.say = said.append
+        ref = fsr.calibrate()['fsr_ref']
+        corrected += any(m.startswith('[LRT] not (3, 4)') for m in said)
+        assert abs(ref['edge_tips']['x'][0] + 1.08) < 0.05 and abs(ref['tip'][1] - 1.14) < 0.05, (seed, ref['edge_tips'])
+        assert not bed.off_sheet, (seed, bed.off_sheet[:3])
+    assert corrected, 'locate named (3, 4) in none of them: the check went untested'

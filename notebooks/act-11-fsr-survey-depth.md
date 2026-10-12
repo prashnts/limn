@@ -56,3 +56,22 @@ The FSR alone can't tell the origin from the tip: an edge sweep finds where the 
 4. A stray tap's weight in `border()`'s sigma (each counts as far as it lies from t0): if strays stay with the per-edge depth.
 5. BLTouch on (1, 6), inked against wiped, ~5 probes each: how much ink lifts it.
 6. Wear-levelling (TODO.md), with each measurement's per-cell depths as a running survey.
+
+## 2026-10-12 22:05: the Micron 005 swept beside the sheet
+
+Two LRT_CALIBRATE runs with the Micron 005 Black (holder 45), both coming down at the aim X115.850 Y46.275 and touching (1, 4) and (3, 4) together. The first named (1, 4) (tip X −1.1) and passed (saved −1.08, 1.14). The second named (3, 4): tip X +3.9, two rows (5mm) out. Every line of the (1, 6)|(2, 6) sweep then started ~3.5mm outside the sheet (true tip X 107.3-110.8, the sheet begins at 111). 15 taps a line read nothing on any cell, and five lines were inked.
+
+Cause: row 3 (no series resistor) reads 40-65 whenever its column is pressed (that night: (3, 6) 45-65 for (1, 6) at 22-312), about as much as a fine tip's own cell at 0.2mm. touched() only filtered crosstalk *after* the dominance test, and row 3 wasn't in crosstalk_rows, so which cell won was a coin toss.
+
+Fix: `lifted_rows: (3,)` in beds.py. In touched(), a row-3 cell under `sure` drops out before dominance whenever another row of its column reads `level`. A real row-3 press keeps it: rows 0-2 lift ~0.15 of a press, under `early` until row 3 is past `sure`. Test: test_row_3_lifted_by_its_column_is_not_the_tip, a fine and a felt tip on (1, 4) and on row 3 (6 seeds each). It fails without the fix. The simulator now flags any press with the tip off the array (`off_sheet`).
+
+### The check after locate, and the sweeps' margin (same night)
+
+The user's idea: once locate has a cell, the tip is within that cell (±1.25mm), so check it before anything goes by it.
+
+- `_check_cell()`: the candidates are the cells close to the strongest in locate's tap (`responds`; that includes row 3 when its lift is as strong). Along each axis where they differ, the toolhead steps one cell from the aim, in a direction that keeps the tip on the sheet whichever candidate it is on. Tonight's (1, 4)/(3, 4) gives one row towards row 0. The candidate whose predicted cell answers, clearly over the others, is the tip's cell. When none does, or no safe step exists: FsrError "stopped before the edges", with nothing pressed off the sheet. Along an axis where the candidates agree, the tap only confirms that the named cell's neighbour answers.
+- `press_depth()` on "the strongest" skips lifted rows under `sure`: row 3's flat lift reached `locate_strength` at once and the taps came out shallow.
+- `find_edge(unsure=...)`: until an edge has put the tip across an axis, the sweeps keep half a cell more clear of the sheet's end on it. Simulated at the survey's aim, the Micron's Y sweep on (1, 6)|(1, 7) otherwise pressed 0.19mm past col 7's end: locate's Y 2.07 against a true 1.14.
+- Simulator: `crosstalk={'other': 0.15, 'lift': {3: 55}}`, row 3's flat lift as in tonight's sweeps. With `lifted_rows` off, locate still named (3, 4) in 2/20 runs, and the check moved both to (1, 4). The first X edge's tip came out −1.11 to −1.07 for −1.08, and nothing pressed off the sheet. Test: test_a_wrong_cell_from_locate_is_caught_on_the_sheet, which fails without the check and without the margin.
+- Still off the sheet by design: a tool >3.75mm off (locate's first descent misses the sheet: tests `test_off_the_array_*`, `test_prior_z_*`) and LRT_FSR_MAP.
+- Seen in the simulator only: the (2, 5)|(3, 5) X edge is pulled ~0.17mm by row 3's lift (b reads +55 whenever a is pressed). On the plotter the two X edges agreed (−1.075/−1.081), but it is the edge to watch.
