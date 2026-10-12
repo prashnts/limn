@@ -70,6 +70,28 @@ An IR LED and a phototransistor facing each other across a ~6-10mm slot in the b
 - Weak: capacitive sensing (the tip is tiny, wet ink varies), electrical contact (the nibs aren't conductive or grounded).
 - [ ] Draw and look first: it needs only G-code and limn_cam. Run it on the reference pen and the Micron 01 Blue (its z was high on 2026-10-11): does the ramp's start repeat to ~0.02mm?
 
+### A thin upward camera: ≤3.5mm under the bed (2026-10-12 discussion)
+The user can spend 3.5mm of bed thickness. Regular camera modules (even small ones) are 5-8mm with lens, so fold the optics:
+- **Fold the path (my pick).** A micro right-angle prism or a mirror (2-3mm) under a thin window, the sensor lying flat beside it in a pocket or past the bed's edge, where thickness doesn't matter. Only prism + window (glass ~0.5-0.7mm) live in the 3.5mm. The tip is a few mm above the window, so a short-focus micro lens is needed (the endoscope's own lens/sensor, if its focus is right: check its close focus).
+- **Coherent fibre bundle.** A 0.5-1mm image guide (~10k px) under the window, the camera at its other end anywhere. Thinnest, but low resolution and fragile; check the price.
+- **Bare sensor, no lens** (shadow/contact imaging): **dropped (2026-10-12, the user's point).** ~1.5mm total, but an OV2640/OV5640-class die is only ~3.6×2.7mm and the tip must be almost touching it, so it has to land on a ~3mm field: the FSR's problem again (tag offsets between pens are several mm, e.g. dx −4.02). Searching by touching also wears the sensor's glass and inks it. A lens that *reduces* (~1:2, a 2mm lens, object ~6mm away) gives a ~7×5mm field from the same die, folded by the prism.
+- **A tiny chip camera** (OmniVision's OVM6948 class, 0.6mm cube, 200×200 px): fits anywhere but ~25µm/px over a 5mm field: sub-pixel centroiding only gets ~10µm at best. Verify the part and its interface (MIPI) before counting on it.
+- **Optical mouse sensor**: not as flow, only as a 30×30 imager; worse than any of the above.
+- Light: a ring of side LEDs around the window, pulsed (on minus off) against daylight and the IR camera light.
+- [ ] Measure the endoscope's close focus and field first: is a prism fold enough with what exists?
+
+### FSR accuracy: fix the estimator, not new hardware (2026-10-12 discussion)
+Ideas in the order I'd try them (see act-10). First quantify: which error is it, a bias (FSR against the camera/ink-cross truth) or a scatter (run to run)?
+- [ ] **Ground truth first**: the ink cross/ramp (above) per pen, against the FSR's tag, over ≥5 runs and several cells. Residual by cell and by tip class says what to model.
+- [ ] **Border transfer function**: the ratio b/(a+b) → position isn't linear (ripple ~15% per 0.2mm across a cell). Scan densely across each strong border once with the loaded sheet, store the curve per border (LUT/fit), and invert it instead of assuming a line.
+- Crosstalk on the loaded sheet (acc-2026-10-11.jsonl, Stabilo on (1,1), others as a fraction of it): (1,0) 0.72-0.8 at first touch falling to 0.33; (3,1) 0.46-0.5 falling to 0.1. So it is still there after the 47k loads, and (1,0) is the same-row neighbour (a sneak path along the row?). Re-run the same ladder if the resistor change is newer than 10-11.
+- [ ] **Crosstalk unmixing**: the loaded sheet leaks (1,0)~40, (3,1)~25 for a 45 press. Measure the leakage matrix once and solve for the true cell loads, then take the ratio (and the centroid over the 2×2 cluster, not one border).
+- [ ] **Edge pairs from both directions**: the two X edges disagree by 0.06mm (1.669/1.606); a direction-dependent bias (backlash, tip compliance, hysteresis). Cross each border both ways and average; interleave X,Y,X,Y (act-10 Next 3).
+- [ ] **Depth from the rise, not the onset**: fit reading against z over the rising part (≈0.03-0.2mm), extrapolate to zero. The onset threshold depends on gain per cell and tip; the extrapolated zero doesn't. The force target stays inside the rising part (the sheet flattens ~0.25mm: the weight test says whether that's sheet or Z play).
+- [ ] **Depth before edges**: find the tap depth after the first X and Y edge, on the z cell's centre (act-10 Next 2).
+- [ ] **dz_trim per tip class** from the ramp/camera ladder instead of by eye (0.3 now).
+- [ ] Average several samples per step and take the per-cell baseline right before each touch.
+
 ## plot/
 
 - Fixes in the G-code generation (details to come, 2026-09-30).

@@ -644,7 +644,9 @@ class Fsr:
             # was 1.65mm out on the plotter, 2026-10-07: every cell pressed near its border)
             m = self.measure(bed_z)
             self.matrix(True)                       # measure() turned it off
-            shift = np.array([self._boundary(hop, 'x')[0] - m['x'], self._boundary(hop, 'y')[1] - m['y']])
+            # measure()'s own tip: m['x'] / m['y'] average two different borders an axis (2026-10-12:
+            # against the first edge's border alone, half a pitch off in X and 1.5 in Y, every press on a corner)
+            shift = np.array(m['tip'], float)
             top = m['z'] + cfg['back_off']
             out['shift'] = [float(v) for v in shift]
             self.machine.say(f"[LRT][Survey] the tip is {shift.round(3).tolist()} from the toolhead (from the edges)")
