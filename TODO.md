@@ -1,41 +1,41 @@
 # Next
 
-## BED_5's new FSR sheet: to calibrated pens (2026-10-07, in progress)
-- **Read `notebooks/act-8-fsr-checkpoint.md` first**: what went wrong on 2026-10-07/08 and the plan (Z from the paper, XY from ratio-fitted borders at a force target, hardware first). The items below are from before it; check them against it.
-- **2026-10-11, retuned to the loaded sheet (`notebooks/act-10-fsr-loaded.md`)**: thresholds, the 0.2 tap cap, the contact check, strong cells with two edges an axis, `dz_trim` 0.3. Next steps at its end.
-- **2026-10-09, the rework (`notebooks/act-9-fsr-rework.md`)**: contact is the sheet's rise whichever cell, the edges are tap sweeps judged by the two cells' share, unsure measurements write no tag. On the plotter since the evening of 10-09, with 47k loads on the sense rows: the reference (Stabilo) and three Micron 01s calibrated, their marks drawn. Results and next steps: act-9, *With the loads, on the plotter*.
-  - [x] Deployed; `LRT_FSR_MEASURE` x3 before the loads, x2 after; `LRT_CALIBRATE` with the new contact.
-  - [x] 47k from each sense row to GND, `"fsr_load": 47000` (5868a30). Rest and in the air every cell reads 0, row 3 is an ordinary row, no faulty cell, no give-ups since. The signal is ~3x smaller (median 134 at 0.08 mm).
-  - [x] `LRT_FSR_SURVEY` after the loads: early 30, weak (0, 2) and (1, 2).
-  - [ ] `dz_trim`: the reference was calibrated with `DZ_TRIM=0.3` (dz 0.31), the Microns (holders 41-43) probed with the default 0.1. One value in beds.py (and the pens again) or a per-pen press?
-  - [ ] Retune to the loaded scale against a ladder: `respond` 150, `press_strength` 450 (never reached now: every tap goes to the 0.1 cap), `locate_strength`, `sure`; `early` 30 in the config (on 60 contact came out 0.3 mm low). Or a bigger load (100k) for more signal.
-  - [ ] X repeats only to 0.17 mm over five runs (Y 0.06, z 0.08), even with the sweep on the same line; each run claims ±0.003. Taps logged (`VERBOSE=1`) over a few runs, a lower `PRESS`; then a sigma that includes run-to-run scatter.
-  - [ ] The Y edge uses the weak (1, 2): move it to a strong pair (the survey: (3, 7), (1, 6), (3, 4), (1, 3)), or find out whether column 2 is the sheet or its ribbon.
-  - [ ] If a pen takes too long: `sweep: (0.5, 0.05, 0.4)` in beds.py, ~30 taps fewer (as good at ±50% patchiness in the simulation, one 0.1 mm error at ±70%). A Micron took ~4 min on the plotter (10-09).
-  - [ ] Record raw frames of a real `LRT_FSR_MEASURE` (all 32 cells per tap, not the top 6) as test fixtures: `border()` is tested against #30 only.
-- [ ] `LRT_FSR_MAP TIP=2.0,2.13`: the origin (refined by edge searches) and pitch, which cells answer. The first run (2026-10-07 23:27) 'touched' 4 mm up on (3, 0)'s preload and mapped nothing: fixed (descents go by their rise over the air), to run again. Set `origin` in ext/limn/beds.py from it; `faulty_cols` if whole columns stay silent.
-- [ ] Columns 4-7 answered as (3, 0) on the first hand map, and (3, 0) has a resting preload of 80-130 since the sheet was handled (was <=16): the ribbon and the (3, 0) corner, before trusting those columns.
-- [x] Done 2026-10-09 after the loads (act-9). Was: `LRT_FSR_SURVEY` (the reference Stabilo in holder 45): faulty/weak cells, `early`, the aim. Its warnings say whether `z_cell` (1, 1) and the edges (1, 1)|(2, 1), (1, 1)|(1, 2) suit this sheet.
-- [x] Done 2026-10-09 (act-9): X 0.17, Y 0.06, z 0.08 over five runs. Was: `LRT_FSR_MEASURE CLEAN=0` x3: X, Y and z repeat to ~0.05?
+What's open, the newest first. The details are in the sections below.
+- **Toolhead and harness rework** (2026-10-12 plan): a small Klipper MCU on the toolhead for K, its endstop, an ADXL345, an HX711 strain gauge, the lock sensor and the tool's link; Z stays on the Melzi; the `rpi` Pico goes; power redone with the harness. *Toolhead and harness rework*.
+- **FSR calibration on BED_5**: per-edge depths in code (act-11), to deploy; then the pens and the Micron Blue. *BED_5's FSR sheet*.
+- **The drag knife**: holder v2 with a spring, then the knife kind in plot/. *Plot & cut*.
+- **Colour plots**: a swatch row with the real Stabilos. *Colour plots*.
+- **Endoscope**: the live work and notes are in `limn_endoscope` (ESP32-P4 since 2026-10-08, notebooks endo-1..7); the sections here are the 2026-10-01 notes.
+
+## BED_5's FSR sheet: to calibrated pens (since 2026-10-07)
+
+Read the notebooks in order: `act-8-fsr-checkpoint.md` (what went wrong on 10-07/08, the plan), `act-9-fsr-rework.md` (contact by the sheet's rise, tap sweeps, the 47k loads), `act-10-fsr-loaded.md` (retuned to the loaded sheet), `act-11-fsr-survey-depth.md` (each edge its own depth). Notes about the old sheet (col 3/4 faults, weak (2, 4)) are history; older items are in git.
+
+Where it stands (2026-10-12):
+- 47k from each sense row to GND (`"fsr_load": 47000`, 5868a30): every cell reads 0 at rest and in the air, no faulty cell, the signal ~3x smaller (median 134 at 0.08 mm). The survey of 10-12 (c0a13c0) found (0, 2), (1, 1), (1, 2) dead: the cells the calibrations had tapped most.
+- Rescaled to the loaded sheet (2026-10-11): `TAP_PRESS` 0.2, capped by a pen's `press_max`; press_strength 120, respond 60, early 30, sure 150, locate_strength 70, press_limit 600; the old models keep the old strengths in the tests (`UNLOADED`). `dz_trim` 0.3 (48c60e8).
+- The contact check judges each cell's growth over its own onset (`Fsr.growth`): contacts agree to 0.005 (they were 0.15 apart). z on (1, 6); X edges (1, 6)|(2, 6) and (2, 5)|(3, 5); Y edges (1, 6)|(1, 7) and (1, 3)|(1, 4). Each axis is the mean of two borders, their spread in its sigma (`edge_tips`). ~+2.5 min a pen.
+- `LRT_CALIBRATE` 2026-10-11 19:11 (`~/limn-shot/fsr-2026-10-11-calibrate2.log`): contacts 3.620 / 3.625 / 3.622, the reference 0.620 over the BLTouch, X ~±0.04, Y ~±0.01. The last full plot was right for every pen except the Micron 01 Blue (z slightly high).
+- No Z step loss at these speeds (2026-10-11, `~/limn-shot/zloss-2026-10-11.*`: a one-off +0.008, then none over 40 hops at 1-5 mm/s). Speeds left as they are.
+- In code, to deploy: edges X, Y, X, Y, each finding its depth on its two cells as the tip now is (act-11, `test_each_edge_finds_its_own_depth_once_the_tip_is_known`); `LRT_FSR_CLEAN` and a wipe asked before meshing `lrt_fsr`, `LRT_CALIBRATE` and `_fsr_bed_z` when a tool touched the sheet since the last wipe (`CLEAN=0` skips; after a restart nothing is asked).
+
+Open:
+- [ ] Deploy; `LRT_CALIBRATE` with the Stabilo, then the pens and the Blue's mark.
+- [ ] **The Y edge (1, 6)|(1, 7) is the noisy one** (10-12): gap 0.85-1.06, its point over 3 runs 39.963 / 40.044 / 40.088, against (1, 3)|(1, 4)'s 47.450 / .475 / .481. A narrower column border ((2, 5)|(2, 6), (3, 4)|(3, 5)): its gap first.
+- [ ] **A stray tap's weight in `border()`'s sigma**: each counts as far as it lies from t0, so one tap 0.5 mm off makes ±0.5 while the point moves 0.01. If strays stay with the per-edge depth.
+- [ ] **The two X borders are 2.606 apart, not 2.5** (every run, 10-12): systematic, cancels between pens, ~0.05 of X's sigma. The sheet's rows, or the row 3 trace?
+- [ ] **Run-to-run scatter**: X repeated to 0.17 mm over five runs (Y 0.06, z 0.08, act-9) while each run claims ±0.003. Log the taps (`VERBOSE=1`) over a few runs; a sigma that includes the scatter.
+- [ ] **BLTouch on an inked sheet**: (1, 6) inked against wiped, ~5 probes each: does ink lift the pin, how much?
+- [ ] Known weights on (1, 6): `~/limn-shot/fsr-weights-2026-10-11.py` (strength against grams, creep over 10 s).
+- [ ] `LRT_FSR_MAP TIP=2.0,2.13`: the origin (refined by edge searches) and pitch, which cells answer (the 10-07 run mapped nothing; fixed since). Set `origin` in ext/limn/beds.py; `faulty_cols` if whole columns stay silent. On the first hand map columns 4-7 answered as (3, 0), which had a resting preload of 80-130: check the ribbon and that corner before trusting those columns.
 - [ ] `LRT_CALIBRATE` with paper on the bed (the test mark at Y 120-150): is z right? Then `LIMN_TOOL_CALIBRATE T=41..44`, each pen's tag named first (`TOOL_TAG_SET PEN=`).
-- [ ] Fit the tests' fresh model (`FsrBed(fresh=True)`) to the new sheet's survey: its response curve (304 at 0.02mm, 469 at 0.04 on (1, 0)), crosstalk (~0.15, row 3 ~0.35).
-- [ ] The survey takes ~8 min and presses only the cells' centres: faults near a border (the old sheet's col 4) slip through; LRT_FSR_MAP covers those.
-- [ ] Fine pens on the new sheet: a ladder with a working fineliner (the test one is bent); `respond` for fine tips.
-- [ ] 2026-10-11: the last plot after a full calibration was right for every pen except the Micron 01 Blue, whose z was slightly too high. The 0.10 mm press cap and other depth limits came from before the 47k loads: relax them for fine tips (a press aimed at a force, not a depth cap) and re-probe the Blue. The loads, as bodged, make BED_5 slightly uneven: fixed in the bed redesign.
-  - Done in code 2026-10-11 (to deploy): `TAP_PRESS` 0.1 → 0.2, capped by a pen's `press_max` (not its plotting `press`); beds.py strengths rescaled to the loaded sheet: press_strength 450 → 120 (a Stabilo stops ~0.1, a fine tip goes to 0.2), respond 150 → 60, early 60 → 30, sure 450 → 150, locate_strength 180 → 70, press_limit 950 → 600. Tests: the old models keep the old strengths (`UNLOADED`), `test_the_loaded_sheet` is the new one. Then: full `LRT_CALIBRATE` with the Stabilo, the pens, the Blue's mark.
-  - LRT_CALIBRATE 18:45 with those (log `~/limn-shot/fsr-2026-10-11-calibrate.log`): X edge 114.469 ±0.003 (gap 0.12), Y 52.531 ±0.011 (gap 1.08), contacts 3.573 / 3.611 / 3.726, reference 0.481 over the BLTouch (10-09: 0.610), dz 0.381. The Stabilo never reached press_strength by 0.2mm on (1, 1) or (2, 4). Two findings:
-    - **The contact check judged growth by the strongest cell:** (3, 1) led at 41-45, flat, while (1, 1) under the tip grew 18, 24, 30, so two of three contacts were "in the air" and came out 0.12-0.18 low. Fixed: each cell's growth over its own onset reading, cells over half of `early` only, within `confirm` 5 fine steps (`Fsr.growth`). Test: `test_a_crosstalk_cell_leading_at_first_touch_doesnt_push_contact_down` (the old check: 0.114 low).
-    - **The calibration ran on two of the weakest cells**, (1, 1) 56/72 and (1, 2) 40/56 (the survey, 0.04/0.08mm). Moved: z on (1, 6), X edges (1, 6)|(2, 6) and (2, 5)|(3, 5), Y edges (1, 6)|(1, 7) and (1, 3)|(1, 4). Each axis is the mean of two borders; how far apart they put the tip goes into its sigma (`edge_tips` in the result). ~+2.5 min a pen.
-  - **Z step loss (the user's experience: the weak, highly geared Z motor loses steps when fast):** tested 2026-10-11 over (1, 6) (`~/limn-shot/zloss-2026-10-11.py`, `.jsonl`): the first rise 3.6525 / 3.6519 at the start, 3.6596 after 20 tap-like hops up at 5 mm/s, then 3.6594, 3.6591, 3.6593 after 20 more at 2, 5 and 1 mm/s, 3.6593 after 5 trips to Z8. A one-off +0.008, then none: no loss at these speeds (max_z_velocity 5, max_z_accel 100). Speeds left as they are. Also seen: the reading at the crossing step grew 50 → 108 over the hops (the sheet or the felt tip settling).
-  - [x] Deployed (1602049), `LRT_CALIBRATE` 19:11 (log `~/limn-shot/fsr-2026-10-11-calibrate2.log`): contacts 3.620 / 3.625 / 3.622 (spread 0.005, was 0.152), no "in the air" rejections; the reference touches 0.620 over the BLTouch (10-09: 0.610), dz 0.52 with `dz_trim` 0.1. X edges put the tip 1.669 and 1.606 across (±0.003, ±0.038: X ~±0.04 with their spread); Y edges -2.181 and -2.177 (Y ~±0.01). Gaps: X 0.00 / 0.06, Y 0.97 on (1, 6)|(1, 7), 0.23 on (1, 3)|(1, 4).
-  - [x] **`dz_trim`:** 0.3 since 48c60e8 (the reference re-tagged dz 0.32 by hand, its plot right). Was 0.1 in beds.py; on 10-09 the user settled on `DZ_TRIM=0.3` for the Stabilo (dz 0.31). Judge from mark 2 (19:22): faint, `LRT_CALIBRATE DZ_TRIM=0.3` or set it in beds.py; then the pens.
-  - [ ] **The taps' depth is found before the tip is known:** on locate's estimate, ~1.3mm off in Y here, so both spots ((1, 6) and the locate spot) were on a border's dead zone and the Stabilo went the full 0.2 (it reaches 120 by ~0.1 mid cell). Find it after the first X and Y edges, on the z cell's centre.
-  - [ ] **Edge order:** both X edges first, their lines placed by locate's Y: each X edge's first two lines missed (9/31, 0/31; 8/25, 4/25), ~40s each. Interleave X, Y, X, Y, and/or take a line that found the border as where the tip is across it for the next edges.
-  - [ ] **Wear-levelling the sheet (the user's idea, 2026-10-11, for later):** every pen taps the same spots (~4 edges × ~50 taps + contacts, at up to 0.2mm). Two ways:
-    - *Jitter*: move each sweep line along its border (±0.4mm) and the contact spot within its cell at random. Cheap, but a border not square to the axes reads off by offset × its tilt (2° and 0.8mm apart: ~0.03mm), different for the reference and each pen: noise in every offset.
-    - *Rotate the cells per calibration* (preferred): `LRT_CALIBRATE` picks the z cell and the edges from a pool of strong pairs (the survey's), stores them in the profile, and every pen of that calibration uses the same ones, so offsets stay border against the same border, no added error. The next calibration takes the next set. Needs: a pool in beds.py, the profile carrying the cells, probe_tool reading them from it, z_cells for the BLTouch from it.
-  - [ ] Known weights on (1, 6): `~/limn-shot/fsr-weights-2026-10-11.py` (strength against grams, creep over 10 s).
-- [ ] Notes of the old sheet below (col 3/4 faults, weak (2, 4), Y-edge spread) are history: check each against the new sheet before acting on it.
+- [ ] Fit the tests' fresh model (`FsrBed(fresh=True)`) to the new sheet's survey (304 at 0.02 mm, 469 at 0.04 on (1, 0); crosstalk ~0.15, row 3 ~0.35). Record raw frames of a real `LRT_FSR_MEASURE` (all 32 cells a tap) as fixtures: `border()` is tested against #30 only.
+- [ ] Fine pens: a ladder with a working fineliner (the test one is bent); `respond` for fine tips. If a pen takes too long (a Micron ~4 min): `sweep: (0.5, 0.05, 0.4)` in beds.py, ~30 taps fewer.
+- [ ] The survey (~8 min) presses only the cells' centres: faults near a border slip through; LRT_FSR_MAP covers those.
+- [ ] **Wear-levelling the sheet** (the user's idea, 2026-10-11, for later): every pen taps the same spots (~4 edges × ~50 taps + contacts, up to 0.2 mm).
+  - *Rotate the cells per calibration* (preferred): `LRT_CALIBRATE` picks the z cell and the edges from a pool of strong pairs (the survey's), stores them in the profile, and every pen of that calibration uses the same ones, so offsets stay border against the same border. The next calibration takes the next set. Needs a pool in beds.py, the profile carrying the cells, probe_tool reading them, z_cells for the BLTouch from it.
+  - *Jitter*: move each sweep line ±0.4 mm along its border, and the contact spot within its cell, at random. Cheap, but a border not square to the axes reads off by offset × its tilt (2° and 0.8 mm apart: ~0.03 mm), different for each pen: noise in every offset.
+  - The per-edge depths react to a cell as it is now; logged per cell, they're a free running survey, so the pool can follow the sheet's drift without a full `LRT_FSR_SURVEY`.
 
 ### A QRE1113 beside the FSR: find the tip without touching (2026-10-11 discussion, dropped)
 
@@ -86,11 +86,16 @@ Ideas in the order I'd try them (see act-10). First quantify: which error is it,
 - [ ] **Border transfer function**: the ratio b/(a+b) → position isn't linear (ripple ~15% per 0.2mm across a cell). Scan densely across each strong border once with the loaded sheet, store the curve per border (LUT/fit), and invert it instead of assuming a line.
 - Crosstalk on the loaded sheet (acc-2026-10-11.jsonl, Stabilo on (1,1), others as a fraction of it): (1,0) 0.72-0.8 at first touch falling to 0.33; (3,1) 0.46-0.5 falling to 0.1. So it is still there after the 47k loads, and (1,0) is the same-row neighbour (a sneak path along the row?). Re-run the same ladder if the resistor change is newer than 10-11.
 - [ ] **Crosstalk unmixing**: the loaded sheet leaks (1,0)~40, (3,1)~25 for a 45 press. Measure the leakage matrix once and solve for the true cell loads, then take the ratio (and the centroid over the 2×2 cluster, not one border).
-- [ ] **Edge pairs from both directions**: the two X edges disagree by 0.06mm (1.669/1.606); a direction-dependent bias (backlash, tip compliance, hysteresis). Cross each border both ways and average; interleave X,Y,X,Y (act-10 Next 3).
+- [ ] **Edge pairs from both directions**: the two X edges disagree by 0.06mm (1.669/1.606); a direction-dependent bias (backlash, tip compliance, hysteresis). Cross each border both ways and average (X, Y, X, Y is done: act-11).
 - [ ] **Depth from the rise, not the onset**: fit reading against z over the rising part (≈0.03-0.2mm), extrapolate to zero. The onset threshold depends on gain per cell and tip; the extrapolated zero doesn't. The force target stays inside the rising part (the sheet flattens ~0.25mm: the weight test says whether that's sheet or Z play).
-- [ ] **Depth before edges**: find the tap depth after the first X and Y edge, on the z cell's centre (act-10 Next 2).
 - [ ] **dz_trim per tip class** from the ramp/camera ladder instead of by eye (0.3 now).
 - [ ] Average several samples per step and take the per-cell baseline right before each touch.
+
+### Pen sets and a proxy reference (2026-10-12 muse, for later)
+- **Re-initialise from a known pen:** a printer that lost its calibration (profile, bed z) measures one pen whose tag already holds offsets against the reference. Its measurement minus its tag gives the reference's numbers back, without the reference pen on hand. A measurement against a known pen already says everything about that pen.
+- **Sets:** offsets on a tag are only true against the reference they were measured with. Tag each pen with its set (the reference's id, or the calibration's), so pens from different sets aren't mixed by mistake. Any pen of a set can then stand in as the proxy for the rest.
+- **Plotting with several sets:** if the sets' references have been measured against each other once (or one pen of each set against the other's), the offset between the sets is known and a plot can use pens from both.
+- Needs: a set id on the tags (`TOOL_TAG_WRITE`), the profile naming its set, probe_tool / calibrate going by a non-reference pen's tag, and a check that a set's pens are still in step (their test marks).
 
 ## plot/
 
@@ -111,14 +116,6 @@ Ideas in the order I'd try them (see act-10). First quantify: which error is it,
   - [ ] The Pi is several times slower: dither and halftone slice in 3-6 s here.
   - [ ] The page-background guess (full-page rect, painted first, something over it): watch for drawings whose first shape is a real full-page fill.
   - [ ] Ordering: emit's travel order for thousands of dashes (dither); a serpentine order per row might beat it.
-- [ ] FSR and fine tips (2026-10-07): the FSR feels a fine tip only ~0.2mm in (simulated: `gain=700`), so a fineliner's contact is already deep and its taps go ~0.45-0.5mm past first touch even with the press_max cap (a felt tip: ~0.07). Done 2026-10-07: the floor at rest is <=6 (col 4 ~24), so coarse descents stop at `early` 60 and the rest is in fine steps; two Stabilo measurements agreed to 0.05mm (X), 0.01 (Y), 0.03 (z). Still to try: a lower `respond` (150) for fine pens, with a working fineliner (the test one is bent). The taps already press only the pen's own `press` (0.1 for fineliners); the ~0.2mm before the FSR feels a fine tip at all is what is left.
-  - [x] Superseded 2026-10-09 (act-9: `locate()` only names the cell now, the sweeps reach a cell and a half). Was: `locate()` varies: the Stabilo's Y came out 1.6, 1.68 and 3.87 (the edges: 2.13), X 1.37 and 1.52 (2.00). The measurement aims again when it lands a cell off, but why? Taps at 0.15 (the Stabilo's own press) vs 0.1, row crosstalk at the col 4/5 border, column 4's preload. Log `last_response`'s points in locate on the plotter.
-  - [ ] **The new sheet's columns 4-7 don't answer** (2026-10-07, a light-tap map: `~/limn-shot/fsr-2026-10-07-new-sheet-map.png`, data in `fsr-2026-10-07-manual.jsonl`): presses there read as (3, 0), below Y ~42 nothing. Rows 0-3 and columns 0-2 answer, column 3 partly. The old sheet's cols 4-7 worked, so the board is fine: check the ribbon (seated, square in its connector, the tail's traces). Then: the origin (the map puts the sheet ~1mm further +X, ~0.15mm +Y: ~(112.0, 59.75)), LRT_FSR_SURVEY, LRT_CALIBRATE.
-  - New sheet, measured: at rest ≤16; first touch on (1, 0) at z ~3.49, 304 0.02mm in, 469 at 0.04 (twice the old sheet's (1, 1)); up its column rows 0-2 ~0.15, row 3 ~0.35; row 3 answers (230-490) like the others, reads 30-50 with the pen over the sheet. `dead_rows` is empty now, the tests' fresh model fitted to these.
-  - [ ] New FSR sheet on BED_5 (2026-10-07: the old one is damaged). Then: `origin` if it sits elsewhere, LRT_FSR_MATRIX at rest, LRT_FSR_SURVEY, LRT_CALIBRATE, pens. Compare its survey with the old sheet's ladders (`~/limn-shot/fsr-2026-10-07-manual.*`), refit `frame_bed5`'s fresh model to it.
-  - [ ] After the fixes of 2026-10-07 (mesh off the sheet edge, depth on (1, 1), two-spot descent): run LRT_FSR_MEASURE 3-4 times and check the Y edge repeats as X does (0.05). Cells differ a lot: (1, 2), (2, 1), (1, 5), (2, 5) strong (400+ 0.02-0.04mm in), (1, 4) and (2, 4) weak (~150-230). A fine pen needs its own ladder.
-  - [ ] The Stabilo at 0.1mm taps, three runs (2026-10-07): X edge 113.949, 113.959, 113.998 (0.05 apart), Y edge 52.471, 52.481, 52.705 (0.23 apart: the third run's tip estimate was 1.52, the others 1.6), contact 0.714-0.740 over the BLTouch. Y wants more runs, maybe `repeats` on the edges as on z.
-  - [ ] On the real sheet: are the edges as repeatable at 0.1mm taps (fineliners) as at 0.3? Run LIMN_TOOL_CALIBRATE twice on one pen and compare the offsets. If not, `PRESS=0.2`.
 - [ ] Too small: the thresholds (2.5 widths, 70% of the inside painted over, text caps 8 widths) come from one drawing (the Feb–Apr 2025 sketch on the Pi, at 22/39/49%). Check on a plot what really blurs, then tune `SMALL`, `LOST`, `TEXT_MIN` in slicer.py. Letters that run into each other (each fine on its own) aren't seen yet.
 - [ ] Drawings over drawings is new: the ferry and magnet icons on the Pi overlap each other and the Feb drawing; whichever is on top now cuts the others. Turn *what is on top hides* off on one that should draw over.
 - Pen-down: `z_touch - press` (1.2 less 0.15 for fineliners, 0.3 for the Stabilo 88), lifts by the press, `play.clear` and the play (`plot/profiles/play.toml`). The old "pens press too hard" was stale tags: done (`notebooks/act-7-camera-ladder.md`). To watch: touch moved by ~0.2mm from one sheet to the next (the Staedtler and the Stabilo both touched 0.2 low on sheet 2). Either a quick ladder per sheet, or `z_touch` per sheet/mesh.
@@ -148,11 +145,60 @@ The goal: colour "prints" from pens, now that the plot itself is reliable. A vec
   - [ ] Choosing which pens a mix may use (now: all, each ink once).
 - [ ] Phase 3: the swatch chart and the camera's measurement.
 
+### Plot & cut: the drag knife (2026-10-12 plan)
+
+The tool: a small blade in a holder, free to turn on its axis. Its tip trails the axis by an **offset** `d` (~0.25 mm for a 45° blade, more for 60°; to measure), so it turns to follow the cut like a castor. That trailing is also its flaw: it cuts round corners and enters a cut pointing the wrong way unless the path makes up for it.
+
+**The blade's geometry (the knife kind's `draw`):**
+- **Offset compensation**: the holder's axis runs `d` *ahead* of the wanted cut along each segment, so the tip lands on the line.
+- **Swivels at corners**: where the direction turns by more than `swivel` (~15-30°), go to `d` past the corner, then turn an arc of radius `d` around the corner point until the blade faces the next segment, then carry on. A gentle curve (small turns, segments longer than `d`) needs no swivel.
+- **Entering a cut**: the blade faces wherever the last cut left it. Options: a small **pre-swivel** off the part (a short stroke on scrap or outside the outline, in the first segment's direction), or **ramp in** along the path (Z down gradually over 2-3 mm, so the blade turns before it bites). Never plunge straight down at full depth: it tears and drags the sheet.
+- **Overcut** on closed paths: run `d` + ~0.5 mm past the start, so the loop closes without a nick.
+- Corners sharper than the blade can turn in (radius under ~`d`) and holes smaller than ~3`d` get a warning, as `small` does for pens.
+
+**Not dragging the paper:**
+- **Passes, shallow first**: the first pass only scores (light force, little sideways pull), the next go deeper, the last just through into the mat (~0.1 mm). Paper 80 gsm: 1-2 passes; card 250-300 gsm: 3-4. The scored groove guides the blade on later passes, so they pull less.
+- **Every pass in the same direction**, so the blade already faces the right way; a closed path loops down without lifting (a helical ramp: Z lowered along the loop, one pass flowing into the next).
+- **Pass-major order**: pass 1 on every shape, then pass 2 on every shape, ... The sheet stays whole (only scored) until the last pass, so nothing comes loose while it still has cuts to take.
+- **The last pass from inside out**: holes and inner details first, small shapes before big, the outermost outline last (a containment tree from shapely). A piece cut free can't shift under a cut that's still to come.
+- **Tabs (bridges)**: leave the outer outlines joined to the sheet by small gaps (0.5-1 mm, ~1 per 40-60 mm of perimeter, on straight runs, never at a corner). On every pass, or only skipped by the last pass (a "skin" tab, easier to break off cleanly). Off per shape (UI: click a tab to move or remove it).
+- **Slow and gentle**: a slow feed for the first pass, low acceleration, slower still in swivels. Travel at the pen's clear height.
+- **Clamping**: the magnets hold the edges, the middle can lift. Keep cuts a margin away from the magnets (they're obstacles, as for the travel planner), and cut the parts near the free middle before the ones near the clamped edges. For thin paper, a low-tack carrier (a sheet with repositionable spray) might be needed after all; try without first.
+
+**Depth, force (the risky part):**
+- The Z axis has play: ~1.67 mm lift per mm of press (plot/profiles/play.toml). A blade set by position will lift as it cuts, and cut shallower where the mesh is wrong. The user's holder is rigid (2026-10-12): 300 gsm card is ~0.35-0.4 mm, so the window between "not through" and "deep into the mat" is a few tenths, about the size of the mesh's and the play's errors.
+- **Add a spring (decided worth it, 2026-10-12)**: the blade's shaft slides in a sleeve (a brass tube or a reamed printed bore), a spring above it, a collar as the stop. Z then sets how far the spring is compressed, so the force, not the depth: 0.1 mm of Z error is only `k x 0.1` of force. Aim ~2-4 N/mm with ~1 mm of compression (~2-4 N, the range of hobby cutters on card, ~200-400 gf). The play then lifts the axis by the same amount every time (constant force), which a calibration takes out.
+- **The spring, in detail (2026-10-12)**: springs in parallel do add (k = k1 + k2 + k3), but a coil spring is soft sideways, so three of them don't hold XY: the **guide** does. Three around the axis only balance the push (no tilt). The cut's sideways pull (~1-2 N) must move the tip < ~0.05 mm.
+  - Soft and **preloaded** beats stiff: the force is preload + k x compression, and a Z error only changes the `k x error` part. Eg. k ~1 N/mm preloaded to 2 N, 1 mm of compression in use: 3 N, and 0.1 mm of Z error is 0.1 N (3%). A stiff 4 N/mm one without preload: 0.4 N (10%+).
+  - Coil: k = G d^4 / (8 D^3 n), steel G = 79000 N/mm^2. Wire 0.5, mean diameter 4.5, 8 active coils: ~0.85 N/mm; wire 0.6: ~1.75. From an assortment box, measured with a kitchen scale and Z steps.
+  - Guide A: the holder body in two bushings (brass tube or reamed printed bores), as far apart as possible (≥ 3x the diameter), a close fit; the spring above, a collar as the stop that sets the preload. Simple, but its clearance tilts the tip and its friction is force hysteresis (stiction).
+  - Guide B: a flexure, no play and no friction: two diaphragms (3 spiral or straight arms, spring steel shim 0.1-0.2 or printed for a first try), 10-15 mm apart, the holder body through their middles. Stiff sideways and in tilt, soft along Z, and its own k is the spring (or adds to one). The same idea as *Force at the tip: a flexure* under *Toolhead rework*: the knife could be its first user. Printed ones creep under a constant load: steel for the keeper.
+  - Start with A; go to B if the cuts show stiction (depth that changes along a line, notches where it starts).
+- **Blade exposure as a depth stop**: a screw-on nose cap sets how far the blade sticks out (card thickness + ~0.1 mm). The spring gives the force, the cap a hard limit on depth. If the nose rides on the paper it is also a presser foot that holds the sheet down beside the blade (round and smooth its rim, so it doesn't push the paper itself).
+- **XY on the FSR with a cap** (the user's idea, 2026-10-12): a printed cap over the blade with a rounded point, concentric with the holder's axis, a known height over the blade's tip. The FSR probes the cap like a pen: XY is the axis (the blade's tip trails it by `d`, which the compensation handles, so the axis is what the tag wants). The cap's height is only as good as the print (±0.1), so Z still comes from a depth ladder on scrap card: that measures what matters (through, not through), and a rounded cap point gives the FSR a stronger signal than a fine pen.
+- Two offsets, not to mix up: the **tool offset** (dx, dy, dz on the tag, from the FSR, as for pens) and the blade's **trailing offset** `d` (the tip behind its own axis: a property of the blade, not the print). `d` is ~0.25 mm for a 45° blade, ~0.5 for a 60°, to measure for each. The user has both angles: **60° for 300 gsm card**, 45° for paper and stickers (sharper corners).
+- The blade's offset `d`: cut a test pattern (squares and stars with `d` stepped 0.1-0.5), the camera or an eye picks the cleanest corners.
+- The mesh (`lrt_paper`) applies, as for pens.
+
+**Into plot/ (the code):**
+- A `knife` kind in plot/tools.py: `offset`, `swivel`, `overcut`, `ramp`, `passes` (a list of depths or forces), `feed`, `tabs` (size, spacing, on which passes). `draw` does the compensation; it doesn't take part in ink.py (no bleed, overdraw, fills, small-ink checks) and fills aren't cut, only outlines (centrelines).
+- A new module for the planning (not cuts.py: that is cutting outlines into painted pieces): the containment tree, pass-major order, tabs, the margin from the magnets. order.py's nearest-next works within one level of the tree.
+- A layer (or a shape) given to the knife is cut, not drawn. The knife always goes after every pen (the ink dry; nothing moves before it's drawn). Plot then cut on the same sheet is in register for free; a sheet printed elsewhere needs camera registration (the ladder crosses + homography, later).
+- The preview shows cuts dashed, the compensated path and swivels, tabs as gaps, the passes' order.
+- `python -m plot knife-test`: the calibration pattern (lines at Z steps, squares and stars over `d` steps, small holes).
+
+**Steps:**
+- [ ] Holder v2: sleeve + spring (~2-4 N/mm) + exposure cap, the RFID tag as on the pens.
+- [ ] The FSR cap (rounded point, known height) for the knife's XY.
+- [ ] Measure: `d` for each blade (squares and stars), the depth ladder on 300 gsm. A hand G-code: a 20 mm square, a star, at 2-3 depths on 80 gsm and 300 gsm.
+- [ ] The knife kind: compensation, swivels, ramp in, overcut, passes on one path. Unit tests on the geometry (the tip's path lands on the line).
+- [ ] The planning: inside out, pass-major, tabs, magnets' margin.
+- [ ] UI: knife layers, tabs, preview.
+- [ ] Later: kiss cut (stickers: through the face, not the liner), a creasing / scoring tool (a ball stylus, no offset), registration on pre-printed sheets.
+
 ## Pens, heights (limn_cam/)
 
-- Holder 41 has the Stabilo "Stabilo Test Blue" (stb-88, dz 0.24, primed 2026-09-30): the only pen in use. The rest were taken out to keep them from drying.
-- Micron 01 blue (dz 2.25): drew nothing even at Z0.8 on sheet 2. Seated? slid up in its clamp? writing? Then a ladder, `limn_cam ladder T<n> --z 2.0:0.4:0.1`.
-- Staedtler 0.05 (dz 1.05): check on the next sheet it goes back in.
+- Each pen's z and offsets come from the FSR calibration now (above); the camera ladders (`notebooks/act-7-camera-ladder.md`) are the check.
 - Z play: gentle (0.3, 2mm strokes) and loaded (0.6, 10mm at 3000mm/min) tests both let go within 0.5mm over touch, the same all over the sheet (`limn_cam play`). The few mm measured by hand don't show on the lift. Still open: tilt while drawing (the pull along X vs Y), which a lift test doesn't see.
 - Cameras aren't essential (OpenCV is the `cam` extra). Next: fixed focus on the axiscam; a camera on the tool for line width and contact; an upward endoscope for tip dx/dy (notebook act-7).
 
@@ -215,15 +261,166 @@ Plain HTML/JS with no build step was right while it was small: nothing to instal
 ## ext/, klipper/
 
 - Drying: per pen (`dry` minutes in pens.toml, 240 for the Stabilo 88, 10 for fineliners), twice that printing. To check on a real long plot: the SET_PIN beeps land between moves without a stall. Maybe a Fluidd button for `TOOL_DRY RESET=1`.
-- BED_5 FSR: column 3 still faulty; z and edges moved to column 1, the aim to column 5. A 0.05 liner can't be measured on it (≤121 at PRESS=0.5).
-- Toolchanger key rework: see *Toolhead rework* below.
+- Toolchanger key rework: see *Toolhead and harness rework* below.
 - Tag reads: the PN532 listens for the whole 0.5 s now (`i2c.py`, `begin(retries=0xFF)`), untested on the plotter. If it still misses: read while approaching the reader from its edge, which reads best. Needs the edge's X and whether Z7 is safe for the last stretch.
 - Holder 45 read empty with its pen in it (2026-09-29): seating or the switch.
 - Key open with a tool still saved as carried: the saved tool is stale, the meshing could clear it instead of undocking.
 
-## Toolhead rework (2026-09-30 discussion)
+## Toolhead and harness rework
 
-What's wrong now: the holders are slightly angled in X (the first tools push on the dock), and the key's centre is a bit off (a small crash as it enters a tool).
+What's wrong now: the holders are slightly angled in X (the first tools push on the dock), and the key's centre is a bit off (a small crash as it enters a tool). The harness is being redone (2026-10-12), with the power distribution.
+
+### The plan (2026-10-12): a toolhead MCU and a new harness
+
+Decided with the user on 2026-10-12:
+- **A small Klipper MCU on the toolhead** (RP2350-Zero or RP2040-Zero class, `[mcu tool]`, USB or CAN to the Pi). It carries:
+  - K's driver and K's endstop (`^PA2` on the Melzi now): *Driving K on the toolhead*.
+  - An **ADXL345** in place of the MPU9250, for the input shaper. Klipper reads it on any MCU, over SPI (or I2C in recent versions: check the Pi's Klipper). For I2C: CS to VCC (that selects I2C), SDO to GND (address 0x53; to VCC 0x1D), INT1/INT2 unused.
+  - An **HX711** and the BF350 strain gauge: *The strain gauge*.
+  - The QRE1113 lock sensor, the tool's ID resistor, the tool's power switch and UART: *The coupling*.
+- **Z stays on the Melzi as it is**: its stepper, its endstop (`^!PC4`) and the BLTouch. X and Y and their endstops stay too.
+- **The `rpi` Pico goes, for a smaller MCU.** Its jobs today: the NeoPixels (gpio 15, 16, 17), the buzzer (gpio 9), the MPU9250 on software I2C (gpio 4/5). The MPU is replaced by the ADXL on the toolhead.
+  - [ ] Where the NeoPixels and the buzzer go: on the toolhead MCU if their wires end near it, or a small MCU in the electronics bay. (My reading: the toolhead MCU takes them. To confirm with the user.)
+- **A stepper, its endstop and the probe that stops it on one MCU.** Klipper doesn't require it: multi-MCU homing works, the endstop's MCU timestamps the trigger so the position stays right, but the stop goes through the host and comes a few ms late (~0.01-0.03 mm at Z's `homing_speed: 3`), and on a busy USB it can fail with *Communication timeout during homing*. So K moves with its endstop, and Z, its endstop and the BLTouch stay together. The load cell sits on the toolhead while Z is on the Melzi: fine for step-and-read ladders (Z stops before each reading); as a moving Klipper probe it would be multi-MCU homing.
+- **Pins on the toolhead MCU**: K step/dir/enable (3), K's endstop (1), HX711 (2), ADXL345 (SPI 4, or I2C 2), QRE1113 (1 ADC), the tool's ID (1 ADC), the tool's power switch + UART (3): 13-15. With the NeoPixels and the buzzer (4): ~19. A Zero board has 20 GPIOs on its edges and 9 on pads underneath, ADC on GPIO 26-29: enough, 2 ADCs to spare (a Hall sensor, a thermistor).
+- **The chain afterwards**, roughly: Z's motor (4), the Y and Z endstops, the BLTouch (5), power (24 V + GND, doubled), USB (or CAN, 2). Out of it: K's 4 motor wires and its endstop, the MPU's I2C. Today: 21 wires.
+  - [ ] Count the real wires and plan the ribbons: motors apart from signals, a GND between signal wires.
+- [ ] Bench: a Zero board with a DRV8834 carrier on K, the HX711 and the ADXL345, on 5 V first, before a PCB.
+- [ ] The circuit diagram for the docs (projects/limn/content/electronics.md): the toolhead MCU, the HX711, the BF350 quarter bridge.
+
+### Power distribution (redone with the harness)
+
+- **24 V (or 12 V) + GND down the chain, a buck to 5 V on the toolhead** for the MCU, the tool's 5 V and the LEDs. ~5x less current than sending 5 V: ~5x less drop (and a far smaller share of 24 V), ~25x less heat in the wire.
+- **K's driver**: a DRV8834 runs from the 5 V (2.5-10.8 V); a TMC2209 wants ≥ 4.75 V and browns out on a dip at 5 V, so it goes on the 24 V.
+- **USB (or CAN) for data only**: its VBUS not tied to the toolhead's 5 V (two supplies feeding each other); GND shared. USB-PD from the cable instead (a CH224K/HUSB238 asking for 9-20 V) needs a PD source with data, which the Pi isn't: skipped.
+- **The tool's 5 V through an e-fuse or a PTC**, switched on only when the tool is seen and the key is locked (*The coupling*).
+- [ ] Draw the whole tree: the PSU, the Melzi, the Pi, the Dock and the beds, the chain, the toolhead's buck, the tool. Which branch has which fuse.
+
+### Power budget of the tool's 5 V (2026-09-30)
+
+Typical, at 5V (check the real modules):
+
+| Load | Typical | Peak |
+|---|---|---|
+| USB camera | 0.1-0.2 A | 0.3 A (autofocus, IR LEDs) |
+| Bright LED | 0.1-0.2 A (0.5-1 W) | the same |
+| BLTouch | 15 mA | ~0.3 A while its pin moves |
+| MCUs | RP2040 ~30 mA, ESP32 ~0.25 A | ESP32 Wi-Fi bursts ~0.5 A |
+| "1 W" laser module | 1-1.5 A if 1 W *optical*; ~0.2 A if 1 W drawn | the same |
+| Pi Zero 2 W + HQ camera (stress case) | 0.6-0.9 A | 1.0-1.3 A booting, loaded |
+
+Worst case ~1.3 A going on and on.
+- [ ] **PTC**: hold 1.5-1.6 A (it holds less warm, a toolhead is warm), trip ~3 A, 6V or more, 0.1 ohm or less, 1812. It trips in seconds: it saves the wiring from a lasting short, not the electronics from a sliding pin.
+- [ ] **Or an e-fuse** (TPS2595 family): limit set to ~2 A, trips in microseconds, soft start for a camera's or a Pi's inrush. It does the PTC's job and more, in one chip.
+- [ ] **Voltage**: the Pi Zero warns under ~4.63V. PTC + pogo pins + wire can take ~0.3V at 1.3 A: feed the toolhead 5.1-5.2V, and two pogo pins in parallel for 5V if one is rated under ~2 A.
+- [ ] **Wire gauge** (2026-10-01): 26 AWG ~0.134 ohm/m (chassis rating ~2.2 A), 30 AWG ~0.34 ohm/m (~0.86 A). A wire's rating is about heat. A 30 AWG piece only a few cm long can carry more than its rating, because the thicker wire and connectors at both ends draw the heat away. Past ~5-10 cm, its middle runs as hot as a long 30 AWG wire. Derate in a packed cable chain next to stepper wires; in the moving part, use high-flex stranded wire (thin wire fatigues).
+- [ ] **Voltage drop matters more than heat at 5V**: the GND wire carries the same current, so count the run twice. 1 m of 26 AWG each way at 1.3 A: ~0.35 V; plus 10 cm of 30 AWG each way: ~0.09 V more. That's already under the Pi Zero's 4.63V with 5.0V in. Hence 24 V down the chain and a buck on the toolhead (above).
+- **Cable chain** (2026-10-01, guesses: 26 AWG, ~1 m, Z NEMA 8 ~0.6 A/phase, K micro linear stepper ~0.2 A/phase): heat per metre in W/m.
+
+  | Wires | Current | Heat |
+  |---|---|---|
+  | Z, 4 wires | 0.6 A | ~0.19 W/m |
+  | K, 4 wires | 0.2 A | ~0.02 W/m |
+  | Tool 5V + GND, 1 pair | 1.3 A | ~0.45 W/m |
+  | Tool 5V + GND, doubled | 0.65 A per wire | ~0.23 W/m |
+  | USB-C, endstops, sensors, accelerometer | mA | ~0 |
+
+  ~0.65 W/m in all at worst (at 5 V; far less with 24 V). Heat is no problem in an open, moving chain; the limits are the chain's fill (≤ ~60-70% so wires can slide), bend radius/flex life, and noise.
+  - [ ] Noise: the stepper wires carry chopper PWM (tens of kHz, fast edges). Keep them in their own ribbons. In the sensor ribbon, put a GND between signal wires (I2C/SPI over ~1 m next to steppers glitches); lower I2C speed or SPI if it does. The endoscope: decoder board on the toolhead, only USB through the chain, never the analog VOUT next to the steppers.
+- LED draw: ~3.0V × 350 mA ≈ 1.05 W (700 mA ≈ 2.1 W). From 24V through a buck driver (~85%): ~50 mA (~100 mA at 700). From 5V: ~0.25 A through a buck, 0.35 A through a linear driver (it draws the LED's current). On only per tile: ~30% average over a scan.
+- The 5 W laser and the milling spindle: always tethered, their own supply and their own interlock, never through the coupling.
+
+### Driving K on the toolhead (2026-10-12 discussion)
+
+- **Not from the MCU's pins.** A GPIO gives ~4-12 mA (RP2040: 50 mA for all pins together); K draws ~0.23-0.34 A/phase (14.5 Ω at 3.3-5 V). It's bipolar (4 wires): each coil needs current both ways (an H-bridge per coil), and the coil's kick at switch-off needs diodes. A ULN2003 is for 5-wire unipolar motors, not this.
+- **Klipper only speaks step/dir.** A bare dual H-bridge (DRV8833) driven by the MCU's PWM would work in our own firmware, not in Klipper. So a step/dir driver chip: 3x3 mm (DRV8834 4x4, TMC2209 5x5); the StepStick-size carriers 15x20 mm.
+- **K (14.5 Ω, 3-5 V, gearbox, 10 mm):**
+  - At 5 V straight it makes ~1.7 W per coil, ~3.4 W held: too hot to hold for long in a motor that small. Limit it to ~0.2 A/phase (it's disabled after each lock move already: `K_LOCK`, `K_UNLOCK`).
+  - At 5 V the coil's resistance alone nearly sets the current (5/14.5 = 0.34 A): the chopper only trims it. Fine.
+  - Precision comes from the gearbox and the screw, not microstepping: one full step is already tiny at the screw. Microstepping a 20-step can-stack motor gives smoothness, not accurate positions between full steps. The gear's backlash is the error: approach the end position always from the same side, home on the switch, a spring to preload the screw if the lock needs it.
+- **Driver choice:**
+  - **DRV8834**: 2.5-10.8 V, step/dir, up to 1/32, current set by a resistor on VREF. Runs happily from 5 V; Klipper sees a plain step/dir driver (`microsteps` must match the M0/M1 pins). Louder than StealthChop.
+  - **TMC2209**: StealthChop (quiet), UART current setting, Klipper's `[tmc2209]`. VM ≥ 4.75 V: on the 24 V.
+  - **TMC2300**: 2-11 V, StealthChop, 3x3 mm, made for low-voltage motors like K. Mainline Klipper has no `[tmc2300]` (check).
+  - Ready boards (BTT EBB36/42, Mellow SB2040) carry one driver, for an extruder: it would do for K, but they're bigger than a Zero and a carrier, and bring a heater and fans we don't use.
+- **Z, if it ever moves to the toolhead too:** NEMA 8, 5.2 Ω, 1.3 mH, 0.4 A, run ~0.3 A RMS. From 5 V torque falls past roughly 10 rev/s (2.1 V go into the resistance at 0.4 A); from 12-24 V much faster.
+- **USB in a moving cable**: Klipper's toolhead boards mostly use CAN because a USB drop mid-plot shuts Klipper down (`Lost communication with MCU`). A shielded, flex-rated cable, short (≤ ~1.5 m), a ferrite, its own ribbon away from the steppers, GND shared. CAN (2 wires + power) is the fallback, through a USB-CAN adapter or a CAN bridge board.
+- **Klipper config** (pins and bus names are placeholders; check Klipper's Config Reference for the exact options):
+  ```
+  [mcu tool]
+  serial: /dev/serial/by-id/usb-Klipper_rp2350_<id>-if00
+
+  [manual_stepper axis_k]
+  step_pin: tool:gpio10
+  dir_pin: !tool:gpio11
+  enable_pin: !tool:gpio12
+  endstop_pin: ^tool:gpio13
+  # rest unchanged; with a DRV8834, microsteps = its M0/M1 setting
+
+  [adxl345]
+  cs_pin: tool:gpio1
+  spi_bus: <the SPI bus on those pins>
+  # [resonance_tester] accel_chip: adxl345
+
+  [load_cell]
+  sensor_type: hx711
+  sclk_pin: tool:gpio20
+  dout_pin: tool:gpio21
+  sample_rate: 80            # must match the board's RATE pin
+  ```
+- [ ] Measure K's step angle and gear ratio (18:1 in the config) and the screw's lead, to know its full step at the screw.
+
+### The strain gauge: a BF350 and an HX711 (2026-10-12 discussion)
+
+The user's gauge: a **BF350-3AA** (350 Ω foil, gauge factor ~2.0-2.2, 3 mm grid), kept for years, superglued on.
+- **The MCU's own ADC can't read a bare bridge.** It's 12 bits on 3.3 V (0.8 mV a step, ~9 good bits). A quarter bridge with the BF350 on 3.3 V gives `3.3 × 2.08 × ε / 4` ≈ 1.7 mV per 1000 µε, and a pen's push is probably tens to a few hundred µε: a fraction of one step.
+- **An in-amp in between makes it readable** (INA333, `G = 1 + 100k/RG`, RG ≈ 100 Ω for ~1000): ~1.7 V per 1000 µε. But Klipper's `[load_cell]` has no MCU-ADC sensor: our own module, polled from the host, a slow reading and no probe. The ADC's linearity errors (the RP2040's are known; check the RP2350's) show up in the force.
+- **A bridge ADC is simpler, and Klipper reads it as it is**: `[load_cell]` + `[load_cell_probe]` take an HX711/HX717 (2 GPIOs, bit-banged, any pins) or an ADS1220 (SPI + DRDY, 5 GPIOs). Klipper has no I2C load-cell ADC (a NAU7802 would be our own module).
+  - HX711: ~1 €, 10 or 80 samples/s (the RATE pin: many boards tie it to 10, check). HX717: up to 320/s. ADS1220: up to 2000/s, lower noise, ratiometric with REFP0/REFN0 across the bridge.
+  - **The rate only matters for probing while moving** (the user asked why): Z goes on between samples, so the touch is seen up to `speed / rate` late, plus a few samples for the filter, and that overtravel presses the pen. At 1 mm/s: 10/s → ≥0.1 mm, 80/s → ~0.0125 mm a sample. A **step-and-read ladder** (move, stop, settle, read, like the FSR's) needs only a few readings a step: there the rate is only speed (the HX711's filter settles in ~4 samples: ~0.4 s a step at 10/s, ~0.05 s at 80/s). At these rates the HX711 resolves as finely as the others.
+  - **The user's pick: an HX711, RATE at 80.** Fine for ladders and a first test; for a moving `load_cell_probe` it's at the slow end (an HX717 or ADS1220 then, on almost the same wiring).
+- **Which wires go long: the digital ones.** The ADC sits by the gauge, within a few cm. The bridge's ~1 mV picks up stepper noise on a long lead (a differential input rejects only part of it), and in a quarter bridge the lead's resistance is in the arm, so warming copper (~0.4 %/K) reads as strain (3 wires to the gauge cancel that). SPI or the HX711's clock/data are 0/3.3 V: up to ~30 cm is easy, with a 33-100 Ω series resistor at each line's driving end and a GND beside the signals. With the toolhead MCU everything is on the toolhead: keep it all short.
+- **The MCU's ADC inputs stay useful** for analog sensors with a big swing: the QRE1113 on the lock, a DRV5055 Hall on the rider's tip (~1 mV/µm), a tool's ID resistor. RP2040, RP2350A and the Zero boards: 4 (GPIO 26-29); RP2350B: 8 (GPIO 40-47).
+- **The glued gauge**: calibrate the whole assembly with weights, or a kitchen scale under the pen (a Z ladder, grams against counts), not from the gauge factor. Check first: ~350 Ω across it; no continuity to a metal part under it; a straight line over 3-5 loads; the same reading going up and down; the drift with a weight left on for 5 min (superglue creeps a little); the drift with warm air and no load. A second gauge on the opposite face (half bridge) doubles the signal and cancels most of the temperature drift.
+- [ ] Bench: the BF350 + 3 × 350 Ω 0.1 % on an HX711 board, on the Zero, `[load_cell]`, coins.
+
+### Sensing the pen's contact at the toolhead (2026-10-11 discussion, summed up)
+
+Where it ended: **the FSR stays** for XY and z: it's the only option giving both, for every tool, with no change to the toolhead. The weak part is the Z axis, not the FSR: its play, the ~2 N before the rider lifts, the tip moving sideways as it tips. The strain gauge on the toolhead (above) is the next try at feeling the touch from the first gram.
+
+What we learnt:
+- **The sensor has to sit between the pen and the Z carriage**, below the Z play (1.67 per mm of press). Not in the tool's coupling: the tool sits on three pins in V-grooves and the key's ramp clamps it, so tool and toolhead are one body (the user's correction); the pen's push changes the pins' seating force by a fraction of the clamp's preload.
+- **The Z axis**: a printed Z plate (the rider, with inserts), the lead screw nut at one end, the toolhead (~200 g) in the middle, a slot riding the bare guide rail at the other end. Once the pen pushes harder than the toolhead and rider weigh at the pen (~2 N), the plate tips about the nut and the rail end lifts ~2x as far as the toolhead. Before that only the plastic bends (~0.04 mm per N at the tip: 4 µm for 10 g). The surfaces round the tip are 3-5 mm away, printed, on the carriage (fixed in Z).
+- **The cost of the give**: tipping moves the tip sideways along the screw–rail line, ~height below the pivot × angle: 40 mm × 0.006 rad (0.3 mm of lift on a 100 mm plate) ≈ 0.24 mm, probably in every plot where the press differs.
+- **Tried 2026-10-11, the carriage's MPU9250 as a tiltmeter**: 12 `ACCELEROMETER_QUERY` averaged per Z step (sd ~35-60 mm/s² a reading), the Stabilo over cell (1, 1) to 0.40 mm past touch: **no signal**, the mount tilts less than ~0.1°. The FSR flattened from ~0.25 mm past touch: the play giving at a constant force, or the sheet saturating. An accelerometer on the plate would show *where* the give is, not a fine touch; `ACCELEROMETER_MEASURE` (4000/s) has ~30x less noise per step than the query. Data: `~/limn-shot/acc-2026-10-11.*`.
+- **Sensors on the play** (QRE, Hall, switch, tilt) trigger only once the rider lifts, at ~2 N: too late for fine tips, unless a **counter-spring** carries most of the weight. Its force must not change over Z: a constant-force spring (3-6 mm wide, 0.5-2 N; ~1 N at the tip), or a long soft extension spring; not magnets or a counterweight. Then the tip floats up through the play at ~0.1-0.2 N, a big motion for a sensor.
+  - **A Hall at the rider's tip**: a 2x1 mm N52 disc on the tip, poles along Z; a DRV5055 (3.3 V, ratiometric, grade A1-A4 so the magnet doesn't saturate it) or an SS49E on the carriage wall. The field across its face crosses zero as they line up, ~linear ±1 mm, ~1 mV/µm (A1): a few µm averaged on a 12-bit ADC. During a steady descent the touch is a knee in time, no profile needed. The TMAG5273 (3-axis, angle) is a SOT-23-6, but its breakouts are too big here.
+  - **QREs at the tip** (the user's idea): a frame surface moves the whole Z travel (5-8 mm) past them, out of their ~0.5-4 mm range; they'd need a surface that follows Z without tipping. A top/bottom pair would cancel drift.
+  - Catches: the slot's friction on the bare rail (stick-slip: a smooth rod, PTFE or grease), the tip moving sideways as it lifts (~0.2 mm for 0.3 mm), rattle on fast moves.
+- **Strain gauges on a part that carries the load** feel the touch from the first gram, whatever the play does (pen → toolhead → plate → nut). On printed PETG the strain is ~30x aluminium's, but plastic creeps under the toolhead's weight, a gauge stiffens thin plastic, and its expansion (~70e-6/K) reads as strain: a half bridge on the same part and a tare right before each touch. Better: a small aluminium or steel strip printed into the rider as the load path, the gauges on it.
+- **A bar load cell** (TAL220 type) between rider and toolhead must lie flat (the force across its length, as in a scale): upright it reads almost nothing. It adds ~6-8 mm to the stack; a 500 g-1 kg cell, tared before each touch, ~0.1-0.5 g with an HX711; it gives ~0.1-0.2 mm at full scale.
+- **No**: the Z motor's current or StallGuard (`rotation_distance: 0.03125`: 1 N at the pen is ~0.017 N·mm at the shaft, ~0.1% of its torque, under the screw's friction; the driver holds the current constant anyway); a piezo (no impacts in this machine); an accelerometer as a jolt detector (too weak for a soft fineliner at slow speed).
+- **In a redesign**: make the give deliberate. A flexure hinge between the nut block and the plate, a light spring pre-loading the plate onto a stop on a stiff arm; the pen lifts it off above a set force, a switch or optical flag at the stop sees it (one digital pin; the user's slot sensors fit). ~0.2 mm of travel to the stop, so the tip barely moves sideways. Or a kinematic seat (Voron Tap) between the plate and the toolhead, with a counter-spring for ~0.1-0.3 N.
+- **Per tool**: a spring-loaded pen in each tool (a bushing, a light spring, a tiny magnet on its top end) and a Hall sensor in the key's tip reading it slide up. No electronics in the tools, each tool's spring its own force; costs a sliding fit and five rebuilt holders.
+- [ ] A kitchen scale on the bed under the Stabilo, Z down in 0.05 mm steps to 0.4 mm past touch: the grams where it stops rising is the force the rider lifts at, also what every plot presses at when Z is too low; it sizes a counter-spring. The same for a Micron 005: grams at first ink, grams where the line widens.
+- [ ] Draw one cross at 0.1 and one at 0.4 mm of press and compare: the sideways shift from the tipping.
+- [ ] Rough counter-spring test: a rubber band from the carriage to the tip; does the tip lift smoothly at a small force (a spring scale, coins on the pen)?
+- [ ] Bench Hall test: an analog Hall (SS49E/DRV5055) and a magnet on a spare ADC, the knee during a slow ladder.
+
+### Force at the tip: a flexure between toolhead and Z carriage
+
+An FSR behind the key would see the key's preload less the pen's push, and FSRs are poor at small changes on a big load (hysteresis, creep). It's only good for crashes. A strain-gauge load cell carrying the whole toolhead is better, but too big for this toolhead. The compact version is a flexure with a displacement sensor:
+
+- **Where**: between the toolhead and the Z carriage (which rides on Y). The Z carriage is the ground: bolt the flexure's fixed end to it and hang the toolhead from the moving end, so all of the pen's push goes through it. The Z play is between the carriage and the rails, further down, and doesn't disturb it. Nothing else may bridge toolhead and carriage (stiff cables, a second screw): a loose loop in the cables, strain relief on the carriage side. The toolhead's weight sits on it all the time: tare right before each pen-down.
+- **Shape**: a parallelogram, two thin parallel blades clamped at both ends. It moves straight up and down and stays stiff sideways, so the drawing's drag and off-axis moments hardly show. Keep the pen's axis near its middle.
+- **Blades**: spring steel shim (0.1-0.2mm, eg. feeler gauge stock) or FR4, clamped with screws. They're linear and don't creep. Printed blades (PETG over PLA) are fine to try but creep under the constant load.
+- **Stiffness**: each blade clamped at both ends is `12 E I / L^3`, with `I = b t^3 / 12`, so two blades give `k = 2 E b t^3 / L^3`. Aim for ~2-10 N/mm, so the pen's 0.2-2N moves it 0.05-0.5mm. Eg. steel (E = 200 GPa) b = 8mm, t = 0.1mm, L = 20mm: k = 2 x 200000 x 8 x 0.001 / 8000 = 0.4 N/mm, too soft: t = 0.2mm gives 3.2 N/mm. PETG (E ~ 2 GPa) b = 10, t = 1, L = 15: ~12 N/mm.
+- **An overload stop**: a hard stop ~0.5mm away, so a dock crash or a hand can't bend the blades past springing back.
+- **Sensor**: a magnet on the moving side, a Hall sensor on the ground side 1-2mm away (TMAG5273, I2C). Or the QRE1113 facing a white patch ~1mm away (analog, its best range: the right use for it). Or strain gauges on steel blades and an HX711.
+- **Calibrate**: known weights (coins) on the tool's tip give k; force = k x displacement.
+- **Ringing**: it adds give. With k = 5 N/mm and a 100g toolhead, `f = sqrt(k/m) / 2pi` ~ 35 Hz, vertical only (Z moves are slow). A little foam or rubber in the stop damps it.
+- **What it gives**: each pen's touch by probing with the pen (no ladder), the press by force instead of by height (and it gives a little, like a spring-loaded holder: it rides out the uneven height and the play), and crashes at the dock. In Klipper: a threshold is a probe endstop, and a small module reads the force.
+- Or inside each tool: a pen on a spring, a magnet and a Hall sensor, through the new pogo pins. It's per tool; the flexure covers all of them at once.
 
 ### Finding a tool's centre
 
@@ -245,78 +442,7 @@ The key sticks out ~7.5mm, so a QRE1113 anywhere on the carriage body is out of 
 - [ ] **The coupling as a sensor.** If each of the three contact pairs can be read on its own before power goes on, the order they close in, on the way into a holder, tells which way it tilts, and when they close tells its height.
 - A camera looking down (endoscope, tool camera) with a marker per tool also works, but is more work for this.
 
-### Force at the tip: a flexure between toolhead and Z carriage
-
-An FSR behind the key would see the key's preload less the pen's push, and FSRs are poor at small changes on a big load (hysteresis, creep). It's only good for crashes. A strain-gauge load cell carrying the whole toolhead is better, but too big for this toolhead. The compact version is a flexure with a displacement sensor:
-
-- **Where**: between the toolhead and the Z carriage (which rides on Y). The Z carriage is the ground: bolt the flexure's fixed end to it and hang the toolhead from the moving end, so all of the pen's push goes through it. The Z play is between the carriage and the rails, further down, and doesn't disturb it. Nothing else may bridge toolhead and carriage (stiff cables, a second screw): a loose loop in the cables, strain relief on the carriage side. The toolhead's weight sits on it all the time: tare right before each pen-down.
-- **Shape**: a parallelogram, two thin parallel blades clamped at both ends. It moves straight up and down and stays stiff sideways, so the drawing's drag and off-axis moments hardly show. Keep the pen's axis near its middle.
-- **Blades**: spring steel shim (0.1-0.2mm, eg. feeler gauge stock) or FR4, clamped with screws. They're linear and don't creep. Printed blades (PETG over PLA) are fine to try but creep under the constant load.
-- **Stiffness**: each blade clamped at both ends is `12 E I / L^3`, with `I = b t^3 / 12`, so two blades give `k = 2 E b t^3 / L^3`. Aim for ~2-10 N/mm, so the pen's 0.2-2N moves it 0.05-0.5mm. Eg. steel (E = 200 GPa) b = 8mm, t = 0.1mm, L = 20mm: k = 2 x 200000 x 8 x 0.001 / 8000 = 0.4 N/mm, too soft: t = 0.2mm gives 3.2 N/mm. PETG (E ~ 2 GPa) b = 10, t = 1, L = 15: ~12 N/mm.
-- **An overload stop**: a hard stop ~0.5mm away, so a dock crash or a hand can't bend the blades past springing back.
-- **Sensor**: a magnet on the moving side, a Hall sensor on the ground side 1-2mm away (TMAG5273, I2C). Or the QRE1113 facing a white patch ~1mm away (analog, its best range: the right use for it). Or strain gauges on steel blades and an HX711.
-- **Calibrate**: known weights (coins) on the tool's tip give k; force = k x displacement.
-- **Ringing**: it adds give. With k = 5 N/mm and a 100g toolhead, `f = sqrt(k/m) / 2pi` ~ 35 Hz, vertical only (Z moves are slow). A little foam or rubber in the stop damps it.
-- **What it gives**: each pen's touch by probing with the pen (no ladder), the press by force instead of by height (and it gives a little, like a spring-loaded holder: it rides out the uneven height and the play), and crashes at the dock. In Klipper: a threshold is a probe endstop, and a small module reads the force.
-- Or inside each tool: a pen on a spring, a magnet and a Hall sensor, through the new pogo pins. It's per tool; the flexure covers all of them at once.
-
-### The toolhead knows the contact: the options (2026-10-11 discussion)
-
-The rule for all of them: the sensor sits between the pen and the Z carriage, below the Z play (1.67 per mm of press), so the play doesn't blur the touch. One sensor on the toolhead covers every tool; one per tool means one per holder.
-- **A kinematic seat (Voron Tap, CNC touch probes).** The toolhead rests on the carriage on three balls or pins in V-grooves (or a rail), held down by its weight or a light spring. Wire the three contacts in series: the pen's touch lifts the toolhead a few µm off the seat and the circuit opens. One digital pin, no ADC; Klipper treats it as a probe. Seats like this repeat to ~µm. The trigger force is the preload: the toolhead's weight (~1N at 100g) is too much for a 0.05 tip, so a counter-spring takes most of it, down to ~0.1-0.3N. Or an optical slot-endstop flag in place of the contacts (Tap does that: contacts wear and spark). Gives the touch only, no force.
-- **The flexure + Hall sensor (above).** The same place, but it reads force: the touch *and* a press by force. Hall over I2C, or a strain-gauge bridge on the blades through an HX711/ADS1220 (two digital pins; Klipper has a `load_cell_probe` for this).
-- **A piezo in the stack.** A piezo disc under the seat or the flexure's clamp feels the moment of contact (printer piezo Z probes do this with grams). Through a comparator it's one digital pin. It needs a little speed at contact (a few mm/s) and gives no steady force.
-- **An accelerometer on the toolhead.** It feels the jolt of a touch, no mechanics. Too weak for a soft fineliner at slow speed: the last choice.
-- **The Z motor itself** (TMC StallGuard, current): needs far more force than a pen tip gives. No.
-- **Per tool:** the pen on a spring in its holder, the spring's travel read by a Hall sensor or a contact through the pogo pins. A spring-loaded pen also rides out uneven paper while drawing. One sensor per holder, and the pogo pins must carry it.
-- My order: the kinematic seat with a counter-spring (cheapest, digital, proven) if the touch alone is enough; the flexure with a strain gauge or Hall if limn should press by force. Either one replaces the FSR's z for every pen, and fine tips too.
-- **Correction (the user, 2026-10-11):** the tool already sits on three pins in V-grooves on the toolhead, and the key pulls it in with a ramp as it turns. After a dock tool and toolhead are one solid object: no seat to sense there. The sensing has to be in the Z axis.
-- **The Z axis as it is:** a Z plate with the lead screw nut at one end, the toolhead in the middle, a slot riding a guide rail at the other end. The rail end can move up and down a little. So when the pen pushes, the plate tips about the nut, and the rail end lifts about twice as far as the toolhead (it's twice as far from the nut). That give is the play measured on 2026-09-30, and the contact can be read from it:
-  - **An accelerometer as a tiltmeter** (not a jolt detector). Static, averaged readings at each step of a Z ladder: the angle stays flat in the air and starts to change at contact; the knee is the touch. Eg. a 100mm plate, 0.05mm of lift at the toolhead is 0.001 rad, 0.06°. An ADXL345 (~4 mg/LSB, noisy) needs heavy averaging to see that; an ADXL355 or a BMI270-class part sees it easily. Klipper reads accelerometers already (ADXL345, LIS2DW, MPU-xxxx; SPI or I2C). No mechanical change: the cheapest experiment.
-  - **A Hall sensor at the rail end, a magnet on the frame.** Z only moves 5-8mm, so the field against Z can be recorded once in the air; at contact the reading leaves that curve. Measures the lift directly, twice the toolhead's, at µm level. One I2C sensor (TMAG5273).
-  - **A switch at the rail end** works only against something that follows Z without tipping, and on this plate only the nut does. Possible in the redesign, see below.
-- **The cost of the give:** the pen hangs below the pivot, so tipping moves the tip sideways too, along the screw–rail line: about height below the pivot × angle. Eg. 40mm × 0.006 rad (0.3mm of lift on a 100mm plate) is ~0.24mm. It is probably in every plot already, where the press differs. To check: draw one cross at 0.1 and one at 0.4 mm of press and compare.
-- **In the redesign:** make the give deliberate instead of thread clearance. A flexure hinge between the nut block and the plate, a light spring at the rail end pre-loading the plate onto a stop on a stiff arm from the nut block. The pen lifts it off the stop above a set force (the spring sets it, ~2x at the toolhead's lever), a switch or optical flag at the stop sees it (one digital pin; the user's slot sensors fit there). Keep the travel to the stop small (~0.2mm) so the tip barely moves sideways. This is the flexure above, with the Z plate as its lever.
-- **Tried 2026-10-11, the carriage's MPU9250 (Klipper `[mpu9250]` on the Pi's software I2C; accelerometer only, Klipper doesn't read its gyro or magnetometer):** the Stabilo (T4) over FSR cell (1, 1), averages of 12 `ACCELEROMETER_QUERY` per Z step (one reading per query, ~1.3 s each, sd ~35-60 mm/s² a reading, so ~±12 a step, ~0.07°). Two ladders: to 0.16mm past the FSR's first touch (top cell 160), then to 0.40 past (Z3.85 → 3.35, top cell 232). **No signal**: x, y, z stayed within the noise at every step, so the MPU's mount tilts less than ~0.1° even at a 0.4mm press. Script and data: `~/limn-shot/acc-2026-10-11.py`, `.jsonl`.
-  - The FSR flattened from ~0.25mm past touch (227, 226, 229, 232 over 0.15mm more Z): either the force stops rising there (something gives at a constant force: the Z play, 1.67 per mm on 2026-09-30) or the loaded sheet saturates under a felt tip. If it's the play, the accelerometer isn't on the part that moves.
-  - So: the sensor has to sit on the Z plate (or the toolhead), where the give is, not on the carriage. And first find out *where* the give is: watch the Z plate's two ends (the nut end, the rail end) with a dial gauge or the axiscam during a 0.4mm press.
-  - The query path is too slow and noisy for a small knee: `ACCELEROMETER_MEASURE` (4000 readings/s into the Pi's /tmp, needs SSH to read) gives ~30x less noise per step.
-- **After the test (2026-10-11 discussion):**
-  - An ADXL345 on the Z plate is the same class of sensor as the MPU9250 (~0.3 mg/√Hz): it can show *where* the give is, not a fine touch. A tilt only shows once the plate lifts in its play, and that needs the pen to outweigh the toolhead: the FSR's flat top from ~0.25mm past touch is probably that point. So a sensor on the play (accelerometer, Hall, switch) triggers at about the toolhead's weight, too late for fine tips, unless a counter-spring takes most of the weight.
-  - Wiring one for I2C if wanted: VCC 3.3V, GND, **CS to VCC** (that selects I2C), **SDO to GND** (address 0x53; to VCC: 0x1D), SDA/SCL to the Pi's I2C1 (GPIO2/3, `dtparam=i2c_arm=on`, Klipper `[adxl345] i2c_mcu: rpi`, `i2c_bus: i2c.1`), or onto the MPU's software bus (gpio4/5, it's 0x68 so no clash). INT1/INT2 unused. Cheaper for the same answer: a dial gauge or the phone on the plate's two ends during a 0.4mm press.
-  - **What feels the touch from the first gram: a strain gauge on a part that carries the load.** Pen → toolhead → Z plate → nut: the plate is a beam held at the nut, and the pen's push bends it, from the first gram, whatever the play does. Glue two gauges (a half bridge: top and bottom face, or both on top along and across) on the plate next to the nut where the bending is largest, an HX711 (or ADS1220/HX717, faster) to two digital pins. Klipper has load cell support in recent versions (`[load_cell]`, a load-cell probe with tare and a trigger force: check what the Pi's Klipper has). No mechanical change; ~5 € of parts. How much it sees depends on the plate (material, thickness, the distance nut → toolhead): to estimate before buying.
-  - A piezo disc in place of a washer in the toolhead↔plate bolt joint: sees the moment of contact (grams), one comparator to an endstop pin, a washer swap. Needs some speed at contact, no steady force: the strain gauge is better if the plate gives enough strain.
-- **Follow-up (2026-10-11): the Z rider is printed, with inserts.** A piezo is out (no impacts in this machine).
-  - Strain gauges on a printed rider: ~30x the strain of aluminium (PETG E ~2 GPa), but plastic creeps under the toolhead's constant weight (a slow drift), a gauge stiffens the thin plastic it sits on, and plastic's thermal expansion (~70e-6/K) shows as fake strain: a half bridge on the same part cancels some, tare right before each touch the rest. Works in short touches, fiddly. Better: a small aluminium or steel strip printed into the rider as the load path, the gauges on the strip.
-  - **The user's idea: two QREs on the rider's far tip** (it moves most when the rider tips), looking at the carriage's walls by the rails; learn their readings against Z in the air, a reading off that curve while a tool is on = contact.
-    - The geometry decides it. The tip moves *up* when the rider tips, so a QRE has to face a surface across that motion (above or below the tip). A wall parallel to Z barely changes its distance when the tip lifts. And a surface fixed to the frame moves by the whole Z travel (5-8mm) relative to the tip: past a QRE's useful range (~0.5-4mm, very nonlinear). It works against a surface that follows Z and doesn't tip (a block on the guide rail, if there is one), or over a narrow Z band. A Hall sensor and a magnet do a 5-8mm range better.
-    - Top/bottom as a differential pair (one gap opens as the other closes) cancels the LED's drift, the temperature and the surface's shade, and doubles the signal. The learnt profile handles the rest.
-  - **The limit of any sensor on the play (QRE, Hall, switch, tilt):** the rider only lifts in its play once the pen pushes harder than the toolhead and rider weigh at the pen; before that only the plastic bends (estimate for a PETG rider ~30 x 8mm, the toolhead 50mm from the nut: ~0.04mm per N at its tip, 4µm for 10g, too small for a QRE). So these trigger at the weight, unless a **counter-spring** (or magnets) carries most of it and the rider lifts at ~10-20g. With that, a QRE or a switch at the tip sees a big, clear motion, Voron Tap's idea.
-  - [ ] First, a kitchen scale on the bed under the Stabilo, Z down in 0.05mm steps to 0.4mm past touch: the grams where it stops rising is the force the rider lifts at, also the force every plot presses at when Z is too low. It says how much a counter-spring must carry.
-  - **Answers (2026-10-11):** the surfaces round the tip are 3-5mm away, printed, on the carriage (fixed in Z); the slotted end rides on the bare rail (nothing there follows Z); the toolhead ~200g. So a QRE against those walls sees the whole Z travel (−3..10 in the config, 5-8 used) on top of the lift: out of its range except in a narrow band. With nothing following Z there, a Hall sensor on the tip and a magnet on the frame (its field against Z learnt in the air, as the user proposed for the QREs) covers the range. ~2N at the pen before the rider lifts on its own: a counter-spring is needed for fine pens either way.
-  - **Z motor current (an INA on its ~7V), the user's idea: no.** `rotation_distance: 0.03125` (printer.cfg): Z moves ~0.03mm per motor turn, so 1N at the pen is `F × lead / (2π × efficiency)` = 1 × 0.03125 / (2π × 0.3) ≈ 0.017 N·mm (0.017 mN·m) at the motor shaft, ~0.1% of a small stepper's torque, under the screw's friction. And the driver holds the coil current constant: the supply current hardly changes with load at 3mm/s, where back-EMF is tiny. StallGuard-type sensing has the same problem.
-  - **The design, detailed (2026-10-11):**
-    - **Hall:** one magnet on the carriage wall by the tip, a 3-axis Hall sensor (TMAG5273) on the tip: the tip's height against the carriage. The screw end's height is known from the steps. Tip against screw = the tilt: the user's "magnets as markers" idea, but one magnet does it. A ~10-15mm magnet magnetised along its length: the field's angle turns as the sensor passes (the TMAG computes it); angle ignores temperature and gap, ~10-20µm. A multi-pole strip (AS5311-type) would give µm, not needed.
-    - **No profile needed for a probe:** at a steady descent the field changes at a steady rate in the air; at contact the tip stops while the screw goes on, the field stops changing: a knee in time. A small MCU watching for it pulls an endstop pin: Klipper sees a plain probe.
-    - **Counter-spring:** gravity holds the tip at the bottom of its play, so now it lifts at ~2N at the pen. A spring at the tip carrying most of the weight leaves ~0.1-0.2N: contact at that force, then the tip floats up through the play (a big motion for the Hall). Also a constant pen force while plotting in the play, a spring-loaded holder for every tool. The tip is ~2x the toolhead's distance from the nut: ~1N, less the net force wanted (~0.9N). The force must not change over Z (the carriage end is fixed): a constant-force spring (steel tape, ~1N, ~10mm drum on the carriage), or a long soft extension spring (0.02 N/mm: 0.16N over 8mm, learnt). Not a counterweight (moving mass), not magnets (force against gap).
-    - **Catches:** friction of the slot on the bare rail adds to the trigger force and sticks-slips (smooth rod, PTFE or grease, clearance): the biggest unknown. The tip moves sideways as it lifts (~0.2mm for 0.3mm of lift): plot only slightly below contact (~0.05 lift, ~0.04 shift). A floating rider can rattle on fast moves: grease damps it, travel moves with the pen fully up avoid it. The play also bows front/back: the 3-axis sensor sees it, the in-air recording takes it.
-  - **At limn's scale (the carriage ~6cm wide), 2026-10-11:** no TMAG breakout. A 3-pin linear analog Hall, TO-92 or SOT-23: DRV5055 (3.3V, ratiometric, sensitivity grades A1-A4: pick the one the magnet doesn't saturate) or SS49E (3-6.5V, noisier). The TMAG5273 chip is a SOT-23-6 itself, only its breakout is big.
-    - **Magnet on the rider's tip, sensor on the carriage wall:** no wires on the moving rider. A 2x1mm N52 disc, poles along Z, passing the sensor's face: the field across the face crosses zero as they line up and is ~linear ±1mm round it. Put that zero in the band where pens touch. Rough numbers: ~10-20 mT/mm at ~2mm, DRV5055A1 ~66 mV/mT at 3.3V: ~1 mV/µm, a few µm with averaging on a 12-bit ADC. One axis: the front/back bow changes it too, so judge the knee, not the absolute value.
-    - **ADC: the Klipper RP2040 (`[mcu rpi]`) has GP26-GP29 (ADC0-3) free** (pinout.md §6), 3.3V like the DRV5055. Klipper has no generic ADC probe: a ladder (move, read, fit the knee) like the FSR's first, then maybe a small reader in ext/limn (the MCU's ADC through `setup_adc`, the knee on the host: ~10-20µm late at 0.5 mm/s). The Melzi's free thermistor inputs (PA6/PA7, with 4.7k pull-ups to 5V on the board) would also do, less well.
-    - Counter-spring at this size: a small constant-force spring (3-6mm wide, ~6mm drum, 0.5-2N exist), or a rubber band to try.
-  - **A bar load cell between the rider and the toolhead (the user's question, 2026-10-11):** a bar cell (TAL220-type, the kitchen-scale kind) is a cantilever: one end bolted, the force on the other end *across* its length (along its bolt holes), as in a scale: bar flat, weight down. Its two-hole "binocular" cut-out rejects moments and loads along its length, so mounted with its length vertical (the pen pushing along it) it reads almost nothing. It has to lie flat: one end on the rider, the toolhead hanging from the other, a small gap between them. So it adds its thickness to the stack (the small ones ~6-8mm square, ~35-50mm long, sizes to check). It carries the toolhead all the time: a 500g-1kg cell, tared before each touch; with an HX711 ~0.1-0.5g. It gives under load (~0.1-0.2mm at full scale): fine. Or a custom cell: gauges on a thin metal plate shaped as the rider↔toolhead mount (above).
-  - **The kinematic coupling and the key:** clamped by the key's ramp, tool and toolhead are one body: the pen's push changes the pins' seating force by a fraction of the clamp's preload, too little to read. What they can do:
-    - **Seating:** each metal pin bridging two contacts in its V-groove: three circuits, so seated, tilted or dirty is known per pin (the *coupling as a sensor* item above).
-    - **Wires to the tool:** three pins, three conductors (GND, power, signal), if anything in a tool needs them.
-    - **The key hole as a window into the tool:** a sensor in the key's tip (wired through its limited turn) looking down into the tool. With a *spring-loaded pen* in each tool (the pen sliding in a bushing on a light spring, a tiny magnet on its top end), a Hall sensor in the key reads the pen sliding up at contact. No electronics in the tools; each tool's spring sets its own force (light for a 0.05 liner, firmer for a felt tip), and it draws at that force. Costs: a sliding fit in printed parts (wobble in XY, friction), five holders to rebuild, the pen's top end has to be under the key.
-  - **Where the discussion ended (2026-10-11):** the FSR stays. It's the only option here that gives XY and z in one spot, for every tool, with no change to the toolhead; each toolhead option costs mechanical work and gives z only. What the exploration showed is that the weak part is the Z axis (the play, the ~2N lift, the tip moving sideways as it tips), not the FSR. Next: relax the FSR's press limits now the loads are in (a press aimed at a force), re-probe the Micron Blue; the kitchen-scale test for the force the rider lifts at. A toolhead sensor (counter-spring + Hall) only if constant-force drawing or contact over the whole paper turns out to be needed.
-  - [ ] Rough counter-spring test: a rubber band or soft spring from the carriage to the tip; does the tip lift smoothly at a small force (spring scale, coins on the pen)?
-  - [ ] Bench Hall test: an analog Hall (SS49E/DRV5053) and a magnet on a spare ADC of a bench MCU, the knee during a slow ladder; then a TMAG5273.
-  - [ ] The rider's geometry: what the slotted end rides on (a block on the rail that follows Z, or the bare rail), the gap at the tip top and bottom, the masses.
-- [ ] First, free: the plate's tilt on a Z ladder with an accelerometer (an ADXL345 if one is around, or the camera watching the rail end): does a knee show at contact, and does it agree with the camera ladder for the Micron 005 and the Blue?
-- [ ] Before choosing: how the toolhead hangs on the Z carriage now, and the room there; whether a free digital pin (seat) or I2C (Hall) is on the toolhead or the Klipper board; the force a Micron 005 draws well at (a kitchen scale under the pen: grams at first ink, grams where the line widens).
-
-### Power and data through the coupling
+### The coupling: power and data to the tool
 
 5V, GND, 5 data pins (pogo), the metal coupling as a power path. Power off until needed, turned on like the bed's: two pogo pins bridged by the tool.
 - [ ] Order: the pogo pins touch before the coupling (ground). Turn the power on only when the bridge is seen *and* the key is locked, not on the bridge alone.
@@ -365,45 +491,11 @@ The coupling's third contact to GND through a resistor in the tool, a pull-up on
 - **Settle, then believe it.** The contacts chatter while the balls seat: accept a type only after it reads the same band for ~100 ms, after the key is locked. A value between bands for long = a fault, not a type.
 - **"Bare bridge" as the default is ambiguous**: if the coupling's metal is the ground path, an ID contact touching the frame also reads 0 Ω. Better: the default tool gets a resistor too (type 1), and 0 Ω means "check the toolhead".
 - **No tool and a broken wire both read open.** Cross-check with the holder switches (MCP23017): a tool on the head ⇔ its holder empty. A mismatch stops the tool change.
-- [ ] Which MCU reads it: the Klipper RP2040 (`rpi`, GPIO 26-28 free) is the better choice. The tool change runs in Klipper macros, so a small `ext/limn` module reading the pin with Klipper's `adc` (like `adc_scaled`) gives `printer.limn.tool_id` straight to `_DOCK_TOOL`. The Dock (GP26-28 free) would work too, through `!LRT>>` lines, but it's the bed's MCU and its loop is time-critical.
+- [ ] Which MCU reads it: the toolhead MCU (2026-10-12 plan; before it, the `rpi` RP2040 with GPIO 26-28 free). The tool change runs in Klipper macros, so a small `ext/limn` module reading the pin with Klipper's `adc` (like `adc_scaled`) gives `printer.limn.tool_id` straight to `_DOCK_TOOL`. The Dock (GP26-28 free) would work too, through `!LRT>>` lines, but it's the bed's MCU and its loop is time-critical.
 - [ ] If the third contact is the 1-Wire line (electronics.md: 3 V, GND, 1-Wire): a resistor to GND kills 1-Wire (it idles high through ~4.7k). One or the other on that pin: the resistor gives presence + type; the DS2431 gives type + offsets, but no presence until it answers.
 - [ ] More than ~24 types: a second ID pin (16 × 16), or combine with the tag (the resistor says "a pen", the tag says which).
 
-### Power budget of the 5V through the coupling (2026-09-30)
-
-Typical, at 5V (check the real modules):
-
-| Load | Typical | Peak |
-|---|---|---|
-| USB camera | 0.1-0.2 A | 0.3 A (autofocus, IR LEDs) |
-| Bright LED | 0.1-0.2 A (0.5-1 W) | the same |
-| BLTouch | 15 mA | ~0.3 A while its pin moves |
-| MCUs | RP2040 ~30 mA, ESP32 ~0.25 A | ESP32 Wi-Fi bursts ~0.5 A |
-| "1 W" laser module | 1-1.5 A if 1 W *optical*; ~0.2 A if 1 W drawn | the same |
-| Pi Zero 2 W + HQ camera (stress case) | 0.6-0.9 A | 1.0-1.3 A booting, loaded |
-
-Worst case ~1.3 A going on and on.
-- [ ] **PTC**: hold 1.5-1.6 A (it holds less warm, a toolhead is warm), trip ~3 A, 6V or more, 0.1 ohm or less, 1812. It trips in seconds: it saves the wiring from a lasting short, not the electronics from a sliding pin.
-- [ ] **Or an e-fuse** (TPS2595 family): limit set to ~2 A, trips in microseconds, soft start for a camera's or a Pi's inrush. It does the PTC's job and more, in one chip.
-- [ ] **Voltage**: the Pi Zero warns under ~4.63V. PTC + pogo pins + wire can take ~0.3V at 1.3 A: feed the toolhead 5.1-5.2V, and two pogo pins in parallel for 5V if one is rated under ~2 A.
-- [ ] **Wire gauge** (2026-10-01): 26 AWG ~0.134 ohm/m (chassis rating ~2.2 A), 30 AWG ~0.34 ohm/m (~0.86 A). A wire's rating is about heat. A 30 AWG piece only a few cm long can carry more than its rating, because the thicker wire and connectors at both ends draw the heat away. Past ~5-10 cm, its middle runs as hot as a long 30 AWG wire. Derate in a packed cable chain next to stepper wires; in the moving part, use high-flex stranded wire (thin wire fatigues).
-- [ ] **Voltage drop matters more than heat at 5V**: the GND wire carries the same current, so count the run twice. 1 m of 26 AWG each way at 1.3 A: ~0.35 V; plus 10 cm of 30 AWG each way: ~0.09 V more. That's already under the Pi Zero's 4.63V with 5.0V in. Better: send 24V (or 12V) down the chain and buck to 5V on the toolhead: ~5x less current: 5x less drop (and a far smaller share of 24V), ~25x less heat in the wire.
-- **Cable chain** (2026-10-01, guesses: 26 AWG, ~1 m, Z NEMA 8 ~0.6 A/phase, K micro linear stepper ~0.2 A/phase): heat per metre in W/m.
-
-  | Wires | Current | Heat |
-  |---|---|---|
-  | Z, 4 wires | 0.6 A | ~0.19 W/m |
-  | K, 4 wires | 0.2 A | ~0.02 W/m |
-  | Tool 5V + GND, 1 pair | 1.3 A | ~0.45 W/m |
-  | Tool 5V + GND, doubled | 0.65 A per wire | ~0.23 W/m |
-  | USB-C, endstops, sensors, accelerometer | mA | ~0 |
-
-  ~0.65 W/m in all at worst. The hottest wire (single 5V) makes ~0.23 W/m, about a third of what a 26 AWG wire makes at its 2.2 A rating, in an open, ventilated chain that keeps moving: heat is no problem, and more wires are fine thermally. The limits are the chain's fill (≤ ~60-70% so wires can slide), bend radius/flex life, and noise.
-  - [ ] Double 5V *and* GND (2 wires each): the drop halves (~0.17V instead of ~0.35V over 1 m at 1.3 A, the 30 AWG piece doubled too), and so does the heat. Or a higher rail and a buck on the toolhead, if the box has one.
-  - [ ] Noise: the stepper wires carry chopper PWM (tens of kHz, fast edges). Keep them in their own ribbons. In the sensor/accelerometer ribbon, put a GND between signal wires (I2C/SPI over ~1 m next to steppers glitches); lower I2C speed or SPI if it does. The endoscope: decoder board on the toolhead, only USB through the chain, never the analog VOUT next to the steppers.
-  - [ ] Don't tie the USB-C's VBUS to the tool 5V line: two supplies feeding each other. Share GND only.
-- LED draw: ~3.0V × 350 mA ≈ 1.05 W (700 mA ≈ 2.1 W). From 24V through a buck driver (~85%): ~50 mA (~100 mA at 700). From 5V: ~0.25 A through a buck, 0.35 A through a linear driver (it draws the LED's current). On only per tile: ~30% average over a scan.
-- The 5 W laser and the milling spindle: always tethered, their own supply and their own interlock, never through the coupling.
+## Endoscope (the 2026-10-01 notes; the live work is in limn_endoscope)
 
 ### Endoscope camera and its adapter (2026-10-01)
 
@@ -477,6 +569,8 @@ Goal: a few raw frames on demand from several probes, no decoder boards. One RP2
   - [ ] 3. The mux and a second probe; switching settles in a few frames (exposure), so drop those.
   - [ ] 4. limn_cam integration; the LED on only for the snapshot (see light above).
 - To order: 2× AD9226 module (one spare), Pico 2 (or RP2350B board for spare pins), an ADG704-class mux, load switches for probe VDD, an SMA/u.FL pigtail or short coax for VOUT, a cheap logic analyser if there isn't one.
+
+## Beyond pens
 
 ### Uses beyond pens (2026-09-30 brainstorm)
 

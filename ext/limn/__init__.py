@@ -209,6 +209,9 @@ class Limn:
             ('LRT_FSR_SURVEY', self.cmd_FSR_SURVEY,
              "LRT_FSR_SURVEY [CLEAR=1]: press every cell of the FSR with the carried tool (a felt tip), "
              "find the faulty and weak ones, the noise, an aim; saved and used by every measurement after"),
+            ('LRT_FSR_CLEAN', self.cmd_FSR_CLEAN,
+             "LRT_FSR_CLEAN: park the carried tool and wait for the FSR sheet to be wiped (before the BLTouch "
+             "probes it: ink holds the probe up)"),
             ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
              "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
@@ -411,6 +414,25 @@ class Limn:
 
         fsr.before_measure, fsr.after_measure = before, after
 
+    def _wipe_sheet(self, gcmd, bed, routine=None):
+        '''The carried tool parked, wait for the FSR sheet to be wiped by hand (fsr.py, wait_clean).'''
+        try:
+            (routine or self._routine(gcmd, bed)).wait_clean()
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        self._fsr_last = None
+
+    def _clean_for_bltouch(self, gcmd, routine=None):
+        '''The BLTouch is about to probe the FSR sheet: ink a tool's taps left on it can hold
+        the probe up, the sheet reads high (the user's point, 2026-10-12). Wiped first when a
+        tool touched it since it was last wiped (CLEAN=0: not). Unknown after a restart.'''
+        bed = BEDS.get(self.bed)
+        if not self._fsr_last or not bed or bed['sensor'] != 'fsr' or not gcmd.get_int('CLEAN', 1):
+            return
+        gcmd.respond_info(f"[LRT] Tool {self._fsr_last} left ink on the FSR sheet and the BLTouch probes it next: "
+                          f"wipe it first")
+        self._wipe_sheet(gcmd, bed, routine)
+
     # Meshes: of this placement of the bed (placement.py)
     def _bed_meshes(self, gcmd):
         '''The meshes of the bed on the plotter, the whole bed without one.'''
@@ -493,6 +515,9 @@ class Limn:
         if key is None:
             raise gcmd.error("[LRT][Mesh] the bed has only just been placed, try again in a moment")
         carried = self._guess_carried(gcmd, '[Mesh]')
+        surface = (BEDS.get(self.bed) or {}).get('fsr', {}).get('surface_mesh')
+        if any(m['profile'] == surface for m in meshes):
+            self._clean_for_bltouch(gcmd)
         for mesh in meshes:
             gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
             if 'origin' in mesh:
@@ -855,8 +880,10 @@ class Limn:
             self._run_meshes(gcmd, bed['meshes'], rebase=False)
         else:
             gcmd.respond_info("[LRT][Mesh] The meshes are of the bed as it sits: using them (MESH=1 to take new ones)")
+        routine = self._routine(gcmd, bed)
+        self._clean_for_bltouch(gcmd, routine)
         try:
-            profile = self._routine(gcmd, bed).calibrate()
+            profile = routine.calibrate()
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         self._save_profile(profile)
@@ -887,6 +914,7 @@ class Limn:
             if tuple(c[:3]) == cell:
                 return c[3]
         carried = self._guess_carried(gcmd, '[FSR]')
+        self._clean_for_bltouch(gcmd, fsr)
         run = self.gcode.run_script_from_command
         run("UNDOCK")
         z = fsr.bltouch_z(cell)
@@ -1056,6 +1084,11 @@ class Limn:
         self._survey_said = None
         gcmd.respond_info(f"[LRT][Survey] saved for {self.bed}: LRT_CALIBRATE and LRT_PROBE_TOOL go by it "
                           f"(SURVEY=0: not; LRT_FSR_SURVEY CLEAR=1: drop it)")
+
+    def cmd_FSR_CLEAN(self, gcmd):
+        '''The FSR sheet wiped by hand, the carried tool parked away from it meanwhile.'''
+        self._wipe_sheet(gcmd, self._bed(gcmd, 'fsr'))
+        gcmd.respond_info("[LRT] The FSR sheet is clean: the BLTouch can probe it")
 
     def cmd_FSR_MATRIX(self, gcmd):
         '''The bed's arrays in matrix mode for SECONDS: what arrives, per hop. Nothing moves.'''

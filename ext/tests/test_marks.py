@@ -411,6 +411,34 @@ def test_fsr_bltouch_z_puts_the_tool_away():
     assert p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), Fsr(), (1, 1, 3)) == 4.2
     assert p.gcode.scripts[:2] == ['UNDOCK', 'DOCK T=42'] and p.undocked == [42] and p.docked == [42]
 
+def test_an_inked_sheet_is_wiped_before_the_bltouch_probes_it():
+    p = plotter(carried=42, bed=reply('BED_5'))
+    p.ext._read_bed_id(FakeGcmd(p.gcode, {}))
+
+    class Fsr:
+        wiped = 0
+
+        def wait_clean(self):
+            self.wiped += 1
+
+        def bltouch_z(self, cell):
+            return 4.2
+
+    fsr = Fsr()
+    p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), fsr, (1, 1, 6))
+    assert fsr.wiped == 0                           # nothing touched the sheet yet
+    p.ext._fsr_last = 42
+    p.ext._fsr_bed_z(FakeGcmd(p.gcode, {'CLEAN': 0}), fsr, (1, 1, 6))
+    assert fsr.wiped == 0 and p.ext._fsr_last == 42
+    p.ext._fsr_bed_z(FakeGcmd(p.gcode, {}), fsr, (1, 1, 6))
+    assert fsr.wiped == 1 and p.ext._fsr_last is None and p.said('left ink on the FSR sheet')
+    # Meshing the sheet (lrt_fsr) too
+    wipes = []
+    p.ext._wipe_sheet = lambda gcmd, bed, routine=None: wipes.append(bed['sensor'])
+    p.ext._fsr_last = 42
+    p.run('LRT_MESH_CALIBRATE')
+    assert wipes == ['fsr'] and 'lrt_fsr' in p.meshed
+
 def test_the_sheet_is_wiped_between_pens():
     p = plotter(carried=42, bed=reply('BED_5'))
     gcmd = FakeGcmd(p.gcode, {})

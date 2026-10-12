@@ -387,7 +387,9 @@ def test_taps_press_only_as_deep_as_needed():
     left marks (2026-09-29): a felt tip presses until press_strength, a fine
     tip as deep as it needs, never more than `press` past contact.'''
     def deepest(cfg=None, **kw):
-        cfg = cfg or bed_cfg()
+        # Two edges an axis: the second ones tap at the depth found on the z cell
+        cfg = {**(cfg or bed_cfg()), 'x_edges': [(1, (1, 1), (2, 1)), (1, (1, 2), (2, 2))],
+               'y_edges': [(1, (1, 1), (1, 2)), (1, (2, 1), (2, 2))]}
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), **kw)
         profile = fsr.calibrate()
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.35, -0.2), **kw)
@@ -891,6 +893,33 @@ def test_the_loaded_sheet():
     bed.tool = 'T4'
     _, _, ref_dz = fsr.probe_tool(profile)
     assert 0.4 - 0.08 < dz - ref_dz < 0.4 + 0.01, (ref_dz, dz)
+
+
+def test_each_edge_finds_its_own_depth_once_the_tip_is_known():
+    '''2026-10-11/12: the depth was found on locate's estimate, half a cell out, on a border's dead
+    zone: the felt tip never reached press_strength there, every tap went the whole 0.2, and the cells
+    pressed most went dead. Found on the strongest cell, (1, 6), it was 0.02 and the weaker (2, 5)|(3, 5)
+    had taps on the wrong side. Now the edges go X, Y, X, Y; the first X and Y tap at locate's depth,
+    each after them at its own: on its two cells' centres as the edges before put the tip, the
+    weaker cell's.'''
+    cfg = loaded_cfg()
+    for tip in ((0.0, 0.0), (-1.3, 0.95)):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, gain=1350, top=230)
+        fsr.press_cap = 0.2
+        calls, find_edge, depth_on = [], fsr.find_edge, fsr.depth_on
+        fsr.find_edge = lambda edge, *a, **k: calls.append(('edge', edge)) or find_edge(edge, *a, **k)
+        fsr.depth_on = lambda hop, xy, z, cell=None: calls.append(('depth', cell, xy)) or depth_on(hop, xy, z, cell)
+        bed_z = fsr.probe_bed_z()                  # the carriage empty
+        bed.tool = 'T4'
+        m = fsr.measure(bed_z)
+        x, y = cfg['x_edges'], cfg['y_edges']
+        assert [c[:2] for c in calls] == [('edge', x[0]), ('edge', y[0]),
+                                          ('depth', x[1][1]), ('depth', x[1][2]), ('edge', x[1]),
+                                          ('depth', y[1][1]), ('depth', y[1][2]), ('edge', y[1])], calls
+        for _, cell, xy in (c for c in calls if c[0] == 'depth'):
+            mid = np.asarray(fsr.array(1).center(*cell)) - np.asarray(m['tip'])
+            assert np.abs(np.asarray(xy) - mid).max() < 0.05, (tip, cell, xy, mid)
+        assert 0.04 <= fsr.depth[1] <= 0.12, (tip, fsr.depth)          # a felt tip mid cell: not the cap
 
 
 def test_a_crosstalk_cell_leading_at_first_touch_doesnt_push_contact_down():

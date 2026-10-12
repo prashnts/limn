@@ -600,14 +600,14 @@ class Fsr:
                 break
         return depth
 
-    def depth_on(self, hop, xy, z):
-        '''press_depth() with the toolhead at xy, from its contact z there: the strongest cell,
-        whichever it is (the tip is only known to half a cell yet).'''
+    def depth_on(self, hop, xy, z, cell=None):
+        '''press_depth() with the toolhead at xy, from its contact z there: on `cell`, or the
+        strongest cell, whichever it is (the tip only known to half a cell).'''
         with lifted_on_error(self.machine, self.cfg['z_park']):
             self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
             self.machine.move(float(xy[0]), float(xy[1]))
             self.machine.move(z=z, speed=JOG_SPEED)
-            depth = self.press_depth(hop, None, z)
+            depth = self.press_depth(hop, cell, z)
             self.machine.move(z=z + self.cfg['back_off'], speed=JOG_SPEED * 5)
         self.machine.say(f"[LRT] at X{xy[0]:.3f} Y{xy[1]:.3f} the taps press {depth:.2f}mm")
         return depth
@@ -851,44 +851,52 @@ class Fsr:
 
         def over(hop, cell):
             '''-> (contact z, toolhead xy) over a cell's centre: the tip found on this array
-            first, and the taps' depth there.'''
+            first (the taps press as deep as locate's until the tip is known, see below).'''
             if hop not in found:
                 shift, z, at = self.locate(hop, next(v for c, v in bed_z.items() if c[0] == hop), prior)
-                found[hop] = {'shift': shift, 'z': z, 'at': at}
-                # The taps' depth on the z cell, or where it touched when that doesn't get there
-                # (the tip half a cell off it yet): either may be a weak cell (BED_5's (2, 4) tops
-                # out at ~220, never press_strength: the taps all went the whole press)
-                z_at, xy = over(hop, self.z_cell_of(hop))
-                self.depth[hop] = self.depth_on(hop, xy, z_at)
-                if self.depth[hop] >= (self.press_cap or cfg['press']) - 1e-9:
-                    self.depth[hop] = min(self.depth[hop], self.depth_on(hop, at, z))
+                found[hop] = {'shift': shift, 'z': z, 'at': at, 'axes': set()}
             f = found[hop]
             xy = np.asarray(self.array(hop).center(*cell), float) - f['shift']
             return f['z'] + self.follow(xy, f['at']), xy
 
+        # X, Y, X, Y: each edge after the first goes by the tip as the edges before found it (both
+        # X edges on locate's Y missed their first lines, 2026-10-11)
+        x_edges, y_edges = list(cfg['x_edges']), list(cfg['y_edges'])
+        order = [(axis, edges[i]) for i in range(max(len(x_edges), len(y_edges)))
+                 for axis, edges in (('x', x_edges), ('y', y_edges)) if i < len(edges)]
         if self.before_measure:
             self.before_measure()
         self.matrix(True)
         try:
             points, gaps, sigmas, tips = {'x': [], 'y': []}, [], {'x': [], 'y': []}, {'x': [], 'y': []}
-            for axis, edges in (('x', cfg['x_edges']), ('y', cfg['y_edges'])):
-                for edge in edges:
-                    hop, cell_a, cell_b = edge
-                    z_a, xy_a = over(hop, cell_a)
-                    point, gap, sigma = self.find_edge(edge, z_a, found[hop]['shift'], at=xy_a)
-                    points[axis].append(point[0 if axis == 'x' else 1])
-                    gaps.append(gap)
-                    sigmas[axis].append(sigma)
-                    # The tip is on that border with the toolhead at `point`: its offset across
-                    # the border, exactly, for what comes next
-                    array = self.array(hop)
-                    ca, cb = (np.asarray(array.center(*c), float) for c in (cell_a, cell_b))
-                    u = (cb - ca) / np.linalg.norm(cb - ca)
-                    s = found[hop]['shift']
-                    tips[axis].append(float(np.dot((ca + cb) / 2 - point, u)))
-                    found[hop]['shift'] = s + (tips[axis][-1] - np.dot(s, u)) * u
-                    self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} ±{sigma:.3f} gap={gap:.3f}, "
-                                     f"the tip {tips[axis][-1]:.3f} across it")
+            for axis, edge in order:
+                hop, cell_a, cell_b = edge
+                z_a, xy_a = over(hop, cell_a)
+                f = found[hop]
+                # The taps' depth, once an X and a Y edge put the tip to ~0.01: this edge's own, on
+                # the centres of its two cells, the weaker one's. Found on locate's estimate before,
+                # half a cell out, it was often on a border's dead zone: every tap the whole 0.2, and
+                # the cells pressed most went dead ((0, 2), (1, 1), (1, 2), 2026-10-12). Found on the
+                # strongest cell (1, 6), 0.02: the weaker (2, 5)|(3, 5) had taps on the wrong side,
+                # its sigma 0.37-0.57. Each from that cell's own contact estimate, as the taps go.
+                if f['axes'] >= {'x', 'y'}:
+                    z_b, xy_b = over(hop, cell_b)
+                    self.depth[hop] = max(self.depth_on(hop, xy_a, z_a, cell_a),
+                                          self.depth_on(hop, xy_b, z_b, cell_b))
+                point, gap, sigma = self.find_edge(edge, z_a, found[hop]['shift'], at=xy_a)
+                points[axis].append(point[0 if axis == 'x' else 1])
+                gaps.append(gap)
+                sigmas[axis].append(sigma)
+                # The tip is on that border with the toolhead at `point`: its offset across
+                # the border, exactly, for what comes next
+                array = self.array(hop)
+                ca, cb = (np.asarray(array.center(*c), float) for c in (cell_a, cell_b))
+                u = (cb - ca) / np.linalg.norm(cb - ca)
+                tips[axis].append(float(np.dot((ca + cb) / 2 - point, u)))
+                f['shift'] = f['shift'] + (tips[axis][-1] - np.dot(f['shift'], u)) * u
+                f['axes'].add(axis)
+                self.machine.say(f"[LRT] {axis} edge {edge}: {point.round(3)} ±{sigma:.3f} gap={gap:.3f}, "
+                                 f"the tip {tips[axis][-1]:.3f} across it")
             z_top, _ = over(z_hop, (z_row, z_col))
             z, sigma_z = self.contact_z(z_hop, z_row, z_col, bed_z[tuple(cfg['z_cell'])], found[z_hop]['shift'],
                                         z_top + cfg['back_off'], prior)
@@ -912,11 +920,6 @@ class Fsr:
             'sigma': {'x': mean('x'), 'y': mean('y'), 'z': sigma_z},
             'edge_tips': tips,
         }
-
-    def z_cell_of(self, hop):
-        '''The cell the taps' depth is found on, on this array: the z cell, or its array's aim.'''
-        h, row, col = self.cfg['z_cell']
-        return (row, col) if h == hop else tuple(int(v) for v in self.arrays[hop]['aim'])
 
     # Between pens
     def wait_clean(self):

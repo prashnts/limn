@@ -15,7 +15,9 @@ LRT_CALIBRATE              ; the reference pen, in holder 45: a felt tip (a Stab
 LIMN_TOOL_CALIBRATE T=41   ; each other pen: its DX DY DZ go onto its tag. Wipe the sheet when it beeps
 ```
 
-Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 6), then two edges in X and two in Y, on the sheet's strong cells (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`): each axis is their mean, and how far apart they put the tip goes into its ±. The taps press until the cell reads `press_strength` (a felt tip ~0.1 mm in), 0.2 mm past contact at most, less for a pen whose `press_max` in `plot/profiles/pens.toml` is less; each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
+Nothing to pass. Each measurement finds where the pen's tip is (`locate()`), its contact on the measuring cell (1, 6), then two edges in X and two in Y, in turns (X, Y, X, Y), on the sheet's strong cells (`z_cell`, `x_edges`, `y_edges` in `ext/limn/beds.py`): each axis is their mean, and how far apart they put the tip goes into its ±. The first X and Y edges tap as deep as locate did; once they have put the tip, each edge after them finds its own depth on its two cells' centres, the weaker cell's. The taps press until the cell reads `press_strength` (a felt tip ~0.1 mm in), 0.2 mm past contact at most, less for a pen whose `press_max` in `plot/profiles/pens.toml` is less; each tool says how deep. `PRESS=` sets it by hand. `LRT_FSR_MEASURE` measures the same way but writes nothing: to try a pen first.
+
+The sheet is wiped by hand between pens, and before the BLTouch probes it (meshing `lrt_fsr`, the calibration's bed z) once a tool has touched it: ink can hold the probe up, and the sheet reads high. It beeps and waits until a few cells have been pressed and released. `LRT_FSR_CLEAN` asks for a wipe any time; `CLEAN=0` on a command skips it. After a restart nothing is known of the sheet, so nothing is asked: wipe it then with `LRT_FSR_CLEAN`.
 
 After a sensor swap:
 
