@@ -39,17 +39,21 @@ What the sheet does, measured on 2026-10-07 (`ext/tests/test_fsr.py` simulates i
 
 After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
 
-On BED_5 the marks run down the paper's long side (Y) in two columns, starting at its top-left corner as the IR Top camera sees it (high X by the dock, high Y), 10 mm apart (`marks` in `ext/limn/beds.py`: `start`, `step`, `rows`, `cols`, `col_gap`, `arm`). Beside each `└`, in the quarter no corner uses, one short tick per holder number tells which holder the pen came from: one for 41, five for 45 (`ticks`).
+**The sheet** (BED_5, `marks` in `ext/limn/beds.py`, `geometry.sheet_layout`): after its calibration each pen purges, then draws its mark.
+- *The purge*: an L along the sheet's low X and low Y edges, a quarter of it (13 mm wide). Each pen draws a line the full length of each band, side by side with the other pens' (1 mm apart, then halfway between), and a circle round the corner's centre (0.5 mm apart, then halfway): its ink flows before the mark, a long line shows the mesh (thin or skipping where the paper sits high or low), and two pens' lines that aren't evenly spaced, or circles that aren't concentric, show their offsets apart. Room for 21 pens.
+- *The marks*: on a 10 mm grid from the top-left corner as the IR Top camera sees it (high X by the dock, high Y), down Y, columns towards −X, then on the grid shifted 5 mm both ways: 123 marks. Beside each `└`, in the quarter no corner uses, one short tick per holder number (one for 41, five for 45).
+- Everything stays on the `lrt_paper` mesh with any offsets a tag may have (±5 mm): the sheet's `area` is the mesh less 5 mm all round.
+- *Full* (the purge or the marks): nothing stops. The pen goes on over the first slots, the console says so, and the plot UI (*Machine* → *Sheet*) and the LEDs (a page icon) say the sheet is full. `LRT_MARKS` says how full it is; a new sheet, then `LRT_MARKS RESET=1` (*New sheet*). A bed placed again starts a new sheet too.
 
 `LRT_MARK` draws the next mark by hand with the carried pen, to try how deep it should go:
 - `LRT_MARK`: as a calibration draws it, at Z1 with the tag's dz.
 - `LRT_MARK TRIM=0.4`: as if the tags had been written with a trim of 0.4 (`DZ_TRIM`, mm past first touch). A tag's dz is the pen's first touch less the calibration's trim, so the pen goes down to Z1 − (0.4 − that trim): with the usual 0.3, Z0.9.
 - `LRT_MARK Z=0.9`: the pen-down G-code Z as is (lower is deeper). Between 0.3 and 2.0.
 
-Each one moves on to the next slot. Once a trim looks right, calibrate again with it (`LRT_CALIBRATE DZ_TRIM=`), so the reference's tag and every pen's after it carry it.
+Each one purges and moves on to the next slot. Once a trim looks right, calibrate again with it (`LRT_CALIBRATE DZ_TRIM=`), so the reference's tag and every pen's after it carry it.
 
 Nothing is probed or drawn when a pen could hit the bed or the tools:
 - Meshing puts the carried tool away first (`UNDOCK` in the `BED_MESH_CALIBRATE` macro). Empty holders are normal. With no tool saved as carried, the key locked (the `axis_k` endstop open) and exactly one holder empty, that tool is taken as the carried one and put away. With the key open, nothing is guessed: keeping the carriage empty is up to you.
-- A mark is only drawn with a carried tool, with a paper mesh of this placement, inside that mesh and short of the holders (`MARKS_MAX_X`), and with sane offsets on its tag (`TOOL_MAX_DXY`, `TOOL_DZ`). The pen travels at the beds' travel height and comes down only over the mark.
+- A purge and mark are only drawn with a carried tool, with a paper mesh of this placement, inside that mesh and short of the holders (`MARKS_MAX_X`), and with sane offsets on its tag (`TOOL_MAX_DXY`, `TOOL_DZ`). The pen travels at the beds' travel height and comes down only over the sheet. A full sheet isn't a reason not to draw (above).
 
 There is some more info posted [here](https://hackaday.io/project/205431-limn-pen-plotter-with-toolchanger) about this project.

@@ -144,7 +144,7 @@ class FakeLedEffect:
         return self.history[-1] if self.enabled and self.history else None
 
 
-LED_NAMES = ['ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert'] \
+LED_NAMES = ['ui_traffic_red', 'ui_traffic_yellow', 'ui_traffic_green', 'ui_tag', 'ui_alert', 'ui_icon', 'ui_progress'] \
     + [f'{kind}_{t}' for kind in ('holder', 'ui_tool') for t in (41, 42, 43, 44, 45)]
 
 
@@ -724,7 +724,8 @@ def test_a_pen_left_uncapped_goes_red_and_beeps():
     assert svv['pen_since']['44'] > 1000.0 + 3600 - 5   # the clock stood still, saved
     clock[0] += 601                                     # 10 minutes on, nothing printing
     wait(printer, 2)
-    assert leds['holder_44'].state == 'drying_1' and leds['ui_tool_44'].state == 'drying_1'
+    assert leds['holder_44'].state == 'drying_1'
+    assert 'drying_1' in (leds['ui_tool_44'].state, leds['ui_icon'].state)     # its digit and a drop, by turns
     assert leds['ui_alert'].state == 'drying_1'
     beeps = [s for s in gcode.scripts if s.startswith('SET_PIN PIN=beeper')]
     assert beeps and not any(s.startswith('M300') for s in gcode.scripts)      # no dwell, a plot runs on

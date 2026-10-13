@@ -117,6 +117,13 @@ group = "Calibration"
 title = "Every holder's tool, one after the other"
 
 [[macros]]
+label = "New sheet"
+gcode = "LRT_MARKS RESET=1"
+group = "Calibration"
+title = "A new sheet for the pens' purges and test marks: they start from its first slots"
+confirm = false
+
+[[macros]]
 label = "Read bed"
 gcode = "LRT_READ_BED_ID"
 group = "Calibration"

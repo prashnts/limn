@@ -205,6 +205,7 @@ class Fsr:
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
         self.debug = False          # the whole array under the messages that quote readings (DEBUG=1, grid())
         self.air = None             # readings in the air before a descent: what `early` rises from
+        self.on_wiped = None        # called once wait_clean has seen enough of the sheet wiped
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
 
@@ -1309,6 +1310,8 @@ class Fsr:
                                    f"({len(seen)} of {clean['wipe_cells']} cells pressed)")
                 pressed = {(hop, c) for hop in self.arrays
                            for c, s in self.read(hop, limit=False).items() if s >= cfg['respond']}
+                if len(seen) < clean['wipe_cells'] <= len(seen | pressed) and self.on_wiped:
+                    self.on_wiped()
                 seen |= pressed
                 if pressed or len(seen) < clean['wipe_cells']:
                     quiet_since = None

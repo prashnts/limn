@@ -16,12 +16,53 @@
 #
 # The wipe area (beds.py `wipe`) is drawn the same way: a pen primed there before
 # it plots, the test mark of a pen probed mid-plot (wipe_problems()).
+#
+# The sheet (geometry.sheet_layout) has a purge too: each pen draws its lines and circle first,
+# then its mark. A full sheet doesn't stop anything: the pens go on over its first slots and the
+# status (and the UI) says it's full, a new sheet and LRT_MARKS RESET=1.
 from .beds import PANEL_ZHOME, MARKS_MAX_X, TOOL_MAX_DXY, TOOL_DZ
+from .geometry import mark_points, mark_strokes, holder_ticks, sheet_layout, purge_strokes, purge_slots
 
 DRAW_FEED = 2000
 PEN_Z = 1.0             # drawing, as plot's pens (z_down)
 HOP_Z = 2.5             # between the strokes, over the paper (plot's z_travel)
 LEAVE_Z = 7.0           # before leaving the paper: over Z5
+
+
+def sheet_status(marks_cfg, record):
+    '''How full the sheet is: {'marks': [used, slots], 'purge': [used, slots] (None: no purge on
+    this bed), 'full': [the parts full]}. record: lrt_marks, of this placement (or None).'''
+    record = record or {}
+    n = len(mark_points(marks_cfg)) - 1
+    used = int(record.get('next', 0))
+    out = {'marks': [used, n], 'purge': None, 'full': ['marks'] if used >= n else []}
+    if 'purge' in marks_cfg:
+        k, slots = int(record.get('purge', 0)), purge_slots(sheet_layout(marks_cfg))
+        out['purge'] = [k, slots]
+        if k >= slots:
+            out['full'].append('purge')
+    return out
+
+
+def plan(marks_cfg, record, holder):
+    '''A pen's turn on the sheet: its purge (when the bed has one), its mark, its holder ticks.
+    -> (strokes, the record after it, a line for the console). Past the slots there are it goes
+    over the first ones again.'''
+    record = record or {}
+    points = mark_points(marks_cfg)
+    i = int(record.get('next', 0))
+    at = i % (len(points) - 1)
+    strokes, said = [], [f"mark {i + 1} at {points[at]}"]
+    after = {'next': i + 1}
+    if 'purge' in marks_cfg:
+        k = int(record.get('purge', 0))
+        strokes += purge_strokes(sheet_layout(marks_cfg), k)
+        after['purge'] = k + 1
+        said.insert(0, f"purge {k + 1}")
+    strokes += mark_strokes(points[at], points[at + 1], marks_cfg['arm'])
+    if marks_cfg.get('ticks') and 41 <= holder <= 49:
+        strokes += holder_ticks(points[at], holder % 10, marks_cfg['arm'])
+    return strokes, after, ', '.join(said)
 
 
 def problems(strokes, offsets, bounds):

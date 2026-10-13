@@ -1,6 +1,6 @@
 # uv run python ext/tests/test_leds.py
 from fakes import run_tests
-from limn.leds import ToolLeds, DONE_SHOW, ALERT_SHOW, ERROR_NEW
+from limn.leds import ToolLeds, DONE_SHOW, ALERT_SHOW, ERROR_NEW, ACTIVITY_TURN, NOTICE_TURNS
 
 TOOLS = (41, 42, 43, 44, 45)
 ALL = frozenset(TOOLS)
@@ -90,6 +90,51 @@ def test_tag_states():
     leds.tag('error', 42, 1)
     assert leds.desired(100, ALL - {42}, True, 42)['ui_tag'] == 'error'   # until the next read
     assert leds.desired(100, ALL, True, 0)['ui_tag'] is None               # or the tool is back
+
+
+def stage(out):
+    '''What columns 4-8 show: a digit or an icon, never both.'''
+    d = digits(out)
+    assert not (d and out['ui_icon']), out
+    return d or out['ui_icon']
+
+def test_an_activity_takes_turns_with_the_tool():
+    leds = ToolLeds(TOOLS)
+    leds.tag('ok', 42, 0)
+    seen = [stage(leds.desired(t, ALL - {42}, True, 42, activity='probe')) for t in (100, 100 + ACTIVITY_TURN)]
+    assert seen == ['probe', {42: 'carried'}]
+    assert leds.desired(100, ALL - {42}, True, 42, activity='probe')['ui_alert'] == 'working'
+    assert leds.next_change(100) == 100 + ACTIVITY_TURN       # redrawn for the next turn
+    # No tool on the carriage (meshing): the icon alone, held
+    assert {stage(leds.desired(t, ALL, True, 0, activity='mesh')) for t in (100, 102.5, 105)} == {'mesh'}
+    # A tool change in it: the change's own lights
+    leds.start(43)
+    out = leds.desired(100, ALL, True, 0, activity='calibrate')
+    assert stage(out) == {43: 'target'} and traffic(out) == ('on', None, None)
+
+def test_wipe_the_sheet_is_held_until_done():
+    leds = ToolLeds(TOOLS)
+    outs = [leds.desired(t, ALL - {42}, True, 42, activity='wipe') for t in (10, 12.5, 15)]
+    assert {stage(o) for o in outs} == {'wipe'} and outs[0]['ui_alert'] == 'waiting'
+    assert stage(leds.desired(16, ALL - {42}, True, 42, activity='wiped')) == 'wiped'
+
+def test_full_sheet_by_turns_then_gone():
+    leds = ToolLeds(TOOLS)
+    shown = [stage(leds.desired(t, ALL - {42}, True, 42, sheet_full=True)) for t in (0, NOTICE_TURNS[0])]
+    assert shown == [{42: 'untagged'}, 'paper']
+    assert leds.desired(0, ALL - {42}, True, 42, sheet_full=True)['ui_alert'] == 'warn'
+    assert stage(leds.desired(0, ALL, True, 0, sheet_full=True)) == 'paper'        # no tool: the page alone
+    assert stage(leds.desired(0, ALL, True, 0)) is None and leds.next_change(0) is None    # still: no redraws
+
+def test_plot_progress_up_column_7():
+    leds = ToolLeds(TOOLS)
+    out = leds.desired(0, ALL - {42}, True, 42, progress=0.0)
+    assert out['ui_progress'] == 'p0' and out['ui_alert'] == 'plotting' and stage(out) == {42: 'untagged'}
+    assert leds.desired(0, ALL - {42}, True, 42, progress=0.5)['ui_progress'] == 'p4'
+    assert leds.desired(0, ALL - {42}, True, 42, progress=1.0)['ui_progress'] == 'p8'
+    assert leds.desired(0, ALL - {42}, True, 42)['ui_progress'] is None
+    # An icon over the stage (a pen probed mid-plot) takes column 7 too
+    assert leds.desired(0, ALL - {42}, True, 0, activity='probe', progress=0.5)['ui_progress'] is None
 
 
 if __name__ == '__main__':

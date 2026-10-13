@@ -661,7 +661,8 @@ def create_app(data=None):
                 'homed': (st.get('toolhead') or {}).get('homed_axes'),
                 'bed': limn.get('bed'), 'occupied': holder.get('occupied'), 'tag': limn.get('tag'),
                 'scan': limn.get('scan'), 'drying': limn.get('drying') or {},
-                'swap': limn.get('swap'), 'wipe': limn.get('wipe'), 'paused': ps.get('state') == 'paused'}
+                'swap': limn.get('swap'), 'wipe': limn.get('wipe'), 'sheet': limn.get('sheet'),
+                'paused': ps.get('state') == 'paused'}
 
     def run_on_printer(what, script):
         '''A script that moves the machine for a while (a scan, a tag write), in the

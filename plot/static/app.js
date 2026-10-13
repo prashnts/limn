@@ -1967,6 +1967,7 @@ function renderMachine() {
     <label>Paper</label><div class="mono">${m.draw_area.map((v) => num(v, 1)).join(', ')}</div>
     <label>Mesh</label><div class="mono">${esc(m.mesh || '(last loaded)')}</div>
     <label>Wipe</label><div>${wipeHtml()}</div>
+    <label title="The sheet each pen purges on (lines, a circle) and draws its test mark on, after it is calibrated">Sheet</label><div>${sheetHtml()}</div>
     ${MACHINE_FIELDS.filter(([k]) => k === 'z_touch' || k in over).map(field).join('')}
     ${more('machine', 'More settings', MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).map(field).join(''),
       MACHINE_FIELDS.filter(([k]) => !(k === 'z_touch' || k in over)).length)}`);
@@ -1982,7 +1983,32 @@ function wipeHtml() {
   return `${prime}<div class="row"><span class="note">${used < 0 ? 'Klipper doesn\'t say how full' : used >= n ? '<b>full</b>: a fresh pad' : `${used} of ${n} slots used`}</span>
     ${used > 0 ? '<button class="small" data-act="wipe-reset" title="A fresh pad is on the wipe area: the next prime goes in its first slot (LRT_WIPE RESET=1)">New pad</button>' : ''}</div>`;
 }
+// Said once as it fills up (the Machine panel keeps saying it), not on every poll
+let sheetFullWas = null;
+function noteSheetFull() {
+  const sh = printer && printer.ok && printer.sheet, now = sh ? sh.full.join(' and ') : null;
+  if (now && sheetFullWas !== null && now !== sheetFullWas) toast(`The sheet is full (${now}): pens go on over its first slots. Put a new sheet on, then New sheet.`, true);
+  if (sh) sheetFullWas = now;
+}
+// The purge and test-mark sheet (Klipper's lrt_marks): full doesn't stop a pen, it goes over the first slots
+function sheetHtml() {
+  const sh = printer && printer.ok && printer.sheet;
+  if (!sh || sh.bed !== S.machine.bed_id) return '<span class="note">Klipper doesn\'t say</span>';
+  const part = ([used, n], what) => `${Math.min(used, n)} of ${n} ${what}`;
+  const used = part(sh.marks, 'marks') + (sh.purge ? `, ${part(sh.purge, 'purges')}` : '');
+  const reset = sh.marks[0] > 0 || (sh.purge && sh.purge[0] > 0)
+    ? '<button class="small" data-act="sheet-reset" title="A new sheet is on the bed: the next pen purges and marks in its first slots (LRT_MARKS RESET=1)">New sheet</button>' : '';
+  const full = sh.full.length
+    ? `<div class="note warn">⚠ <b>Full</b> (${esc(sh.full.join(' and '))}): pens draw over the first slots. Put a new sheet on.</div>` : '';
+  return `${full}<div class="row"><span class="note">${used}</span> ${reset}</div>`;
+}
 $('#machine').addEventListener('click', async (e) => {
+  if (e.target.dataset.act === 'sheet-reset') {
+    if (!twice('sheet-reset', e.target, 'A new sheet on the bed: start from its first slots')) return;
+    await api('POST', '/api/printer/macro', { gcode: 'LRT_MARKS RESET=1' });
+    setTimeout(pollPrinter, 1500);
+    return;
+  }
   if (e.target.dataset.act !== 'wipe-reset') return;
   if (!twice('wipe-reset', e.target, 'A fresh pad on the wipe area: start from its first slot')) return;
   await api('POST', '/api/printer/macro', { gcode: 'LRT_WIPE RESET=1' });
@@ -2502,6 +2528,7 @@ async function pollPrinter() {
   quietly(renderPrinter);
   quietly(renderMacros);
   renderSwap();
+  noteSheetFull();
   if (S) { renderBed(); quietly(renderMachine); }
   if (printer.ok && macros && !macros.checked) loadMacros();      // Klipper is back: which it has
 }

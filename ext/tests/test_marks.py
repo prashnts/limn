@@ -4,7 +4,10 @@ import collections
 from fakes import run_tests
 from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
-from limn.geometry import gen_mark_grid, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes
+from limn.geometry import (gen_mark_grid, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes,
+                           sheet_layout, purge_strokes, purge_slots, fill_order)
+from limn.beds import TOOL_MAX_DXY
+import numpy as np
 from limn.beds import BEDS
 from limn import marks
 
@@ -79,6 +82,89 @@ def test_mark_problems():
         for a, b in zip(points, points[1:]):
             assert marks.problems(mark_strokes(a, b, bed['marks']['arm']), (5, 5, 1.0),
                                   ((x0, y0), (x0 + w, y0 + h))) == [], name
+
+
+# The sheet: the purge and the marks (BED_5)
+SHEET = BEDS['BED_5']['marks']
+
+
+def dots(strokes, step=0.1):
+    '''Points every `step` mm along the strokes.'''
+    out = []
+    for s in strokes:
+        for (ax, ay), (bx, by) in zip(s, s[1:]):
+            n = max(1, int(np.hypot(bx - ax, by - ay) / step))
+            out += [(ax + (bx - ax) * k / n, ay + (by - ay) * k / n) for k in range(n + 1)]
+    return np.array(out)
+
+
+def apart(a, b):
+    return float(np.min(np.hypot(a[:, None, 0] - b[None, :, 0], a[:, None, 1] - b[None, :, 1])))
+
+
+def footprint(at, arm):
+    '''All a point can hold: the └ drawn there, the ┐ the pen before left there, five ticks.'''
+    x, y = at
+    return [[(x + arm, y), (x, y), (x, y + arm)], [(x - arm, y), (x, y), (x, y - arm)]] + holder_ticks(at, 5, arm)
+
+
+def test_fill_order_coarse_then_between():
+    assert fill_order(0, 3, 1) == [0, 1, 2, 3, 0.5, 1.5, 2.5]
+
+def test_sheet_uses_the_whole_area_and_stays_on_the_mesh():
+    L = sheet_layout(SHEET)
+    assert len(L['points']) - 1 >= 120 and purge_slots(L) >= 20
+    paper = next(m for m in BEDS['BED_5']['meshes'] if m['profile'] == 'lrt_paper')
+    (mx, my), (w, h) = paper['origin'], paper['size']
+    assert SHEET['area'] == ((mx + TOOL_MAX_DXY, my + TOOL_MAX_DXY), (mx + w - TOOL_MAX_DXY, my + h - TOOL_MAX_DXY))
+    everything = [st for k in range(purge_slots(L)) for st in purge_strokes(L, k)] \
+        + [st for p in L['points'] for st in footprint(p, SHEET['arm'])]
+    for d in ((5, 5), (-5, -5), (5, -5), (-5, 5)):          # any offsets a tag may have
+        assert marks.problems(everything, (*d, 1.0), ((mx, my), (mx + w, my + h))) == [], d
+    xs = [x for st in everything for x, _ in st]
+    ys = [y for st in everything for _, y in st]
+    (x0, y0), (x1, y1) = SHEET['area']
+    assert min(xs) - x0 < 1 and x1 - max(xs) < 1 and min(ys) - y0 < 1 and y1 - max(ys) < 1     # edge to edge
+    # The purge is a quarter of it
+    t = L['band']
+    assert abs(t * (x1 - x0) + t * (y1 - y0) - t * t - 0.25 * (x1 - x0) * (y1 - y0)) < 1
+
+def test_sheet_marks_and_purge_keep_apart():
+    L, arm = sheet_layout(SHEET), SHEET['arm']
+    prints = [dots(footprint(p, arm)) for p in L['points']]
+    for i, a in enumerate(prints):                          # every mark, the in-between ones too
+        near = [j for j, q in enumerate(L['points']) if j != i and abs(q[0] - L['points'][i][0]) <= 10
+                and abs(q[1] - L['points'][i][1]) <= 10]
+        for j in near:
+            assert apart(a, prints[j]) >= 0.75, (L['points'][i], L['points'][j])
+    purge = dots([st for k in range(purge_slots(L)) for st in purge_strokes(L, k)], step=0.5)
+    every_mark = np.concatenate(prints)
+    assert apart(purge, every_mark) >= SHEET['purge']['gap'] - 0.01
+    lines = [dots([a]) for a in L['y_lines']] + [dots([a]) for a in L['x_lines']]
+    rings = dots([purge_strokes(L, k)[1] for k in range(len(L['circles']))], step=0.3)
+    assert min(apart(rings, ln) for ln in lines) >= 0.5     # the circles stay in their corner
+
+def test_purge_lines_line_up_pen_after_pen():
+    L = sheet_layout(SHEET)
+    ys = [purge_strokes(L, k)[0] for k in range(purge_slots(L))]
+    assert len({(a[1], b[1]) for a, b in ys}) == 1         # same start and end: side by side
+    x = [a[0] for a, _ in ys]
+    assert x[1] - x[0] == SHEET['purge']['pitch'] and len(set(x)) == len(x)
+    ring = purge_strokes(L, 0)[1]
+    assert ring[0] == ring[-1]                              # a closed circle
+    assert purge_strokes(L, purge_slots(L)) == purge_strokes(L, 0)     # full: over the first again
+
+def test_sheet_status_and_plan():
+    st = marks.sheet_status(SHEET, None)
+    n, k = len(mark_points(SHEET)) - 1, purge_slots(sheet_layout(SHEET))
+    assert st == {'marks': [0, n], 'purge': [0, k], 'full': []}
+    assert marks.sheet_status(SHEET, {'next': 3, 'purge': k})['full'] == ['purge']
+    strokes, after, said = marks.plan(SHEET, {'next': 3, 'purge': 4}, 45)
+    assert after == {'next': 4, 'purge': 5} and said.startswith('purge 5, mark 4')
+    assert len(strokes) == 3 + 2 + 5                        # Y line, circle, X line; └ ┐; five ticks
+    strokes, after, _ = marks.plan(SHEET, {'next': n, 'purge': k}, 41)     # full: on it goes
+    assert after == {'next': n + 1, 'purge': k + 1}
+    assert strokes[3:5] == mark_strokes(mark_points(SHEET)[0], mark_points(SHEET)[1], SHEET['arm'])
 
 
 # In Klipper
@@ -352,10 +438,10 @@ def test_marks_carry_on_after_a_restart_until_the_bed_moves():
     assert f'G1 X{x + 4} Y{y}' in p.gcode.scripts          # └ at the third point: where the last ┐ is
     assert p.svv['lrt_marks']['next'] == 3
     p.run('LRT_MARKS')
-    assert p.said('Next test mark: 4 of 17')
+    assert p.said('BED_3: 3 of 17 marks')
     p.bed = reply(placed=5)
     p.run('LRT_MARKS')
-    assert p.said('Next test mark: 1 of 17')
+    assert p.said('BED_3: 0 of 17 marks')
 
 def test_mark_travels_high_and_away_from_the_holders():
     p = plotter(carried=42)
@@ -390,14 +476,40 @@ def test_no_mark_when_unsafe():
     p.run('LRT_PROBE_TOOL')
     assert p.pen_downs() == [] and p.said('placed after the last meshes')
 
-def test_paper_full():
+def test_paper_full_draws_on_and_says_so():
+    '''The user knows: a full sheet doesn't stop a pen, it goes over the first slots and the
+    status (the plot UI, the LEDs) says the sheet is full.'''
     p = plotter(carried=42)
     p.svv['lrt_marks'] = {'placement': 'BED_3@dock:9f2c01aa:1', 'next': 17}
+    p.ext._read_bed_id(FakeGcmd(p.gcode, {}))
+    assert p.ext.get_status(0)['sheet']['full'] == ['marks']
     p.run('LRT_PROBE_TOOL')
-    assert p.pen_downs() == [] and p.said('paper is full')
+    assert len(p.pen_downs()) == 2 and p.said('The sheet is full (marks)') and p.svv['lrt_marks']['next'] == 18
+    x, y = gen_mark_grid(**BEDS['BED_3']['marks'])[0]
+    assert f'G1 X{x + 4} Y{y}' in p.gcode.scripts          # over the first mark again
     p.run('LRT_MARKS', RESET=1)
+    assert p.ext.get_status(0)['sheet']['full'] == []
     p.run('LRT_PROBE_TOOL')
-    assert len(p.pen_downs()) == 2 and p.svv['lrt_marks']['next'] == 1
+    assert len(p.pen_downs()) == 4 and p.svv['lrt_marks']['next'] == 1
+
+
+def test_a_pen_purges_then_marks_on_bed_5():
+    p = plotter(carried=45, bed=reply('BED_5'))
+    p.run('LRT_MESH_CALIBRATE')
+    p.svv['currently_docked_tool'] = 45                     # (meshing put it away)
+    p.run('LRT_MARK')
+    L = sheet_layout(SHEET)
+    s = p.gcode.scripts
+    a = s.index('_APPLY_OFFSETS MESH=lrt_paper')
+    (x, y0), (_, y1) = L['y_lines'][0]
+    assert s[a + 2:a + 5] == [f'G1 X{x} Y{y0}', 'G1 Z1.0', f'G1 X{x} Y{y1}']     # the long line first
+    assert len(p.pen_downs()) == 3 + 2 + 5 and p.said('Drawn: purge 1, mark 1')
+    assert p.ext.get_status(0)['sheet'] == {'bed': 'BED_5', 'marks': [1, len(L['points']) - 1],
+                                            'purge': [1, purge_slots(L)], 'full': []}
+    p.svv['lrt_marks']['purge'] = purge_slots(L)            # the purge is full: on it goes, said
+    p.run('LRT_MARK')
+    assert len(p.pen_downs()) == 20 and p.said('The sheet is full (purge)')
+    assert p.ext.get_status(0)['sheet']['full'] == ['purge']
 
 
 def test_fsr_bltouch_z_puts_the_tool_away():

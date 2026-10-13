@@ -46,7 +46,7 @@ import time
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
 from .machine import Machine
-from .geometry import ProbeValue, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes
+from .geometry import ProbeValue, wipe_slots, prime_strokes, plus_strokes
 from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL, PANEL_ZHOME
 from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
 from . import marks
@@ -57,6 +57,11 @@ from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
 from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
 from .drying import Drying
+
+# What the UI matrix shows while these run (leds.py ACTIVITIES: an icon, the tool's digit by turns)
+STAGE_LEDS = ('ui_tool_', 'ui_icon', 'ui_progress')
+ACTIVITY_OF = {'LRT_CALIBRATE': 'calibrate', 'LRT_FSR_SURVEY': 'calibrate', 'LRT_PROBE_TOOL': 'probe',
+               'LRT_MESH_CALIBRATE': 'mesh', 'LRT_MARK': 'mark'}
 
 LRT_CONF_VERSION = 'v2.0'
 RTP_KEYS = ('touch_params', 'ref_samples', 'ref_z_panel', 'ref_z_paper')
@@ -127,6 +132,10 @@ class Limn:
         self.profile = self._load_profile(config)
         self._chain_report_until = 0
         self._fsr_last = None       # the tool the FSR sheet last had, None: wiped or unknown
+        self._activity = None       # what the LEDs say the machine is doing (ACTIVITY_OF), None: nothing
+        self._sheet_activity = None # 'mark' while a pen purges and marks on the sheet
+        self._wipe_wait = None      # 'wipe' while waiting for the FSR sheet to be wiped, 'wiped' once it was
+        self._led_progress = None   # the plot's progress step the LEDs show, None: no plot
         self._survey_said = None    # (bed, date) of the survey the console was last told about
 
         self.holder = None
@@ -189,7 +198,7 @@ class Limn:
             ('LRT_READ_BED_ID', self.cmd_READ_BED_ID, "Read which bed is on the plotter"),
             ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE,
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
-            ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
+            ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: how full the sheet is (marks, purges), RESET: a new sheet"),
             ('LRT_MARK', self.cmd_MARK,
              "LRT_MARK [TRIM=] [Z=]: the carried pen draws the next test mark now. TRIM: the dz trim to try (mm "
              "past first touch, as DZ_TRIM; the tags have the calibration's, 0.3), Z: the pen-down G-code Z itself "
@@ -246,6 +255,8 @@ class Limn:
              "has no offsets, primed in the wipe area"),
             ('TOOL_PRIME', self.cmd_TOOL_PRIME, "TOOL_PRIME: the carried pen draws a zigzag in the wipe area"),
         ):
+            if name in ACTIVITY_OF:
+                handler = self._showing(ACTIVITY_OF[name], handler)
             self.gcode.register_command(name, handler, desc=desc)
         self.printer.register_event_handler("klippy:connect", self._on_connect)
         self.printer.register_event_handler("klippy:ready", self._on_ready)
@@ -397,6 +408,33 @@ class Limn:
                                       f"aim {judged.get('aim')}, not read {judged['faulty'] or 'none'}, "
                                       f"early {judged['early']}")
 
+    def _showing(self, activity, handler):
+        '''handler, with the UI matrix showing `activity` while it runs.'''
+        def run(gcmd):
+            was, self._activity = self._activity, activity
+            self._request_leds()
+            try:
+                return handler(gcmd)
+            finally:
+                self._activity = was
+                self._request_leds()
+        return run
+
+    def _wait_clean(self, fsr):
+        '''fsr.wait_clean, the UI matrix asking for the wipe meanwhile (wiped: hands off now).'''
+        def wiped():
+            self._wipe_wait = 'wiped'
+            self._request_leds()
+        self._wipe_wait = 'wipe'
+        self._request_leds()
+        fsr.on_wiped = wiped
+        try:
+            fsr.wait_clean()
+        finally:
+            fsr.on_wiped = None
+            self._wipe_wait = None
+            self._request_leds()
+
     def _fsr_hooks(self, gcmd, fsr):
         '''A tool other than the one the FSR sheet last had waits for the sheet to
         be wiped first, so no pen gets another's ink (CLEAN=0: it doesn't).'''
@@ -416,7 +454,7 @@ class Limn:
             gcmd.respond_info(f"[LRT] Tool {carried}: the taps press at most {fsr.press_cap:.2f}mm past contact ({why})")
             if self._fsr_last and carried != self._fsr_last and gcmd.get_int('CLEAN', 1):
                 gcmd.respond_info(f"[LRT] The sheet last had tool {self._fsr_last}, now {carried}: wipe it first")
-                fsr.wait_clean()
+                self._wait_clean(fsr)
 
         def after():
             self._fsr_last = self._carried()
@@ -426,7 +464,7 @@ class Limn:
     def _wipe_sheet(self, gcmd, bed, routine=None):
         '''The carried tool parked, wait for the FSR sheet to be wiped by hand (fsr.py, wait_clean).'''
         try:
-            (routine or self._routine(gcmd, bed)).wait_clean()
+            self._wait_clean(routine or self._routine(gcmd, bed))
         except ROUTINE_ERRORS as e:
             raise gcmd.error(str(e))
         self._fsr_last = None
@@ -614,38 +652,56 @@ class Limn:
             self.gcode.run_script_from_command(f"DOCK T={carried}")
 
     # Test marks (marks.py), where the last one ended, per placement of the bed
+    def _marks_record(self):
+        '''lrt_marks of this placement, {} when the bed was placed since (a new sheet).'''
+        record = self._vars().get('lrt_marks')
+        if self.placement is None or not record or record.get('placement') != self.placement:
+            return {}
+        return record
+
+    def _sheet_status(self):
+        bed = BEDS.get(self.bed) or {}
+        if 'marks' not in bed:
+            return None
+        return {'bed': self.bed, **marks.sheet_status(bed['marks'], self._marks_record())}
+
     def _draw_test_mark(self, gcmd, bed, pen_z=marks.PEN_Z, note=''):
+        '''The carried pen's turn on the sheet: its purge, then its test mark. A full sheet
+        doesn't stop it (the pens go on over its first slots): it says so, and the UI too.'''
         if 'marks' not in bed:
             return
-        points = mark_points(bed['marks'])
-        record = self._vars().get('lrt_marks')
         why = []
         try:
             self._read_bed_id(gcmd)
         except self.gcode.error as e:
             why.append(str(e))
-        i = next_mark(record, self.placement)
-        if i + 1 >= len(points):
-            why.append(f"the paper is full ({len(points) - 1} marks), LRT_MARKS RESET=1 once there is a new sheet")
         if not self._carried():
             why.append("no tool on the carriage")
         why += self._stale_meshes(['lrt_paper'])
         paper = self._mesh_profiles().get('lrt_paper')
+        record = self._marks_record()
+        full = marks.sheet_status(bed['marks'], record)['full']
         if not why:
-            strokes = mark_strokes(points[i], points[i + 1], bed['marks']['arm'])
-            holder = self._carried()
-            if bed['marks'].get('ticks') and 41 <= holder <= 49:
-                strokes += holder_ticks(points[i], holder % 10, bed['marks']['arm'])
+            strokes, after, said = marks.plan(bed['marks'], record, self._carried())
             svv = self._vars()
             offsets = tuple(float(svv.get(k, 0) or 0) for k in ('tool_offset_x', 'tool_offset_y', 'tool_offset_z'))
             why += marks.problems(strokes, offsets, mesh_bounds(paper))
         if why:
             gcmd.respond_info(f"[LRT][Mark] Not drawing the test mark: {'; '.join(why)}")
             return
-        marks.draw(Machine(self.printer, gcmd), strokes, pen_z)
-        self._save_vars({'lrt_marks': {'placement': self.placement, 'next': i + 1}})
-        gcmd.respond_info(f"[LRT][Mark] Mark {i + 1} of {len(points) - 1} drawn at {points[i]} -> {points[i + 1]}"
-                          f", the pen at Z{pen_z:.2f}{note}")
+        if full:
+            gcmd.respond_info(f"[LRT][Mark] !! The sheet is full ({' and '.join(full)}): drawing over its first "
+                              f"slots. A new sheet, then LRT_MARKS RESET=1")
+        self._sheet_activity = 'mark'
+        self._request_leds()
+        try:
+            marks.draw(Machine(self.printer, gcmd), strokes, pen_z)
+        finally:
+            self._sheet_activity = None
+            self._request_leds()
+        self._save_vars({'lrt_marks': {'placement': self.placement, **after}})
+        self._request_leds()
+        gcmd.respond_info(f"[LRT][Mark] Drawn: {said}, the pen at Z{pen_z:.2f}{note}")
 
     def _tags_trim(self, bed):
         '''The dz trim the tags were written with (the FSR calibration's), None off an FSR bed.'''
@@ -855,6 +911,8 @@ class Limn:
             if why is None:
                 gcmd.respond_info(f"[Tool] {carried}: {'its tag has no offsets' if blank else 'swapped in'}, "
                                   f"measuring it on the {BEDS[bed]['sensor'].upper()} first")
+                was, self._activity = self._activity, 'probe'
+                self._request_leds()
                 try:
                     self._ensure_meshes(gcmd)
                     dx, dy, dz = self._routine(gcmd, BEDS[bed]).probe_tool(self.profile)
@@ -864,6 +922,9 @@ class Limn:
                     self.gcode.run_script_from_command(f"WRITE_TOOL_TAG DX={dx} DY={dy} DZ={dz}")
                     self._calibrate_next.discard(carried)
                     self._draw_wipe(gcmd, 'test mark')
+                finally:
+                    self._activity = was
+                    self._request_leds()
             if why is not None:
                 gcmd.respond_info(f"[Tool] {carried} has no offsets on its tag and {why}: paused. "
                                   f"LIMN_TOOL_CALIBRATE T={carried} (or write them), then RESUME")
@@ -899,15 +960,21 @@ class Limn:
     def cmd_MARKS(self, gcmd):
         if gcmd.get_int('RESET', 0):
             self._save_vars({'lrt_marks': {'placement': None, 'next': 0}})
-            gcmd.respond_info("[LRT][Mark] The next test mark is the first on the paper")
+            self._request_leds()
+            gcmd.respond_info("[LRT][Mark] A new sheet: the next pen purges and marks in its first slots")
             return
         self._read_bed_id(gcmd)
-        if self.bed not in BEDS or 'marks' not in BEDS[self.bed]:
+        st = self._sheet_status()
+        if not st:
             gcmd.respond_info(f"[LRT][Mark] No test marks on bed {self.bed}")
             return
-        n = len(mark_points(BEDS[self.bed]['marks'])) - 1
-        i = next_mark(self._vars().get('lrt_marks'), self.placement)
-        gcmd.respond_info(f"[LRT][Mark] Next test mark: {i + 1} of {n} on {self.bed}")
+        (used, n), purge = st['marks'], st['purge']
+        line = f"[LRT][Mark] {self.bed}: {used} of {n} marks"
+        if purge:
+            line += f", {purge[0]} of {purge[1]} purges"
+        if st['full']:
+            line += f". FULL ({' and '.join(st['full'])}): the pens go on over the first slots; a new sheet, LRT_MARKS RESET=1"
+        gcmd.respond_info(line)
 
     def cmd_CALIBRATE(self, gcmd):
         bed = self._bed(gcmd)
@@ -1348,7 +1415,10 @@ class Limn:
     def _render_leds(self):
         self._led_pending = False
         now = self.reactor.monotonic()
-        states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried(), self._dry_stages)
+        sheet = self._sheet_status()
+        states = self.leds.desired(now, self.holder.occupied, self.holder.ok, self._carried(), self._dry_stages,
+                                   activity=self._wipe_wait or self._sheet_activity or self._activity,
+                                   sheet_full=bool(sheet and sheet['full']), progress=self._led_progress)
         for name, state in states.items():
             self._set_led(name, state)
         for tool, button in tool_buttons(states, self._carried()).items():
@@ -1386,6 +1456,8 @@ class Limn:
                 and bool(getattr(effect, 'enabled', False)) == (state is not None):
             return
         params = {'STOP': '1', 'FADETIME': '0.3'} if state is None else {'STATE': state}
+        if state is not None and name.startswith(STAGE_LEDS):
+            params['FADETIME'] = '0.4'      # the stage's turns cross-fade (leds.py)
         effect.cmd_SET_LED_EFFECT(self.gcode.create_gcode_command('SET_LED_EFFECT', 'SET_LED_EFFECT', params))
         self._led_states[name] = state
 
@@ -1823,7 +1895,19 @@ class Limn:
             self._pens = ('missing', {}, set(), {})
         return self._pens[1]
 
+    def _plot_progress(self):
+        '''A plot's progress, 0..1, the LEDs' steps of it; None: no plot.'''
+        if not self._printing():
+            return None
+        sd = self.printer.lookup_object('virtual_sdcard', None)
+        p = float(sd.get_status(self.reactor.monotonic()).get('progress', 0.0) or 0.0) if sd else 0.0
+        return int(p * 8) / 8
+
     def _dry_tick(self, eventtime):
+        progress = self._plot_progress()
+        if progress != self._led_progress:
+            self._led_progress = progress
+            self._request_leds()
         if not self.holder or self.holder.occupied is None:
             return eventtime + 1.0
         busy = self._pens_wanted()
@@ -1908,6 +1992,7 @@ class Limn:
             'manual': self.manual,      # the tool docked by hand (its tags entry; also tools['90']), None: none
             'swap': self._swap_status(),    # TOOL_SWAP waiting for a pen by hand, None: not
             'wipe': self._wipe_status(),
+            'sheet': self._sheet_status(),     # the test marks' and purges' sheet: how full (marks.py)
             'leds': {k: v for k, v in self._led_states.items() if v},     # what the UI and dock LEDs show (leds.py)
         }
 

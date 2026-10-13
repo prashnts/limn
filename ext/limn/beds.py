@@ -56,15 +56,20 @@ BEDS = {
             {'origin': (111, 40), 'size': (7.5, 17), 'profile': 'lrt_fsr', 'probe_count': '4,5'},
             {'origin': (0, 30), 'size': (93, 130), 'profile': 'lrt_paper', 'probe_count': '4,6'},
         ],
-        # The test marks (marks.py; LRT_MARK draws one by hand, LRT_MARKS RESET=1 on a new sheet).
-        # Each mark is a └ at one point and a ┐ at the next; the next pen's └ there makes a + with
-        # it, whose steps show the two pens' offsets apart. Down the paper's long side (Y) from
-        # its top-left corner as the IR Top camera sees it (high X, high Y, by the dock): `rows`
-        # points `step` mm apart towards -Y from `start`, in `cols` columns `col_gap` mm apart
-        # towards -X. Every point stays on the lrt_paper mesh with a pen up to 5mm off (dx, dy)
-        # and its arm: X 8..85, Y 38..152 here. `ticks`: beside each └, one tick per holder number
-        # (41: 1 .. 45: 5) of the pen that drew it.
-        'marks': {'start': (84, 152), 'step': 10, 'rows': 12, 'cols': 2, 'col_gap': 14, 'arm': 3, 'ticks': True},
+        # The sheet (marks.py, geometry.sheet_layout; LRT_MARK draws by hand, LRT_MARKS RESET=1 on a
+        # new sheet). Each pen purges, then draws its test mark. The mark is a └ at one point and
+        # a ┐ at the next; the next pen's └ there makes a + with it, whose steps show the two
+        # pens' offsets apart. `area`: the lrt_paper mesh less TOOL_MAX_DXY all round, so a pen
+        # with any offset stays on it. Marks on a `step` grid down Y from the top-left corner as
+        # the IR Top camera sees it (high X, high Y, by the dock), then on the grid shifted half a
+        # step: 70 + 54. `ticks`: beside each └, one tick per holder number (41: 1 .. 45: 5).
+        # `purge`: an L along the low X and low Y edges, `share` of the area (13mm wide here):
+        # each pen a full-length line down each band and a circle in their corner, lines `pitch`
+        # apart then halfway between (25), the circles `ring_pitch` from `r_min` then halfway (21),
+        # `gap` from the marks.
+        # Full (either): the pens go on over the first slots, the UI says the sheet is full.
+        'marks': {'area': ((5, 35), (88, 155)), 'step': 10, 'arm': 3, 'ticks': True,
+                  'purge': {'share': 0.25, 'pitch': 1.0, 'ring_pitch': 0.5, 'gap': 3, 'r_min': 1.0}},
         # The wipe area (marks.py): off the paper towards the dock, where a pen is primed (a
         # short zigzag, TOOL_PREPARE PRIME=1 and TOOL_PRIME) before it plots, and where the test
         # mark of a pen probed mid-plot goes (the paper has the plot on it). Slots `nx` across X

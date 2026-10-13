@@ -58,16 +58,24 @@ def test_reset_and_saved():
     assert st['41'] == {'uncapped': 300, 'limit': 600.0, 'stage': 0, 'paused': False}
 
 
+def stage_digits(out):
+    return {int(k[8:]): v for k, v in out.items() if k.startswith('ui_tool_') and v}
+
+
 def test_leds_show_a_drying_pen():
     leds = ToolLeds({41, 42, 43, 44, 45})
     out = leds.desired(10.0, {41, 42}, True, 0, {41: 3})
-    assert out['holder_41'] == 'drying_3' and out['holder_42'] == 'occupied'
-    assert out['ui_tool_41'] == 'drying_3' and out['ui_alert'] == 'drying_3'
-    # Several: their numbers take turns, the alert shows the worst
-    a = leds.desired(10.0, {41, 42}, True, 0, {41: 1, 42: 2})
-    b = leds.desired(12.0, {41, 42}, True, 0, {41: 1, 42: 2})
-    assert {k for k, v in a.items() if k.startswith('ui_tool') and v} != {k for k, v in b.items() if k.startswith('ui_tool') and v}
-    assert a['ui_alert'] == 'drying_2'
+    assert out['holder_41'] == 'drying_3' and out['holder_42'] == 'occupied' and out['ui_alert'] == 'drying_3'
+    # The stage: its digit, then a drop, by turns; never both
+    seen = [(stage_digits(o), o['ui_icon']) for o in (leds.desired(t, {41, 42}, True, 0, {41: 3}) for t in (10.0, 12.0))]
+    assert sorted(seen, key=str) == [({41: 'drying_3'}, None), ({}, 'drying_3')]
+    # Several: a drop then each one's digit, the alert and the drop show the worst
+    seen = [leds.desired(t, {41, 42}, True, 0, {41: 1, 42: 2}) for t in (12.0, 14.0, 16.0)]
+    assert [(stage_digits(o), o['ui_icon']) for o in seen] == [({41: 'drying_1'}, None), ({42: 'drying_2'}, None),
+                                                                ({}, 'drying_2')]
+    assert seen[0]['ui_alert'] == 'drying_2'
+    leds.desired(12.5, {41, 42}, True, 0, {41: 1, 42: 2})
+    assert leds.next_change(12.5) == 14.0                  # the redraw for the next turn
     # A failed check still comes first
     leds.failed(41, 10.0)
     out = leds.desired(10.0, {41, 42}, True, 0, {41: 3})

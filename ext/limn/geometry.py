@@ -2,6 +2,7 @@
 #
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import math
 from collections import namedtuple
 
 import numpy as np
@@ -29,21 +30,98 @@ def gen_mark_grid(*, nx, ny, xrange, yrange, **_):
 
 def mark_points(marks):
     '''The corners of a bed's test marks, in the order they are used (mark i: point i to
-    point i + 1). A grid row by row (`nx`, `ny`, `xrange`, `yrange`), or columns along Y
-    (`start`, `step`, `rows`, `cols`, `col_gap`): the first column from `start` towards -Y,
-    each next one `col_gap` towards -X.'''
+    point i + 1). A grid row by row (`nx`, `ny`, `xrange`, `yrange`), or the sheet's
+    (sheet_layout) marks.'''
     if 'xrange' in marks:
         return gen_mark_grid(**marks)
-    (x0, y0) = marks['start']
-    return [(round(x0 - c * marks['col_gap'], 2), round(y0 - r * marks['step'], 2))
-            for c in range(marks['cols']) for r in range(marks['rows'])]
+    return sheet_layout(marks)['points']
 
-def holder_ticks(at, n, arm, gap=1.0):
+TICK_GAP = 0.8          # mm between the holder ticks: the last of five stays 0.8 clear of the next mark
+
+def holder_ticks(at, n, arm, gap=TICK_GAP):
     '''n short ticks along X beside the └ at `at`, in the quarter no corner uses there (+X,
     -Y): the holder the pen came from (41: one ... 45: five).'''
     x, y = at
     return [[(round(x + arm / 2, 2), round(y - 1 - gap * k, 2)), (round(x + arm, 2), round(y - 1 - gap * k, 2))]
             for k in range(n)]
+
+
+# The sheet (beds.py `marks` with `area`): every pen leaves its purge and its test mark on it.
+#
+#   y1 +---+---------------------------+      The purge: an L along the low X and low Y edges,
+#      | | |  ┐   ┐   ┐   ┐   ┐   ┐     |      `purge` of the area. Each pen draws one line down
+#      | | |  ┼ ┼ ┼ ┼ ┼ ┼ ┼ ┼ ┼ ┼ ┼     |      the Y band and one along the X band, the full
+#      | | |  ┼   ┼   ┼   ┼   ┼   ┼     |      length and side by side with the other pens', and
+#      |Y| |        the marks           |      a circle round the corner's centre: its ink
+#      | | |                            |      flows before the mark, a long line shows the mesh
+#      +---+----------------------------+      (thin or skipping where the paper is high or low),
+#      | o |  ===== X lines =====       |      parallel lines and concentric circles show two
+#   y0 +---+----------------------------+      pens' offsets apart.
+#      x0                               x1
+#
+# Slots are used coarse first, then in between (fill_order): lines `pitch` apart, then halfway;
+# marks on a `step` grid, then on the grid shifted by half a step both ways.
+
+def fill_order(lo, hi, pitch):
+    '''Positions from lo to hi, `pitch` apart first, then the ones halfway between them.'''
+    n = int((hi - lo) / pitch + 1e-9)
+    coarse = [lo + k * pitch for k in range(n + 1)]
+    return [round(v, 3) for v in coarse + [a + pitch / 2 for a in coarse[:-1]]]
+
+def purge_band(w, h, share):
+    '''The width t of an L along two edges of a w x h area that takes `share` of it:
+    t (w + h) - t^2 = share w h.'''
+    s = w + h
+    return (s - math.sqrt(s * s - 4 * share * w * h)) / 2
+
+def sheet_layout(marks):
+    '''Where everything goes on the sheet: {'points': the marks' corners in the order they are
+    used, 'y_lines', 'x_lines': [(start, end)] one per pen, 'circles': [(centre, r)] one per
+    pen, 'band': the purge's width}. marks: beds.py's, `area` ((x0, y0), (x1, y1)) the corners
+    of the area a pen can draw in, its offsets anywhere up to TOOL_MAX_DXY.'''
+    (x0, y0), (x1, y1) = marks['area']
+    p = marks['purge']
+    arm, step, gap, pitch = marks['arm'], marks['step'], p['gap'], p['pitch']
+    t = purge_band(x1 - x0, y1 - y0, p['share'])
+    # The purge: lines half a pitch in from the band's sides, circles round the corner's centre
+    ys = (round(y0 + t + gap, 2), y1)
+    xs = (round(x0 + t + gap, 2), x1)
+    y_lines = [((x, ys[1]), (x, ys[0])) for x in fill_order(x0 + pitch / 2, x0 + t - pitch / 2, pitch)]
+    x_lines = [((xs[0], y), (xs[1], y)) for y in fill_order(y0 + pitch / 2, y0 + t - pitch / 2, pitch)]
+    c = (round(x0 + t / 2, 2), round(y0 + t / 2, 2))
+    circles = [(c, r) for r in fill_order(p['r_min'], t / 2 - pitch / 2, p['ring_pitch'])]
+    # The marks: down Y from the top-left corner as the IR Top camera sees it (high X, high Y),
+    # columns towards -X. A mark's corner holds arms of `arm` all round and the holder ticks
+    # (up to 5) under it: keep them on the area, clear of the purge.
+    below = 1 + 4 * TICK_GAP
+    lo_x, lo_y = xs[0] + arm, ys[0] + max(arm, below)
+    hi_x, hi_y = x1 - arm, y1 - arm
+    cols = int((hi_x - lo_x) / step + 1e-9) + 1
+    rows = int((hi_y - lo_y) / step + 1e-9) + 1
+
+    def grid(dx, dy, cols, rows):
+        return [(round(hi_x - dx - c * step, 2), round(hi_y - dy - r * step, 2))
+                for c in range(cols) for r in range(rows)]
+    points = grid(0, 0, cols, rows) + grid(step / 2, step / 2, cols - 1, rows - 1)
+    return {'points': points, 'y_lines': y_lines, 'x_lines': x_lines, 'circles': circles, 'band': round(t, 2)}
+
+def circle_points(centre, r, seg=0.5):
+    '''A closed circle as a polyline, from its +X point, anticlockwise, about `seg` mm a side.'''
+    n = max(16, int(math.ceil(2 * math.pi * r / seg)))
+    cx, cy = centre
+    return [(round(cx + r * math.cos(2 * math.pi * k / n), 3), round(cy + r * math.sin(2 * math.pi * k / n), 3))
+            for k in range(n + 1)]
+
+def purge_strokes(layout, k):
+    '''Pen k's purge on the sheet: its Y line, its circle, its X line (in that order: the
+    corner between them). Past purge_slots, over the first pens' again, all three together.'''
+    k %= purge_slots(layout)
+    (a, b), (c, r), (d, e) = layout['y_lines'][k], layout['circles'][k], layout['x_lines'][k]
+    return [[a, b], circle_points(c, r), [d, e]]
+
+def purge_slots(layout):
+    '''How many pens the purge has room for: the fewest of its three.'''
+    return min(len(layout['y_lines']), len(layout['x_lines']), len(layout['circles']))
 
 def wipe_slots(*, origin, size, nx, ny, **_):
     '''The wipe area's slots, in the order they are used: ((x0, y0), (x1, y1)) each, row by

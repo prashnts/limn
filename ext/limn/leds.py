@@ -13,6 +13,13 @@
 #   ui_tool_<tool>  the tool's digit on the UI strip (its tool number: 41 is 0,
 #                   T0): target, untagged, carried, drying_1..3 (a pen out of
 #                   its cap for too long, drying.py; several take turns)
+#   ui_icon         an icon over the stage (the matrix's columns 4-8, 5 x 4):
+#                   calibrate, probe, mesh, mark (busy, blue: with the tool's digit
+#                   by turns), wipe / wiped (the FSR sheet wants wiping, amber /
+#                   enough wiped, hands off it, green), paper (the sheet is full,
+#                   amber: by turns with the digit), drying_1..3 (a drop, with the
+#                   drying pens' digits by turns)
+#   ui_progress     a plot's progress up column 7: p0..p8, eighths
 #   ui_traffic_*    the tool change's phase: red approach, yellow engage,
 #                   green (blinking) leave, green done; red blinking: failed
 #   ui_tag          reading, ok, error; a tag held to the reader by hand: listening
@@ -23,12 +30,23 @@
 #                   error_new, error              red: a check failed, holders unreadable
 #                   drying_1..3                   red and amber going round: a pen is drying out
 #                   busy_approach/engage/leave    blue spinner: a tool change, faster near the holder
+#                   waiting                       amber breathing, quicker than warn: wipe the FSR sheet
+#                   working                       blue spinner, slow: calibrating, probing, meshing, marking
 #                   reading                       cyan spinner: a tag read or write
 #                   success                       green blink: a tool change just went well
 #                   attention_fast/_/_slow        amber, slowing down: a hand was on the holders
-#                   warn                          amber breathing: a tool is unaccounted for, a bad tag
+#                   plotting                      blue breathing, slow: a plot runs
+#                   warn                          amber breathing: a tool is unaccounted for, a bad tag,
+#                                                 the sheet is full
 #                   ready                         green breathing: carrying a tool with its tag read
 #                   ok                            dim green, slow: all tools home
+#
+# The stage (columns 4-8) shows one thing at a time, the first of: a tool change (the
+# target's digit, the traffic light in column 8), the FSR sheet to wipe (its icon, held:
+# it waits on you), an activity (its icon and the carried tool's digit by turns), pens
+# drying (a drop and their digits by turns), the carried tool's digit (by turns with the
+# paper icon when the sheet is full). Turns are slow and cross-fade (leds.cfg): it only
+# blinks when something is wrong.
 CHANGE_PHASES = ('approach', 'engage', 'leave')
 DONE_SHOW = 3.0         # s the green light stays after a tool change
 DRYING_TURN = 2.0       # s each drying pen's digit shows, when several are
@@ -36,6 +54,11 @@ TAG_OK_SHOW = 3.0
 ALERT_SHOW = 5.0        # s the alert calms down over after a hand change
 ATTENTION_STEPS = ((1.5, 'attention_fast'), (3.5, 'attention'), (ALERT_SHOW, 'attention_slow'))
 ERROR_NEW = 3.0         # s a new error flashes fast
+ACTIVITIES = ('calibrate', 'probe', 'mesh', 'mark')
+WIPE = ('wipe', 'wiped')
+ACTIVITY_TURN = 2.5     # s each of an activity's icon and the tool's digit shows
+NOTICE_TURNS = (5.0, 2.5)   # s the digit, then the paper icon, when the sheet is full
+PROGRESS_STEPS = 8      # column 7: 4 LEDs, half and full each
 
 
 class ToolLeds:
@@ -52,6 +75,7 @@ class ToolLeds:
         self.tag_until = 0.0
         self.hand_state = None      # 'listening', 'scanned', 'taken', 'late'
         self.hand_until = 0.0
+        self._turn_at = None        # the stage's next turn, when it takes turns (_stage)
 
     # What happened
     def start(self, tool):
@@ -90,7 +114,7 @@ class ToolLeds:
 
     def next_change(self, now):
         '''When `desired` changes by itself next, None if it doesn't.'''
-        times = [self.phase_until, self.tag_until, self.hand_until]
+        times = [self.phase_until, self.tag_until, self.hand_until, self._turn_at or 0.0]
         if self.alert_at is not None:
             times += [self.alert_at + after for after, _ in ATTENTION_STEPS]
         if self.error_at is not None:
@@ -98,7 +122,7 @@ class ToolLeds:
         times = [t for t in times if t > now]
         return min(times) if times else None
 
-    def _alert(self, now, phase, holders, ok, carried, drying):
+    def _alert(self, now, phase, holders, ok, carried, drying, activity=None, sheet_full=False, progress=None):
         if phase == 'failed' or not ok:
             fresh = self.error_at is not None and now - self.error_at < ERROR_NEW
             return 'error_new' if fresh else 'error'
@@ -108,13 +132,20 @@ class ToolLeds:
             return 'busy_' + phase
         if self.tag_state == 'reading':
             return 'reading'
+        if activity in WIPE:
+            return 'waiting'
+        if activity in ACTIVITIES:
+            return 'working'
         if phase == 'done':
             return 'success'
         if self.alert_at is not None:
             for after, state in ATTENTION_STEPS:
                 if now < self.alert_at + after:
                     return state
-        if 'missing' in holders.values() or (self.tag_state == 'error' and self.tag_tool == carried and carried):
+        if progress is not None:
+            return 'plotting'
+        if 'missing' in holders.values() or (self.tag_state == 'error' and self.tag_tool == carried and carried) \
+                or sheet_full:
             return 'warn'
         if carried and self.tag_state in ('ok', 'reading') and self.tag_tool == carried:
             return 'ready'
@@ -129,8 +160,10 @@ class ToolLeds:
             return 'occupied'
         return 'carried' if tool == carried else 'missing'
 
-    def desired(self, now, occupied, ok, carried, drying=None):
-        '''drying: {tool: stage} of the pens out of their cap for too long.'''
+    def desired(self, now, occupied, ok, carried, drying=None, activity=None, sheet_full=False, progress=None):
+        '''drying: {tool: stage} of the pens out of their cap for too long; activity: what the
+        machine is doing for itself (ACTIVITIES, WIPE), None: nothing; sheet_full: the test
+        sheet is full; progress: a plot's, 0..1, None: no plot.'''
         drying = {t: s for t, s in (drying or {}).items() if t in self.tools}
         phase = self._phase(now)
         changing = phase in CHANGE_PHASES
@@ -140,18 +173,13 @@ class ToolLeds:
                 out[f'holder_{t}'] = f'drying_{s}'
 
         out.update({f'ui_tool_{t}': None for t in self.tools})
-        shown = self.active if changing else carried
-        if drying and not changing:
-            # The drying pens' numbers, one at a time
-            turn = sorted(drying)[int(now // DRYING_TURN) % len(drying)]
-            out[f'ui_tool_{turn}'] = f'drying_{drying[turn]}'
-        elif shown in self.tools:
-            if changing:
-                out[f'ui_tool_{shown}'] = 'target'
-            elif self.tag_state == 'ok' and self.tag_tool == carried:
-                out[f'ui_tool_{shown}'] = 'carried'
-            else:
-                out[f'ui_tool_{shown}'] = 'untagged'
+        digit, icon = self._stage(now, phase, carried, drying, activity, sheet_full)
+        if digit is not None:
+            out[f'ui_tool_{digit[0]}'] = digit[1]
+        out['ui_icon'] = icon
+        out['ui_progress'] = None
+        if progress is not None and icon is None:
+            out['ui_progress'] = f'p{min(PROGRESS_STEPS, int(max(0.0, progress) * PROGRESS_STEPS))}'
 
         out['ui_traffic_red'] = {'approach': 'on', 'failed': 'blink'}.get(phase)
         out['ui_traffic_yellow'] = 'on' if phase == 'engage' else None
@@ -169,9 +197,52 @@ class ToolLeds:
         out['ui_tag'] = tag
 
         holders = {t: out[f'holder_{t}'] for t in self.tools}
-        out['ui_alert'] = self._alert(now, phase, holders, ok, carried, drying)
+        out['ui_alert'] = self._alert(now, phase, holders, ok, carried, drying, activity, sheet_full, progress)
         return out
 
+    def _turn(self, now, turns):
+        '''Which of `turns` (s each, round and round) it is now; remembers when the next starts.'''
+        period = sum(turns)
+        end = now - now % period
+        for k, d in enumerate(turns):
+            end += d
+            if now < end:
+                self._turn_at = end
+                return k
+        self._turn_at = end
+        return 0
+
+    def _carried_digit(self, carried):
+        if self.tag_state == 'ok' and self.tag_tool == carried:
+            return (carried, 'carried')
+        return (carried, 'untagged')
+
+    def _stage(self, now, phase, carried, drying, activity, sheet_full):
+        '''-> ((tool, digit state) or None, icon state or None): what columns 4-8 show.'''
+        self._turn_at = None
+        has = carried in self.tools
+        if phase in CHANGE_PHASES:
+            return ((self.active, 'target') if self.active in self.tools else None), None
+        if phase in ('done', 'failed'):
+            return (self._carried_digit(carried) if has else None), None
+        if activity in WIPE:
+            return None, activity
+        if activity in ACTIVITIES:
+            if not has or self._turn(now, (ACTIVITY_TURN, ACTIVITY_TURN)) == 0:
+                return None, activity
+            return self._carried_digit(carried), None
+        if drying:
+            # A drop, then each drying pen's digit
+            pens = sorted(drying)
+            k = self._turn(now, (DRYING_TURN,) * (len(pens) + 1))
+            if k == len(pens):
+                return None, f'drying_{max(drying.values())}'
+            return (pens[k], f'drying_{drying[pens[k]]}'), None
+        if sheet_full:
+            if not has or self._turn(now, NOTICE_TURNS) == 1:
+                return None, 'paper'
+            return self._carried_digit(carried), None
+        return (self._carried_digit(carried) if has else None), None
 
 # Fluidd's tool buttons (T0..): the dot is the holder's state, the carried tool is highlighted
 # (no dot: empty; the carried tool's button is highlighted instead)

@@ -4,19 +4,24 @@
 // times a second while the Display panel is open and the page is seen.
 //
 //   1  2 |  3 |  4  5  6 |  7 |  8        1 2 9 10      alert: the machine's mood
-//   9 10 | 11 | 12 13 14 | 15 | 16        3 11 19       X Y Z endstops
+//   9 10 | 11 | 12 13 14 | 15 | 16        3 11 19       X Y Z: endstops, and where the head is
 //  17 18 | 19 | 20 21 22 | 23 | 24        27            K: the toolchanger's key, locked
-//  25 26 | 27 | 28 29 30 | 31 | 32        17 18 25 26   tag; cols 4-6 a tool's number;
+//  25 26 | 27 | 28 29 30 | 31 | 32        17 18 25 26   tag; cols 4-8 the stage: a tool's number
+//                                                       or an icon; col 7 a plot's progress;
 //                                         16 24 32      tool change: red, yellow, green
 'use strict';
 
 const LED_REGIONS = [
   { leds: [1, 2, 9, 10], name: 'Alert', what: 'The machine\'s mood: green fine, blue busy, amber look here, red stop; faster is fresher' },
-  { leds: [3], name: 'X', what: 'X endstop' }, { leds: [11], name: 'Y', what: 'Y endstop' }, { leds: [19], name: 'Z', what: 'Z endstop' },
+  { leds: [3], name: 'X', what: 'X endstop; a faint glow, brighter further out along X' },
+  { leds: [11], name: 'Y', what: 'Y endstop; a faint glow, brighter further out along Y' },
+  { leds: [19], name: 'Z', what: 'Z endstop; a faint glow, brighter the lower the head (the pen near the paper)' },
   { leds: [27], name: 'K', what: 'The toolchanger\'s key: red locked, green open' },
   { leds: [17, 18, 25, 26], name: 'Tag', what: 'The tag reader: reading, read, failed; a pen held to it by hand' },
-  { leds: [4, 5, 6, 12, 13, 14, 20, 21, 22, 28, 29, 30], name: 'Tool', what: 'The carried tool\'s number (T0 is holder 41), or one drying out' },
-  { leds: [16, 24, 32], name: 'Change', what: 'A tool change: red travelling, yellow at the holder, green leaving / done; red blinking: failed' },
+  { leds: [4, 5, 6, 12, 13, 14, 20, 21, 22, 28, 29, 30], name: 'Stage', what: 'The carried tool\'s number (T0 is holder 41) or an icon: blue the machine at work, amber it asks you, green done, amber to red a pen drying' },
+  { leds: [7, 15, 23, 31], name: 'Stage', what: 'An icon\'s, or a plot\'s progress, bottom up' },
+  { leds: [8], name: 'Stage', what: 'An icon\'s' },
+  { leds: [16, 24, 32], name: 'Change', what: 'A tool change: red travelling, yellow at the holder, green leaving / done; red blinking: failed. Else an icon\'s' },
 ];
 const LED_STATES = {
   ui_alert: {
@@ -25,7 +30,14 @@ const LED_STATES = {
     busy_approach: 'tool change: travelling', busy_engage: 'tool change: at the holder', busy_leave: 'tool change: leaving',
     reading: 'reading or writing a tag', success: 'a tool change just went well',
     attention_fast: 'a hand was on the holders', attention: 'a hand was on the holders', attention_slow: 'a hand was on the holders',
-    warn: 'a tool is unaccounted for, or the carried tool\'s tag failed', ready: 'carrying a tool, its tag read: ready', ok: 'all tools home',
+    warn: 'a tool is unaccounted for, the carried tool\'s tag failed, or the sheet is full', ready: 'carrying a tool, its tag read: ready', ok: 'all tools home',
+    waiting: 'wipe the FSR sheet', working: 'calibrating, probing, meshing or marking', plotting: 'plotting',
+  },
+  ui_icon: {
+    calibrate: 'calibrating the bed (by turns with the tool)', probe: 'measuring the tool (by turns with its number)',
+    mesh: 'meshing the bed', mark: 'the pen purges and draws its test mark', wipe: 'wipe the FSR sheet, then take your hand off',
+    wiped: 'wiped: hands off the sheet', paper: 'the sheet is full: a new one, then New sheet',
+    drying_1: 'a pen is drying out', drying_2: 'a pen is drying out, longer', drying_3: 'a pen is drying out: cap it',
   },
   ui_tag: {
     reading: 'reading', ok: 'read', error: 'failed', listening: 'listening for a pen held to it',
@@ -73,6 +85,8 @@ function ledLegend(states) {
   if (states.ui_alert) rows.push(['Alert', LED_STATES.ui_alert[states.ui_alert] || states.ui_alert]);
   const tool = Object.entries(states).find(([k]) => k.startsWith('ui_tool_'));
   if (tool) rows.push(['Tool', `T${+tool[0].slice(8) - 41} ${tool[1].replace('_', ' ')}`]);
+  if (states.ui_icon) rows.push(['Icon', LED_STATES.ui_icon[states.ui_icon] || states.ui_icon]);
+  if (states.ui_progress) rows.push(['Plot', `${Math.round(+states.ui_progress.slice(1) / 8 * 100)}%`]);
   if (states.ui_tag) rows.push(['Tag', LED_STATES.ui_tag[states.ui_tag] || states.ui_tag]);
   const phase = ['red', 'yellow', 'green'].map((c) => states[`ui_traffic_${c}`] && `${c} ${states[`ui_traffic_${c}`]}`).filter(Boolean);
   if (phase.length) rows.push(['Change', phase.join(', ')]);
