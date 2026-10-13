@@ -545,9 +545,16 @@ def test_tools_far_off():
         assert not bed.dragged and bed.lowest_z >= floor_of(fsr, profile)
 
 def test_off_the_array_stops_at_the_floor():
+    '''A tool off the array at the aim: once past where the reference touched with no answer, locate
+    comes down 1.5 rows either way too, by turns (2026-10-13: the Blue, ~4.4mm +X of the reference),
+    and measures it. One further off than that reaches: down to the floor, up, and stop.'''
     profile = calibrated()
-    # Misses the rows, from both spots of the first descent
     for tip in ((-6.0, 0.0), (-6.0, 1.25)):
+        fsr, bed, _ = setup(tip=tip)
+        bed.tool = 'T1'
+        dx, dy, _ = fsr.probe_tool(profile)
+        assert abs(dx + tip[0]) < 0.03 and abs(dy + tip[1]) < 0.03, (tip, dx, dy)
+    for tip in ((-11.0, 0.0), (-11.0, 1.25)):
         fsr, bed, _ = setup(tip=tip)
         bed.tool = 'T1'
         try:
@@ -557,6 +564,7 @@ def test_off_the_array_stops_at_the_floor():
             assert 'no contact' in str(e) and 'over the array' in str(e)
         assert bed.lowest_z >= floor_of(fsr, profile) - 1e-9
         assert bed.pos[2] == fsr.cfg['z_park']
+
 
 def test_array_origin_only_roughly_right():
     profile = calibrated()

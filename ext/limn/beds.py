@@ -154,6 +154,8 @@ BEDS = {
             'press_strength': 120,  # a Stabilo by ~0.1mm; a fine tip goes the whole cap (ext/limn TAP_PRESS)
             'locate_strength': 70,  # locate's taps: enough to tell the cell
             'locate_taps': 8,       # taps around locate's cell at most, to find the tip's (fsr.py, _find_cell)
+            'locate_reach': (1.5, -1.5),    # rows either way locate also comes down at, by turns (fsr.py, locate)
+            'reach_after': 0.3,     # mm past where the reference touched, with no answer, before it does
             'identify': 0.06,       # mm past contact at least for locate's tap: past the first-touch crosstalk
             'press': 0.3,           # mm below contact for the XY taps, at most, when nothing else says
                                     # (ext/limn: the pen's own press, pens.toml; PRESS=)

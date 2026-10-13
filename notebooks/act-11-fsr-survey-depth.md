@@ -138,3 +138,15 @@ The user's direction: keep the aim off the outer rows; locate says where the tip
 Simulated on today's sheet (row 3 flat 55, col 0 flat 80, weak (1, 5) 0.15, (2, 5) 0.3, (2, 6) 0.4, (3, 4) 0.4, (1, 6) 0.5, (3, 5) unread; aim (1.99, 4.87); 103 tips from −2.5..3.5 X, −2.5..2.5 Y, fine and felt): 187 right, 0 wrong, 0 presses beside the sheet, 19 stopped, all landing on (3, 5), (1, 5), (2, 5) or (3, 4). Script: scratchpad locate_sweep.py (not kept). Tests: test_a_tip_beside_a_dead_cell_is_found_by_the_taps_around_it (this morning's case, 16 locates + 3 calibrations), test_col_0_lifted_along_its_row_is_not_the_tip, test_the_survey_aims_off_the_outer_rows_and_cols.
 
 To run: deploy, **LRT_FSR_SURVEY again** (the saved one has the old aim on row 3 and the col-0 "faulty" cells), then LRT_CALIBRATE with the 005, then the Blue.
+
+### 2026-10-13 ~13:00: the survey of 12:42, and locate's reach
+
+Survey 12:42 (new code): faulty only (0, 5) (nothing), weak (2, 4) (76), median 153 at 0.08, rest 0; col 0's lift no longer makes cells faulty. Contact over the BLTouch 2.482 (2.486 at 11:41). Its aim [2.94, 6.03] put the 005 on (2, 5): inner, but the Blue (+4.4 X, an offset the user set on purpose to test this) would land at row 4.3. The user: locate should cope with that itself, trying other spots at the same z; a gentle touch beside the sheet is fine.
+
+- **Locate's reach** (`locate_reach: (1.5, -1.5)` rows, `reach_after: 0.3`): once the aim's spots have gone 0.3mm past where the reference touched (`ref_above`, set by probe_tool) with no answer, it also comes down 1.5 rows either way (each as the aim and its (1/4, 1/2) spot), by turns at the same z. Not from the start: a far spot answering first (slope, a dead row's crosstalk) took locate off the aim in 7 tests. The reference's own calibration has no reach.
+- **The survey's aim**: side neighbours of a faulty cell only (the diagonal (0, 5) pushed it from (1, 4) to (2, 5)). The 12:42 numbers now give [1.94, 5.03], the 005 mid (1, 4).
+- **Random borders off lifted lines** (row 3, col 0): (0, 0)|(0, 1) stopped 4 of 20 simulated Blue runs.
+- **A line with most taps unanswered presses 0.04 deeper on the next** (the cap less a fine step at most): the 12:10 calibration (old aim, tip on (3, 3), locate's depth 0.06) got 0-4 of 29 taps on (1, 2)|(2, 2) on five lines. A fixed 0.12 for the first edges broke the press limits for felt tips (5 tests).
+
+Simulated: a Blue-like pen (tip 4.4 +X, 0.88 −Y of the reference, shorter by 0.3) after a reference calibration, on today's sheet model: 30/30 right at the saved aim [2.94, 6.03] and at [1.94, 5.03]. The 206-locate sweep unchanged (187 right, 0 wrong, 0 beside the sheet). 175 tests pass.
+To run: deploy, LRT_FSR_SURVEY (the aim moves to row 1), LRT_CALIBRATE (005), then the Blue.

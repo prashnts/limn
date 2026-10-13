@@ -73,7 +73,8 @@ def judge_survey(result, cfg, hop):
             warnings.append(f"the {what} uses {', '.join(map(str, bad))}: "
                             f"{'faulty' if any(c in faulty for c in bad) else 'weak'}; strongest: {best[:4]} (ext/limn/beds.py)")
     # The aim: where the reference pen's tip (the survey's) comes down on a good cell, mid
-    # cell, none of its neighbours faulty. Other pens are ~1mm either way of it.
+    # cell, none of its side neighbours faulty (a diagonal one is ~1.8mm off the centre: a faulty (0, 5)
+    # pushed the aim from (1, 4) to (2, 5), 2026-10-13). Pens off the sheet there: locate's reach.
     aim = list(spec['aim'])
     shift = result.get('shift')
     if shift is not None:
@@ -81,7 +82,7 @@ def judge_survey(result, cfg, hop):
         dr = float(np.dot(shift, spec['row_dir'])) / pitch
         dc = float(np.dot(shift, spec['col_dir'])) / pitch
         land = (spec['aim'][0] + dr, spec['aim'][1] + dc)
-        near = lambda c: [(c[0] + i, c[1] + j) for i in (-1, 0, 1) for j in (-1, 0, 1) if (i, j) != (0, 0)]
+        near = lambda c: [(c[0] + i, c[1] + j) for i, j in ((-1, 0), (1, 0), (0, -1), (0, 1))]
         # Inner cells only, never the outer rows and cols: a pen ~4mm off the reference (the Micron 01
         # Blue) would come down beside the sheet (the aim on (3, 3), 2026-10-13)
         rows = 1 + max(c[0] for c in cells)
@@ -177,6 +178,7 @@ class Fsr:
         self.surface = None         # the array's bed mesh profile, see follow()
         self.depth = {}             # hop -> how far past contact this tool's taps press, see press_depth()
         self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
+        self.ref_above = None       # the reference's contact over the BLTouch z (probe_tool): locate's reach
         self.dz_trim = cfg.get('dz_trim', 0.0)  # mm off every dz written to a tag (DZ_TRIM=), see calibrate_reference
         self.rng = random.Random()  # which borders a measurement takes (pick_edges)
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
@@ -584,7 +586,18 @@ class Fsr:
             rd = self._roomier(hop, 0, self.arrays[hop]['aim'][0]) * np.asarray(array.row_dir, float)
             cd = self._roomier(hop, 1, self.arrays[hop]['aim'][1]) * np.asarray(array.col_dir, float)
             spots = [aim, aim + array.pitch * (0.5 * rd + 0.25 * cd), aim + array.pitch * (0.25 * rd + 0.5 * cd)]
-            z, aim = self._descend_spots(hop, spots, z, cfg['step'], floor)
+            # And `locate_reach` rows either way, at the same heights, once these have gone `reach_after`
+            # past where the reference touched (ref_above) with no answer: a pen further off the
+            # reference than the sheet is wide comes down beside it at the aim, but on it at one of
+            # those (the sheet is above the panel beside it; a gentle touch beside it is fine, the user,
+            # 2026-10-13). Not before: a far spot answering first (the sheet's slope, a dead row's
+            # crosstalk) brought locate down off the aim (simulated). Rows only: 4 of them, 10mm,
+            # against pens ~4.4mm off in X (the Blue); 8 cols leave room in Y.
+            # Each as the aim and as its (1/4, 1/2) spot: not both on a border's dead zone
+            reach = [p + k * array.pitch * np.asarray(array.row_dir, float)
+                     for k in cfg.get('locate_reach', ()) for p in (spots[0], spots[2])]
+            below = bed_z + self.ref_above - cfg.get('reach_after', 0.3) if self.ref_above is not None else None
+            z, aim = self._descend_spots(hop, spots, z, cfg['step'], floor, reach if below is not None else (), below)
             while True:
                 z = self._back_off(hop, z + cfg['back_off'])
                 z, first = self._descend(hop, z, cfg['fine_step'], floor)
@@ -796,16 +809,23 @@ class Fsr:
             self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
         return strengths
 
-    def _descend_spots(self, hop, points, z, step, floor):
+    def _descend_spots(self, hop, points, z, step, floor, reach=(), below=None):
         '''Coarse steps down, at each of `points` by turns, lifted between: -> (z, the point
-        where something presses). Like _descend(early=True), at several spots.'''
+        where something presses). Like _descend(early=True), at several spots. `reach`: more
+        points, by turns with them from `below` down.'''
         cfg = self.cfg
         lift = cfg['back_off']
+        said = False
         while True:
             z -= step
             if z < floor:
                 raise FsrError(f"[LRT] no contact down to z={floor:.2f}: is the tool over the array at hop {hop}?")
-            for p in points:
+            far = list(reach) if below is not None and z <= below else []
+            if far and not said:
+                said = True
+                self.machine.say(f"[LRT] nothing at the aim by z={z:.2f}, past where the reference touched: "
+                                 f"{len(far)} spots a way off too, by turns")
+            for p in list(points) + far:
                 self.machine.move(z=z + lift, speed=JOG_SPEED * 5)
                 self.machine.move(float(p[0]), float(p[1]))
                 self.machine.move(z=z, speed=JOG_SPEED)
@@ -1041,9 +1061,17 @@ class Fsr:
                     found = border(judged(), onset, cfg['dominance']) or found
                 if found is not None:
                     break
+                answered = sum(a_ + b_ >= onset for a_, b_, _ in judged().values())
                 self.machine.say(f"[LRT] no border from {cell_a} to {cell_b} {side:+.2f}mm across: "
-                                 f"{sum(a_ + b_ >= onset for a_, b_, _ in judged().values())} of {len(taps)} taps "
-                                 f"answered, again beside it")
+                                 f"{answered} of {len(taps)} taps answered, again beside it")
+                # Most taps unanswered: pressing too lightly, not beside the cells. Deeper on the next line,
+                # the cap at most (locate's 0.06 barely reached (1, 2) from a contact on (3, 3): 0-4 of 29
+                # taps answered on five lines, 2026-10-13 12:10)
+                if answered < len(taps) / 2:
+                    deeper = min(z_contact - z_press + 2 * cfg['fine_step'], (self.press_cap or cfg['press']) - cfg['fine_step'])
+                    if deeper > z_contact - z_press + 1e-9:
+                        z_press = z_contact - deeper
+                        self.machine.say(f"[LRT] the taps press {deeper:.2f}mm now")
             self.machine.move(z=cfg['z_park'])
             self.machine.wait_moves()
         if found is None:
@@ -1058,12 +1086,13 @@ class Fsr:
 
     # Whole measurements
     def border_pairs(self, hop):
-        '''Every border between two cells that are read, none weak -> {'x': [edge], 'y': [edge]}, an edge
+        '''Every border between two cells that are read, none weak or lifted -> {'x': [edge], 'y': [edge]}, an edge
         (hop, a, b): between rows (along X here) and between cols (along Y).'''
         array, spec = self.array(hop), self.arrays[hop]
         unread = {tuple(c) for c in spec.get('faulty_cells', ())} | {tuple(c) for c in spec.get('weak_cells', ())}
+        # Nor on a lifted row or column: its lift votes on the border (row 3: (2, 5)|(3, 5) ±0.41, 2026-10-12)
         ok = lambda c: c[0] not in spec.get('dead_rows', ()) and c[1] not in spec.get('faulty_cols', ()) \
-            and c not in unread
+            and c not in unread and not self.on_lifted(hop, c)
         cells = [(r, c) for r in range(array.rows) for c in range(array.cols) if ok((r, c))]
         return {'x': [(hop, a, (a[0] + 1, a[1])) for a in cells if (a[0] + 1, a[1]) in cells],
                 'y': [(hop, a, (a[0], a[1] + 1)) for a in cells if (a[0], a[1] + 1) in cells]}
@@ -1313,6 +1342,7 @@ class Fsr:
         Each is as sure as both measurements together; one less sure than `max_sigma`
         stops, the values in the message (better no tag than a wrong one).'''
         ref = profile['fsr_ref']
+        self.ref_above = ref.get('above')
         bed_z = {tuple(c[:3]): c[3] for c in ref['bed_z']}
         self.machine.gcode_run("_CLEAR_OFFSETS")
         ref_sigma = ref.get('sigma', {})
