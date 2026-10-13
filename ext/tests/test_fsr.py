@@ -52,7 +52,7 @@ class FsrBed:
                  noise=8, alive_for=None, responds=True, spike=False, disconnect_after=None,
                  crosstalk=False, width=0.0, slope_y=0.0, mesh=True, row_crosstalk=0.0, wipes=(), ghost=None,
                  dead_lifts=0.0, bed5=False, fresh=False, shift=(0.0, 0.0), dead_cols=(), preload=None, hover=None,
-                 patchy=0.0, top=880):
+                 patchy=0.0, top=880, weak=None):
         self.samples = samples
         self.dock = dock
         # shift: the sheet sits that far from where the config has it (a swap)
@@ -82,6 +82,7 @@ class FsrBed:
         self.dead_lifts = dead_lifts            # a press on row 3 (no series resistor) lifts its column's rows by this share
         self.bed5 = bed5                        # BED_5 with a Stabilo as measured on the plotter, 2026-10-07: see frame_bed5
         self.fresh = fresh                      # bed5's physics, but a sheet without the old one's faults
+        self.weak = weak or {}                  # {cell: share}: a cell that reads that much of a press (not bed5)
         self.patchy = patchy                    # bed5: a pressed cell reads up to this share more or less, by where
         self.max_press = 0.0                    # the deepest press past first touch seen
         self.wipes = wipes                      # (from s, to s, cells, strength): a hand on the sheet
@@ -220,21 +221,26 @@ class FsrBed:
             for col in range(array.cols):
                 s = abs(self.rng.normal(0, self.noise))
                 if (row, col) in shares:
-                    s = 1000 if self.spike else min(self.top, self.press() * self.gain) * shares[(row, col)] + s
+                    s = 1000 if self.spike else min(self.top, self.press() * self.gain) * shares[(row, col)] \
+                        * self.weak.get((row, col), 1.0) + s
                 elif self.dead_lifts and (3, col) in shares:
                     s += self.dead_lifts * pressed * shares[(3, col)]
                 elif self.crosstalk and col in columns:
                     # Up the column, as measured (2026-10-07): row 3 ~0.95 of the pressed cell,
                     # row 0 0.94 of it at first touch falling to ~0.4 by 0.07mm, row 2 0.8 -> 0.37
                     first = 1 / (1 + (max(self.press(), 0) / 0.035) ** 4)
-                    column = max(min(self.top, self.press() * self.gain) * v for (r_, c), v in shares.items() if c == col)
+                    column = max(min(self.top, self.press() * self.gain) * v * self.weak.get((r_, c), 1.0)
+                                 for (r_, c), v in shares.items() if c == col)
                     base, extra = {3: (0.95, 0.0), 0: (0.40, 0.55)}.get(row, (0.37, 0.45))
                     if isinstance(self.crosstalk, dict):        # {row: share}, 'other': the rest, 'lift': {row: flat}
                         base, extra = self.crosstalk.get(row, self.crosstalk['other']), 0.0
                         s += self.crosstalk.get('lift', {}).get(row, 0) if column > 0 else 0
                     s += column * (base + extra * first)
                 elif row in rows:
-                    s += self.row_crosstalk * pressed * rows[row]
+                    # 'col_lift': {col: flat}, a column lifted along its row whatever the press (col 0,
+                    # 2026-10-13: (1, 0) 52-110 with the pressed cell at 114 or 316)
+                    col_lift = self.crosstalk.get('col_lift', {}) if isinstance(self.crosstalk, dict) else {}
+                    s += self.row_crosstalk * pressed * rows[row] + (col_lift.get(col, 0.0) if pressed > 0 else 0.0)
                 if self.ghost and self.tool is not None and (row, col) == self.ghost[2] \
                         and self.ghost[0] <= -self.press() <= self.ghost[1]:
                     s = max(s, self.ghost[3])
@@ -927,7 +933,8 @@ def test_each_edge_finds_its_own_depth_once_the_tip_is_known():
         bed_z = fsr.probe_bed_z()                  # the carriage empty
         bed.tool = 'T4'
         m = fsr.measure(bed_z)
-        x, y = cfg['x_edges'], cfg['y_edges']
+        # inner borders first (measure()): (1, 3)|(1, 4) before (1, 6)|(1, 7), whose col 7 is outer
+        x, y = cfg['x_edges'], cfg['y_edges'][::-1]
         assert [c[:2] for c in calls] == [('edge', x[0]), ('edge', y[0]),
                                           ('depth', x[1][1]), ('depth', x[1][2]), ('edge', x[1]),
                                           ('depth', y[1][1]), ('depth', y[1][2]), ('edge', y[1])], calls
@@ -1070,3 +1077,75 @@ def test_an_unsure_pen_is_written_a_cell_off_is_not():
         assert False, 'a cell off was written'
     except FsrError as e:
         assert 'a cell off' in str(e), e
+
+
+# The sheet of 2026-10-13: row 3 lifts ~55 up its column, col 0 ~80 along its row ((1, 0) 52-110
+# under row 1's presses), (1, 5) nearly dead (32 at 0.08) and (1, 4) weak
+SHEET_10_13 = dict(crosstalk={'other': 0.15, 'lift': {3: 55}, 'col_lift': {0: 80}},
+                   weak={(1, 5): 0.15, (1, 4): 0.5})
+
+
+def test_a_tip_beside_a_dead_cell_is_found_by_the_taps_around_it():
+    '''2026-10-13 11:33: the old survey's aim (1.94, 5.33) brought the Micron 005 (tip -1.24, 0.93) down
+    by the (1, 4)|(1, 5) border, (1, 5) nearly dead: locate named (3, 4) (row 3's lift), and the check a
+    row over found (0, 4), not (2, 4), and stopped. The taps around the cell point back at the tip's,
+    an answer nobody predicted names it, and another tap agrees, the tip on an inner cell. Nothing
+    pressed beside the sheet, and the calibration goes on to edges that put the tip right.'''
+    cfg = loaded_cfg()
+    cfg['arrays'][0].update(aim=(1.94, 5.33))
+    tip = (-1.24, 0.93)
+    for felt in (False, True):
+        for seed in range(8):
+            pen = dict(gain=1350, top=230) if felt else dict(gain=450, top=230, width=0.1)
+            fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, **SHEET_10_13, **pen)
+            bed.rng, fsr.rng = np.random.default_rng(seed), random.Random(seed)
+            fsr.press_cap = 0.2
+            bed.tool = 'T4'
+            fsr.matrix(True)
+            array = fsr.array(1)
+            aim = array.point(1.94, 5.33)
+            shift, _, at = fsr.locate(1, bed_z(*aim))
+            assert array.cell_at(at + shift) == array.cell_at(at + np.array(tip)), (felt, seed, shift, at - aim)
+            assert not bed.off_sheet, (felt, seed, bed.off_sheet[:3])
+    for seed in range(3):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, **SHEET_10_13, gain=450, top=230, width=0.1)
+        bed.rng, fsr.rng = np.random.default_rng(seed), random.Random(seed)
+        fsr.press_cap = 0.2
+        # As the survey has it: (1, 5) weak, no border on it
+        fsr.apply_survey(1, {'faulty': [], 'weak': [(1, 5)], 'early': 30, 'aim': (1.94, 5.33)})
+        ref = fsr.calibrate()['fsr_ref']
+        # the borders' mean, as dx goes by (one (2, x)|(3, x) border is pulled ~0.17 by row 3's lift here)
+        tips = [np.mean(ref['edge_tips'][a]) for a in ('x', 'y')]
+        assert abs(tips[0] - tip[0]) < 0.08 and abs(-tips[1] - tip[1]) < 0.08, (seed, ref['edge_tips'])
+        assert not bed.off_sheet, (seed, bed.off_sheet[:3])
+
+
+def test_col_0_lifted_along_its_row_is_not_the_tip():
+    '''Col 0 reads ~0.8 of a press along its row (2026-10-13): under `sure`, it's no press while a cell
+    of its row answers; a tip really on col 0 still is.'''
+    fsr, _, _ = setup(cfg=loaded_cfg())
+    assert fsr.touched({(1, 0): 95, (1, 3): 80, (3, 3): 40}, 1, 30) == [(1, 3)]
+    assert fsr.touched({(1, 0): 140, (0, 0): 20}, 1, 30) == [(1, 0)]
+    assert fsr.touched({(1, 0): 200, (1, 3): 80}, 1, 30) == [(1, 0)]       # over `sure`: a press
+
+
+def test_the_survey_aims_off_the_outer_rows_and_cols():
+    '''The survey of 2026-10-13 (the Micron 005, tip -1.24, 0.93) put the aim at (3.99, 3.87): its tip on
+    (3, 3), the outer row, and a pen ~4mm +X of it beside the sheet. Its numbers, judged again: col 0's
+    lift no longer makes (1, 3), (1, 7), (2, 5), (2, 6) faulty (survey(): a lifted cell doesn't answer for
+    the pressed one), and the aim is on an inner cell.'''
+    from limn.fsr import judge_survey
+    s08 = {(0, 0): 173, (0, 1): 190, (0, 2): 104, (0, 3): 184, (0, 4): 144, (0, 5): 157, (0, 6): 126, (0, 7): 193,
+           (1, 0): 154, (1, 1): 182, (1, 2): 130, (1, 3): 95, (1, 4): 96, (1, 5): 32, (1, 6): 70, (1, 7): 92,
+           (2, 0): 206, (2, 1): 185, (2, 2): 165, (2, 3): 161, (2, 4): 142, (2, 5): 47, (2, 6): 62, (2, 7): 158,
+           (3, 0): 208, (3, 1): 190, (3, 2): 133, (3, 3): 104, (3, 4): 58, (3, 5): None, (3, 6): 130, (3, 7): 182}
+    cells = {c: {'z': None if v is None else 5.3, 's08': v, 'ok': v is not None} for c, v in s08.items()}
+    result = {'cells': cells, 'rest': {c: 0.0 for c in cells}, 'shift': [-1.236, 0.93]}
+    cfg = loaded_cfg()
+    judged = judge_survey(result, cfg, 1)
+    lands = np.array(judged['aim']) + np.array([-1.236 / 2.5, -0.93 / 2.5])     # cols run towards -Y
+    cell = tuple(int(v) for v in lands)
+    assert 0 < cell[0] < 3 and 0 < cell[1] < 7, (judged['aim'], cell)
+    assert cell not in judged['weak'] and all(abs(v % 1 - 0.5) < 0.01 for v in lands), (cell, judged)
+    # The Blue, ~4.4mm +X of it, still comes down on the sheet
+    assert 0 <= lands[0] + 4.4 / 2.5 < 4, lands

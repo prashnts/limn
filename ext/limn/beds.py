@@ -88,6 +88,8 @@ BEDS = {
             # lifted_rows: row 3 (no series resistor) reads 30-65 with any press up its
             # column, as much as a fine tip's own cell: never the tip under `sure` while
             # another row of the column answers (locate named (3, 4) for (1, 4), 2026-10-12).
+            # lifted_cols: col 0 the same along its row: (1, 0) read 86-110 under presses on row 1
+            # and outread (1, 3), (1, 7), so the survey of 2026-10-13 called them faulty.
             # aim: (row, col), in cells from the origin, where the tip first
             # comes down (fsr.py, locate). Mid cell, so a tool that is about
             # right lands clear of the dead zones. A tool whose tip is further
@@ -97,7 +99,7 @@ BEDS = {
             # cell of the sheet there is (judge_survey).
             'arrays': [
                 {'hop': 1, 'origin': (111.0, 59.6), 'col_dir': (0, -1), 'row_dir': (1, 0), 'aim': (1.5, 5.5),
-                 'dead_rows': (), 'faulty_cols': (), 'crosstalk_rows': (0,), 'lifted_rows': (3,)},
+                 'dead_rows': (), 'faulty_cols': (), 'crosstalk_rows': (0,), 'lifted_rows': (3,), 'lifted_cols': (0,)},
             ],
             'pitch': 2.5,
             # z and the edges on the sheet's strong cells (a survey warns when one of them is
@@ -151,6 +153,7 @@ BEDS = {
             # (~670) left marks on the sheet, 2026-09-29.
             'press_strength': 120,  # a Stabilo by ~0.1mm; a fine tip goes the whole cap (ext/limn TAP_PRESS)
             'locate_strength': 70,  # locate's taps: enough to tell the cell
+            'locate_taps': 8,       # taps around locate's cell at most, to find the tip's (fsr.py, _find_cell)
             'identify': 0.06,       # mm past contact at least for locate's tap: past the first-touch crosstalk
             'press': 0.3,           # mm below contact for the XY taps, at most, when nothing else says
                                     # (ext/limn: the pen's own press, pens.toml; PRESS=)
