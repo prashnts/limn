@@ -41,21 +41,26 @@ class FsrError(RuntimeError):
 
 
 HIGH_AT_REST = 40      # a cell this far over the sheet's median at rest, untouched, is faulty (BED_5's col 3: 75-100)
-BARS = '▁▂▃▄▅▆▇█'
+NBSP = '\u00a0'        # pads the grid: plain spaces collapse in the console's HTML
 
 
-def grid(strengths, rows=4, cols=8, full=60):
-    '''The whole array on one line for the console: row 0 first, col 0 leftmost, each
-    cell a bar of its strength over the strongest's (at least `full`, so the noise at
-    rest stays flat); · nothing, x a cell not read (dead, faulty).'''
-    top = max(max(strengths.values(), default=0), full)
+def grid(strengths, rows=4, cols=8, floor=10):
+    '''The whole array for the console (monospace, Fluidd), a line a row: the strengths, row 0
+    first and col 0 leftmost (the array's own order, not the plotter seen from above); · under
+    `floor`, x a cell not read (dead, faulty), the strongest in brackets. Starts on a new line.'''
+    hi = max(strengths, key=strengths.get, default=None)
 
-    def bar(c):
+    def cell(c):
         if c not in strengths:
-            return 'x'
-        v = strengths[c] / top
-        return '·' if v < 1 / 16 else BARS[min(len(BARS) - 1, int(v * len(BARS)))]
-    return '|'.join(''.join(bar((r, c)) for c in range(cols)) for r in range(rows))
+            text = 'x'
+        elif strengths[c] < floor:
+            text = '·'
+        else:
+            text = f"{strengths[c]:.0f}"
+        return (f"[{text}]" if c == hi and text not in ('x', '·') else text + NBSP).rjust(6, NBSP)
+    head = 'r\\c' + NBSP + ''.join(f"{c}{NBSP}".rjust(6, NBSP) for c in range(cols))
+    return '\n' + '\n'.join([head] + [f"r{r}{NBSP}{NBSP}" + ''.join(cell((r, c)) for c in range(cols))
+                                      for r in range(rows)])
 
 
 def judge_survey(result, cfg, hop):
@@ -195,8 +200,10 @@ class Fsr:
         self.press_cap = None       # mm the taps press at most past contact, None: cfg['press'] (ext/limn _fsr_hooks)
         self.ref_above = None       # the reference's contact over the BLTouch z (probe_tool): locate's reach
         self.dz_trim = cfg.get('dz_trim', 0.0)  # mm off every dz written to a tag (DZ_TRIM=), see calibrate_reference
+        self.dz_trim_given = None   # DZ_TRIM= on this command: a pen's own; without, the reference's (probe_tool)
         self.rng = random.Random()  # which borders a measurement takes (pick_edges)
         self.verbose = False        # every tap on the console too, not only what each search found (VERBOSE=1)
+        self.debug = False          # the whole array under the messages that quote readings (DEBUG=1, grid())
         self.air = None             # readings in the air before a descent: what `early` rises from
         self.before_measure = None  # called before / after measuring a tool: the wipe
         self.after_measure = None   # between pens, see __init__.py _fsr_hooks
@@ -420,7 +427,7 @@ class Fsr:
         self.air = None
         here = self.read(hop)
         if max(here.values(), default=0) >= self.cfg['sure']:
-            raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window ({self.top(here)})")
+            raise FsrError(f"[LRT] already touching at z={z:.2f}, above the search window ({self.top(here)})" + self.grid(here))
         self.air = here
 
     def responds(self, strengths, cell, level=None):
@@ -429,10 +436,14 @@ class Fsr:
         s = strengths.get(tuple(cell), 0)
         return s >= (level or self.cfg['respond']) and s >= self.cfg['dominance'] * max(strengths.values(), default=0)
 
+    def grid(self, strengths):
+        '''grid() under DEBUG=1, else nothing.'''
+        return grid(strengths) if self.debug else ''
+
     def top(self, strengths, n=3):
-        '''The strongest cells, and the whole array (grid()), for messages.'''
+        '''The strongest cells, for messages.'''
         cells = sorted(strengths, key=lambda c: -strengths[c])[:n]
-        return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells) + f" [{grid(strengths, full=self.cfg['respond'])}]"
+        return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells)
 
     # Z
     def window(self, bed_z, prior=None):
@@ -561,7 +572,7 @@ class Fsr:
                 if self.growth(strengths, at_onset) >= 0.1 * cfg['respond']:
                     return first, self.touched(strengths, hop, onset) or sorted(strengths, key=lambda c: -strengths[c])[:1]
             self.machine.say(f"[LRT] the sheet rose at z={first:.3f} but no more deeper ({self.top(strengths)}): "
-                             f"in the air, going on down")
+                             f"in the air, going on down" + self.grid(strengths))
 
     def _back_off(self, hop, z, cell=None):
         '''Up to z, where nothing may press any more: `cell`, or with none any cell
@@ -633,7 +644,7 @@ class Fsr:
                 # A reading in the air (a bent 0.05 liner, 2026-09-30): the tip isn't
                 # down yet. On down from where it pressed, to the floor at most.
                 self.machine.say(f"[LRT] a false start at z={z:.2f}, nothing pressed in at {aim.round(2)} "
-                                 f"({self.top(strengths)}): going on down")
+                                 f"({self.top(strengths)}): going on down" + self.grid(strengths))
                 z = z_press
                 self.machine.move(z=z, speed=JOG_SPEED)
                 z, _ = self._descend(hop, z, cfg['step'], floor, early=True)
@@ -746,7 +757,7 @@ class Fsr:
             if not options:
                 raise FsrError(f"[LRT] the tip is on one of {sorted(cands)} ({self.top(strengths)}), and no tap "
                                f"tells which without pressing beside the sheet: stopped before the edges"
-                               + (f" ({'; '.join(said)})" if said else ""))
+                               + (f" ({'; '.join(said)})" if said else "") + self.grid(strengths))
             o = min(options, key=lambda o: (sum(self.on_lifted(hop, plus(c, o)) or plus(c, o) in weak for c in cands),
                                             sum(not on(plus(m, o)) for m in mates),
                                             sum(not inner(plus(c, o)) for c in cands),
@@ -1065,7 +1076,7 @@ class Fsr:
                         taps[t] = s
                         if self.verbose:
                             self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: "
-                                             f"{cell_a}={s.get(cell_a, 0.0):.0f} {cell_b}={s.get(cell_b, 0.0):.0f} ({self.top(s)})")
+                                             f"{cell_a}={s.get(cell_a, 0.0):.0f} {cell_b}={s.get(cell_b, 0.0):.0f} ({self.top(s)})" + self.grid(s))
                 sweep(np.arange(-reach, reach + 1e-9, coarse))
                 found = border(judged(), onset, cfg['dominance'])
                 if found is not None:
@@ -1392,7 +1403,12 @@ class Fsr:
             dx = round(m['x'] - ref['x'], 3)
             dy = round(m['y'] - ref['y'], 3)
             sigma = {k: float(np.hypot(m['sigma'][k], ref_sigma.get(k, 0.0))) for k in ('x', 'y', 'z')}
-        dz = round(m['above'] - self.dz_trim, 3)        # as the reference's
+        # The reference's trim (calibrate_reference saved it), or the pen's own (DZ_TRIM=); the config's
+        # for a reference from before it was saved
+        trim = self.dz_trim_given if self.dz_trim_given is not None else ref.get('dz_trim', self.dz_trim)
+        if trim != ref.get('dz_trim', trim):
+            self.machine.say(f"[LRT] this pen's own trim {trim:.2f}, the reference's {ref['dz_trim']:.2f}")
+        dz = round(m['above'] - trim, 3)
         said = (f"dx={dx} ±{sigma['x']:.3f} dy={dy} ±{sigma['y']:.3f} dz={dz} ±{sigma['z']:.3f} "
                 f"gaps={[round(g, 3) for g in m['gaps']]}")
         # Unsure is still far better than no tag (a pen ~4mm off, refused at ±0.33, 2026-10-12): written,

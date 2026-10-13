@@ -197,10 +197,12 @@ class Limn:
             ('LRT_WIPE', self.cmd_WIPE, "LRT_WIPE [RESET=1]: the wipe area's next slot, RESET: a fresh pad"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE,
              "LRT_CALIBRATE [PRESS=] [DZ_TRIM=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm "
-             "the FSR taps press at most; DZ_TRIM: mm off the dz written (FSR, beds.py dz_trim); MESH=1: new "
+             "the FSR taps press at most; DZ_TRIM: mm the pens press past first touch at Z1, more is deeper (FSR, "
+             "beds.py dz_trim; kept with the calibration, the pens take it); MESH=1: new "
              "meshes even when they are of the bed as it sits"),
             ('LRT_PROBE_TOOL', self.cmd_PROBE_TOOL,
-             "LRT_PROBE_TOOL [PRESS=] [DZ_TRIM=]: measure the docked tool's offsets and write its tag"),
+             "LRT_PROBE_TOOL [PRESS=] [DZ_TRIM=]: measure the docked tool's offsets and write its tag; DZ_TRIM: "
+             "this pen's own trim (default: the one the reference was calibrated with)"),
             ('LRT_FSR_Z', self.cmd_FSR_Z, "Jog the tool onto an FSR cell, report the contact z"),
             ('LRT_FSR_EDGE', self.cmd_FSR_EDGE, "Find an FSR cell edge with the tool"),
             ('LRT_FSR_MEASURE', self.cmd_FSR_MEASURE,
@@ -217,7 +219,7 @@ class Limn:
              "LRT_FSR_CLEAN: park the carried tool and wait for the FSR sheet to be wiped (before the BLTouch "
              "probes it: ink holds the probe up)"),
             ('LRT_FSR_MATRIX', self.cmd_FSR_MATRIX,
-             "LRT_FSR_MATRIX [SECONDS=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
+             "LRT_FSR_MATRIX [SECONDS=1] [DEBUG=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
             ('LRT_DEBUG', self.cmd_DEBUG, "LRT_DEBUG ON=0|1: show sensor data"),
             ('TOOL_HOLDERS', self.cmd_TOOL_HOLDERS, "Show which tool holders have their tool"),
@@ -373,7 +375,10 @@ class Limn:
         routine = cls(machine, self.dock, self.samples, bed[sensor])
         if sensor == 'fsr':
             routine.verbose = bool(gcmd.get_int('VERBOSE', 0))
-            routine.dz_trim = gcmd.get_float('DZ_TRIM', routine.dz_trim, minval=-0.5, maxval=0.5)
+            routine.debug = bool(gcmd.get_int('DEBUG', 0))
+            routine.dz_trim_given = gcmd.get_float('DZ_TRIM', None, minval=-0.5, maxval=0.5)
+            if routine.dz_trim_given is not None:
+                routine.dz_trim = routine.dz_trim_given
             self._apply_survey(gcmd, routine)
             self._fsr_hooks(gcmd, routine)
         return routine
@@ -1162,7 +1167,7 @@ class Limn:
                 median = {c: sorted(v)[len(v) // 2] for c, v in per_cell.items()}
                 top = sorted(median, key=lambda c: -median[c])[:6]
                 gcmd.respond_info(f"[LRT] hop {hop} cells: " + ', '.join(f"{c}={median[c]}" for c in top)
-                                  + f" [{grid(median)}]")
+                                  + (grid(median) if gcmd.get_int('DEBUG', 0) else ''))
 
     def cmd_CHAIN(self, gcmd):
         if not self.dock.connect():

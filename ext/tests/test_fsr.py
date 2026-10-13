@@ -878,15 +878,17 @@ def test_dz_trim_takes_every_tag_down_alike():
     plain = float(bed.ran[-1].split('DZ=')[1].split()[0])
     fsr, bed, _ = setup(cfg=copy.deepcopy(cfg))
     fsr.dz_trim = 0.15
-    fsr.calibrate()
+    trimmed = fsr.calibrate()
     assert abs(float(bed.ran[-1].split('DZ=')[1].split()[0]) - (plain - 0.15)) < 0.02, bed.ran[-1]
+    # A pen takes the reference's trim (saved with it), whatever the config's; DZ_TRIM= its own
     dzs = []
-    for trim in (0.0, 0.15):
+    for profile_, given in ((profile, None), (trimmed, None), (profile, 0.15)):
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(0.35, -0.2), tool_length=2.2)
         bed.tool = 'T1'
-        fsr.dz_trim = trim
-        dzs.append(fsr.probe_tool(profile)[2])
-    assert abs(dzs[0] - dzs[1] - 0.15) < 0.02, dzs
+        fsr.dz_trim = 0.3                       # the config's: not used while the reference has one
+        fsr.dz_trim_given = given
+        dzs.append(fsr.probe_tool(profile_)[2])
+    assert abs(dzs[0] - dzs[1] - 0.15) < 0.02 and abs(dzs[0] - dzs[2] - 0.15) < 0.02, dzs
 
 
 def test_the_loaded_sheet():
