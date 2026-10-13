@@ -1159,3 +1159,60 @@ def test_the_survey_aims_off_the_outer_rows_and_cols():
     assert cell not in judged['weak'] and all(abs(v % 1 - 0.5) < 0.01 for v in lands), (cell, judged)
     # The Blue, ~4.4mm +X of it, still comes down on the sheet
     assert 0 <= lands[0] + 4.4 / 2.5 < 4, lands
+
+
+def test_edge_taps_and_z_repeats_come_down_slowly_only_near_contact():
+    '''2026-10-13: a calibration took 11-13 min, ~70s a border: each tap went 1.0 over contact and
+    all the way down at JOG_SPEED (~1.3s a tap), and each z repeat came down 0.02 at a time from
+    `back_off` (0.4) over contact. Now the edge taps lift `back_off`, fast down to `approach` over
+    contact, JOG_SPEED below; a repeat starts its fine steps at `approach` over the last contact.
+    Same depths, same results, never sideways while touching. Locate's taps are as they were.'''
+    from limn.machine import JOG_SPEED
+    cfg = loaded_cfg()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), gain=1350, top=230)
+    fsr.press_cap = 0.2
+    slow = {'edge': [], 'z': []}
+    where = []
+    for name, key in (('find_edge', 'edge'), ('contact_z', 'z')):
+        def wrapped(*a, _f=getattr(fsr, name), _k=key, **kw):
+            where.append(_k)
+            try:
+                return _f(*a, **kw)
+            finally:
+                where.pop()
+        setattr(fsr, name, wrapped)
+    move = bed.move
+    def tracked(x=None, y=None, z=None, speed=None):
+        if where and z is not None and speed == JOG_SPEED and z < bed.pos[2]:
+            slow[where[-1]].append(bed.pos[2] - z)
+        move(x, y, z, speed)
+    bed.move = tracked
+    profile = fsr.calibrate()
+    assert all(abs(v) < 0.03 for v in profile['fsr_ref']['tip']), profile['fsr_ref']
+    assert not bed.dragged
+    # A tap's slow part: `approach` and its press (the cap at most), the sheet's slope aside
+    assert slow['edge'] and max(slow['edge']) <= cfg['approach'] + 0.2 + 0.03, sorted(slow['edge'])[-5:]
+    # Three cells, three repeats: ~20 fine steps for the first, ~6 for each after (60 a cell before)
+    assert len(slow['z']) < 3 * (25 + 2 * 10), len(slow['z'])
+
+
+def test_a_repeat_reading_at_its_start_goes_back_to_back_off():
+    '''A reading at `approach` over the last contact (the sheet not let go yet, a reading in the air):
+    the repeat starts from `back_off` as before, and the contact comes out the same.'''
+    cfg = loaded_cfg()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), gain=1350, top=230)
+    fsr.press_cap = 0.2
+    profile = fsr.calibrate()
+    bed_z = {tuple(c[:3]): c[3] for c in profile['fsr_ref']['bed_z']}
+    zs = []
+    for ghost in (None, (0.06, 0.14, (1, 6), 60)):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), gain=1350, top=230, ghost=ghost)
+        said = []
+        bed.say = said.append
+        bed.tool = 'T1'
+        fsr.matrix(True)
+        z, _ = fsr.contact_z(1, 1, 6, bed_z[(1, 1, 6)])
+        zs.append(z)
+        assert (ghost is not None) == any('already reading' in m for m in said), said
+        assert not bed.dragged
+    assert abs(zs[1] - zs[0]) < 0.011, zs

@@ -483,6 +483,17 @@ class Fsr:
                 if i == 0 and top is None:
                     z, _ = self._descend(hop, z, cfg['step'], floor, early=True)
                     z = self._back_off(hop, z + cfg['back_off'])
+                if found:
+                    # Backed off `back_off` (the sheet let go), then fast to `approach` over the last
+                    # contact: the fine steps from there, not 20 of them from back_off (the repeats
+                    # agreed to 0.007-0.035, 2026-10-13). Already reading there: from back_off.
+                    near = found[-1] + cfg.get('approach', 0.1)
+                    self.machine.move(z=near, speed=JOG_SPEED * 5)
+                    if self.rise(self.read(hop)) < cfg.get('early', cfg['respond']):
+                        z = near
+                    else:
+                        self.machine.say(f"[LRT] already reading at z={near:.3f}, from z={z:.3f} again")
+                        self.machine.move(z=z, speed=JOG_SPEED * 5)
                 z, touched = self._descend(hop, z, cfg['fine_step'], floor)
                 found.append(z)
                 on.append(touched[0])
@@ -994,12 +1005,16 @@ class Fsr:
             return 0.0
         return mesh_z(self.surface, *xy) - mesh_z(self.surface, *at)
 
-    def tap(self, hop, xy, z_press, z_lift, at=None):
+    def tap(self, hop, xy, z_press, z_lift, at=None, slow_from=None):
         '''Down onto `xy`, read, back up. Never moves sideways while pressing.
-        at: where z_press is right; elsewhere it follows the sheet.'''
+        at: where z_press is right; elsewhere it follows the sheet.
+        slow_from: fast down to there (at `at`, a little over contact), JOG_SPEED only below
+        it; without, JOG_SPEED all the way from z_lift (locate's, where contact isn't known).'''
         dz = self.follow(xy, at)
         self.machine.move(z=z_lift + max(dz, 0), speed=JOG_SPEED * 5)
         self.machine.move(float(xy[0]), float(xy[1]))
+        if slow_from is not None and slow_from + dz < z_lift + max(dz, 0):
+            self.machine.move(z=slow_from + dz, speed=JOG_SPEED * 5)
         self.machine.move(z=z_press + dz, speed=JOG_SPEED)
         strengths = self.read(hop)
         self.machine.move(z=z_lift, speed=JOG_SPEED * 5)
@@ -1031,7 +1046,11 @@ class Fsr:
         u = (b - a) / np.linalg.norm(b - a)
         across = np.array([-u[1], u[0]])
         at = a if at is None else np.asarray(at, float)
-        z_lift = z_contact + 1.0
+        # Each tap up `back_off` over contact (clear of it: the sheet follows the mesh), fast down
+        # to `approach` over it, then JOG_SPEED: 1.0 up and JOG_SPEED all the way took ~1.3s a tap,
+        # ~50 taps a border, 70s (2026-10-13)
+        z_lift = z_contact + cfg['back_off']
+        slow_from = z_contact + cfg.get('approach', 0.1)
         coarse, fine, span = cfg.get('sweep', (0.25, 0.05, 0.4))
         onset = cfg.get('early', cfg['respond'])          # a tap presses: see _descend
         reach = 1.5 * array.pitch
@@ -1073,7 +1092,7 @@ class Fsr:
                         p = line + t * u
                         if t in taps or abs(t) > reach + 1e-9 or not inside(p):
                             continue
-                        s = self.tap(hop, p, z_press, z_lift, at)
+                        s = self.tap(hop, p, z_press, z_lift, at, slow_from)
                         taps[t] = s
                         if self.verbose:
                             self.machine.say(f"[LRT]   tap at X{p[0]:.3f} Y{p[1]:.3f} z={z_press:.3f}: "

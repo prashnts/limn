@@ -141,6 +141,7 @@ BEDS = {
             # didn't touch the paper; pens probed without DZ_TRIM= got 0.1 meanwhile (act-9).
             'dz_trim': 0.3,
             'back_off': 0.4,        # mm up after finding contact: clear of it, a tip on an edge registers ~0.2 deep
+            'approach': 0.1,        # mm over a known contact: fast down to there, JOG_SPEED below (edge taps, z repeats)
             'fine_step': 0.02,      # mm, fine z steps
             'settle': 0.08,         # s, after a move before reading (one FSR frame + the link)
             'alive': 0.25,          # s, no frame from the array for this long: stop
