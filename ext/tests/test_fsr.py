@@ -1,5 +1,6 @@
 # uv run python ext/tests/test_fsr.py
 import copy
+import random
 
 import numpy as np
 
@@ -23,7 +24,8 @@ def bed_z(x, y):
 UNLOADED = {'respond': 150, 'early': 60, 'sure': 450, 'press_limit': 950, 'press_strength': 450,
             'locate_strength': 180, 'confirm': 2,
             # and its cells, z and one edge an axis on (1, 1), until 2026-10-11
-            'z_cell': (1, 1, 1), 'x_edges': [(1, (1, 1), (2, 1))], 'y_edges': [(1, (1, 1), (1, 2))]}
+            'z_cell': (1, 1, 1), 'x_edges': [(1, (1, 1), (2, 1))], 'y_edges': [(1, (1, 1), (1, 2))],
+            'edges': None}      # those borders, not random ones: these models are of sheets gone (cols 3-4, row 3)
 
 
 def loaded_cfg():
@@ -265,7 +267,9 @@ def setup(cfg=None, **kw):
     cfg = cfg or (old_cfg() if kw.get('bed5') else bed_cfg())
     samples, dock = Samples(), FakeDock()
     bed = FsrBed(samples, dock, cfg, **kw)
-    return Fsr(bed, dock, samples, cfg), bed, dock
+    fsr = Fsr(bed, dock, samples, cfg)
+    fsr.rng = random.Random(3)          # which borders (pick_edges): the same each run
+    return fsr, bed, dock
 
 def floor_of(fsr, profile):
     cfg = fsr.cfg
@@ -886,8 +890,8 @@ def test_the_loaded_sheet():
     profile = fsr.calibrate()
     assert 0.06 <= fsr.depth[1] <= 0.12, fsr.depth
     ref = profile['fsr_ref']
-    # Two borders an axis: rows 1|2 and 2|3 (X 116.0, 118.5), cols 6|7 and 3|4 (Y 42.1, 49.6)
-    assert abs(ref['x'] - 117.25) < 0.03 and abs(ref['y'] - 45.85) < 0.03, ref
+    # Borders at random now (pick_edges): the tip they put the felt tip at, which sits on the toolhead
+    assert len(ref['edges']) == 8 and all(abs(v) < 0.03 for v in ref['tip']), ref
     for tip in ((0.35, -0.2), (-1.3, 0.95)):
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=tip, tool_length=2.2, **fine)
         fsr.press_cap = 0.2
@@ -984,27 +988,37 @@ def test_row_3_lifted_by_its_column_is_not_the_tip():
 
 def test_a_wrong_cell_from_locate_is_caught_on_the_sheet():
     '''The check after locate: a cell a step over, the step on the sheet whichever close cell the tip
-    is on. With row 3 not known as lifted (as before 2026-10-12), locate names (3, 4) for (1, 4) at
-    times; the tap a row towards row 0 shows (0, 4), not (2, 4), and the tip goes to (1, 4). The whole
+    is on. Locate made to name (3, 4) for (1, 4), as it did on 2026-10-12 22:05 (row 3's lift led): the
+    press a row towards row 0 finds (0, 4), not (2, 4), and the tip goes to (1, 4). The whole
     calibration goes on from there (the survey's aim, as on the plotter), and nothing presses beside
     the sheet: not the check, nor the sweeps, which keep half a cell clear of the sheet's end until an
     edge has put the tip across that axis (a Y sweep went 0.19mm past col 7's end).'''
     cfg = loaded_cfg()
-    cfg['arrays'][0].update(lifted_rows=(), aim=(1.94, 5.33))
+    cfg['arrays'][0].update(aim=(1.94, 5.33))
     loaded = {'other': 0.15, 'lift': {3: 55}}
-    corrected = 0
-    for seed in range(20):
+    for seed in range(6):
         fsr, bed, _ = setup(cfg=copy.deepcopy(cfg), tip=(-1.08, 1.14), crosstalk=loaded, gain=450, top=230, width=0.1)
         bed.rng = np.random.default_rng(seed)
         fsr.press_cap = 0.2
+        touched, locate, wrong = fsr.touched, fsr.locate, [False]
+
+        def named(strengths, hop, level=None):
+            cells = touched(strengths, hop, level)
+            return [(3, 4)] + [c for c in cells if c != (3, 4)] if wrong[0] and cells and strengths.get((3, 4), 0) >= fsr.cfg['early'] else cells
+
+        def locate_wrong(*a, **k):
+            wrong[0] = True
+            try:
+                return locate(*a, **k)
+            finally:
+                wrong[0] = False
+        fsr.touched, fsr.locate = named, locate_wrong
         said = []
         bed.say = said.append
         ref = fsr.calibrate()['fsr_ref']
-        corrected += any(m.startswith('[LRT] not (3, 4)') for m in said)
+        assert any(m.startswith('[LRT] not (3, 4)') for m in said), (seed, [m for m in said if 'tip' in m])
         assert abs(ref['edge_tips']['x'][0] + 1.08) < 0.05 and abs(ref['tip'][1] - 1.14) < 0.05, (seed, ref['edge_tips'])
         assert not bed.off_sheet, (seed, bed.off_sheet[:3])
-    assert corrected, 'locate named (3, 4) in none of them: the check went untested'
-
 
 def test_row_3_lift_doesnt_vote_on_its_edge():
     '''The plotter's own taps on (2, 5)|(3, 5) (2026-10-12, the Micron 005 reference): on the
@@ -1028,3 +1042,31 @@ def test_row_3_lift_doesnt_vote_on_its_edge():
         found.append(t0)
     assert as_read[3] == 1 and as_read[2] > 0.4         # the second, as the plotter judged it
     assert abs(found[0] - found[1]) < 0.05, found
+
+
+def test_an_unsure_pen_is_written_a_cell_off_is_not():
+    '''The Blue, ~4mm off, was refused at dx ±0.33 (2026-10-12): far better than no tag. Its borders
+    0.4 apart are written, said as rough; borders a cell apart (a wrong cell) still stop.'''
+    cfg = loaded_cfg()
+    fsr, bed, _ = setup(cfg=copy.deepcopy(cfg))
+    profile = fsr.calibrate()
+    ref = profile['fsr_ref']
+
+    def pen(spread):
+        fsr, bed, _ = setup(cfg=copy.deepcopy(cfg))
+        bed.tool = 'T1'
+        edges = [[a, h, ca, cb, p - (4.0 if a == 'x' else 0.8) + spread * (i // 2 % 2), 0.1]
+                 for i, (a, h, ca, cb, p, _) in enumerate(ref['edges'])]
+        fsr.measure = lambda bed_z, edges_=None, **kw: {
+            'edges': edges, 'above': ref['above'] + 0.3, 'gaps': [], 'sigma': {'z': 0.02}}
+        return fsr, bed
+
+    fsr, bed = pen(0.4)
+    dx, dy, dz = fsr.probe_tool(profile)
+    assert abs(dx + 3.8) < 0.01 and abs(dy + 0.6) < 0.01, (dx, dy)
+    fsr, bed = pen(2.5)
+    try:
+        fsr.probe_tool(profile)
+        assert False, 'a cell off was written'
+    except FsrError as e:
+        assert 'a cell off' in str(e), e

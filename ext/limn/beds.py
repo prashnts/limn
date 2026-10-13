@@ -167,7 +167,11 @@ BEDS = {
             # within `sweep[2]` of the border they show (fsr.py, find_edge and border)
             'sweep': (0.25, 0.05, 0.4),     # (0.5, ...): ~30 taps a pen fewer, less sure on a patchy sheet
             'off_cell': 0.02,       # mm less sure of a contact z another cell answered first for
-            'max_sigma': 0.15,      # mm: a pen measured less sure than this gets no tag (probe_tool)
+            'max_sigma': 0.15,      # mm: a pen measured less sure than this is written, but said as rough (probe_tool)
+            # Borders an axis, at random each time (fsr.py, pick_edges): the reference's, and a pen's of
+            # the reference's. More cells pressed, less of each; one border's own error averages out.
+            # x_edges / y_edges above: LRT_FSR_MEASURE and the survey only.
+            'edges': (4, 4),        # a pen on all of the reference's: more borders, a smaller sigma
             'repeats': 3,           # z measurements, median
         },
     },

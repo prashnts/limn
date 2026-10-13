@@ -91,3 +91,28 @@ Test: test_row_3_lift_doesnt_vote_on_its_edge, on the plotter's taps (tests/fsr-
 
 Still to watch: the two X edges differ by ~0.2mm on every pen ((1, 6)|(2, 6) against (2, 5)|(3, 5): −1.194/−1.025 for the reference, 3.219/2.998 for the Blue). It's the same on both, so it cancels in dx, but it's either the sheet's geometry or row 3's lift.
 The Blue's first try, as tool 0 (its tag not read), found no contact down to z=2.35.
+
+### 23:21: the Blue refused again; the check stopped the reference
+
+- The Blue: all four edges clean (±0.001-0.011) with the edge fix. Refused at dx ±0.256: the reference's stale ±0.23, plus its own two X edges 0.23 apart.
+- The reference: the check stopped a right locate. A row over, (2, 4) (a weak cell) read 16 at locate's depth, under `early`.
+
+Changes (the user's go, 23:30):
+1. The check presses a row over until one of the predicted cells reads `locate_strength`, a fine step short of the cap (`_press_until_answered`). It answers if it rose `early`, or if it leads the cells pressed (a lifted row's lift excluded). The test now forces locate's mistake (names (3, 4)) on the real config.
+2. Random borders (`pick_edges`, cfg `edges: (4, 3)`). The reference measures 4 an axis at random, each kept in fsr_ref['edges']. A pen measures 3 an axis of the reference's, and dx/dy are border by border, the uncertainty being their spread (`probe_tool`). The first border of an axis is interior (off the outer rows and cols). Weak cells from a survey are excluded (`weak_cells`). The old sheet models keep the fixed borders (`edges: None`). Simulated: 25 references × 2 pens, all 50 probed, none off the sheet, worst error 0.11mm.
+
+Replay of tonight's borders (reference 22:36 runs A/B, Blue 22:36/23:21):
+- each border repeats per pen: reference X 0.03/0.03, Y 0.035/0.003; Blue X 0.05/0.06, Y 0/0.07
+- dy border by border: −0.782, −0.869: the sheet's own irregularity cancels
+- dx border by border: −4.366 ((1, 6)|(2, 6)), −3.966 ((2, 5)|(3, 5)): 0.40 apart, so it would still be refused (±0.2)
+- the two X borders in toolhead X: reference 2.33 apart, Blue 2.73: pen-dependent
+- lead: depth. Since 55c6a2c the first X edge taps at locate's depth (0.12-0.20) and the second at its own (0.02-0.04). In the one Micron run with every edge at 0.20 (before 55c6a2c), the X tips agreed to 0.006. A pen pressed deeper slides sideways by its own amount (nib compliance, tilt).
+
+## 2026-10-13: write rough tags, Z on several cells (not deployed yet)
+
+The user: a pen corrected from ~3mm to ~0.3 should be stored, not refused. Changes:
+1. `probe_tool` writes the tag whatever its sigma (over `max_sigma` it says "rough"). It stops only when one axis' borders are half a cell or more apart (`np.ptp(d) >= pitch/2`): a wrong cell, not noise. Last night's Blue (dx −4.366 / −3.966) would have been written as ≈−4.17.
+2. A pen measures all 4 of the reference's borders an axis (`edges: (4, 4)`).
+3. `measure()` takes contact z on every BLTouch'd cell of the hop ((1, 6), (2, 5), (1, 3)), not on the z cell alone: `above` is their median over the BLTouch, sigma from their spread. dz (reference and pens) is from `above`. ~6 fine descents more per measurement. `m['z']` is still the z cell's.
+Test: test_an_unsure_pen_is_written_a_cell_off_is_not.
+Test plan: one LRT_CALIBRATE with the Micron 005 (the new reference, its `above`), then LIMN_TOOL_CALIBRATE with the Micron 01 Blue. This also runs last night's untested changes (`_check_cell`, `judge_taps`, random borders).
