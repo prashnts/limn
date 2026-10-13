@@ -39,6 +39,15 @@ What the sheet does, measured on 2026-10-07 (`ext/tests/test_fsr.py` simulates i
 
 After `LRT_CALIBRATE` and `LRT_PROBE_TOOL` the tool draws a test mark on the paper: a corner that makes a `+` with the corner the previous tool left, and a corner at the next point for the next tool. Two pens that disagree show a step in the `+`: in its vertical line for X, in its horizontal line for Y. `LRT_MARKS` shows where the next one goes, `LRT_MARKS RESET=1` starts over on a new sheet.
 
+On BED_5 the marks run down the paper's long side (Y) in two columns, starting at its top-left corner as the IR Top camera sees it (high X by the dock, high Y), 10 mm apart (`marks` in `ext/limn/beds.py`: `start`, `step`, `rows`, `cols`, `col_gap`, `arm`). Beside each `└`, in the quarter no corner uses, one short tick per holder number tells which holder the pen came from: one for 41, five for 45 (`ticks`).
+
+`LRT_MARK` draws the next mark by hand with the carried pen, to try how deep it should go:
+- `LRT_MARK`: as a calibration draws it, at Z1 with the tag's dz.
+- `LRT_MARK TRIM=0.4`: as if the tags had been written with a trim of 0.4 (`DZ_TRIM`, mm past first touch). A tag's dz is the pen's first touch less the calibration's trim, so the pen goes down to Z1 − (0.4 − that trim): with the usual 0.3, Z0.9.
+- `LRT_MARK Z=0.9`: the pen-down G-code Z as is (lower is deeper). Between 0.3 and 2.0.
+
+Each one moves on to the next slot. Once a trim looks right, calibrate again with it (`LRT_CALIBRATE DZ_TRIM=`), so the reference's tag and every pen's after it carry it.
+
 Nothing is probed or drawn when a pen could hit the bed or the tools:
 - Meshing puts the carried tool away first (`UNDOCK` in the `BED_MESH_CALIBRATE` macro). Empty holders are normal. With no tool saved as carried, the key locked (the `axis_k` endstop open) and exactly one holder empty, that tool is taken as the carried one and put away. With the key open, nothing is guessed: keeping the carriage empty is up to you.
 - A mark is only drawn with a carried tool, with a paper mesh of this placement, inside that mesh and short of the holders (`MARKS_MAX_X`), and with sane offsets on its tag (`TOOL_MAX_DXY`, `TOOL_DZ`). The pen travels at the beds' travel height and comes down only over the mark.

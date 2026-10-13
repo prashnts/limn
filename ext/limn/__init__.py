@@ -46,12 +46,12 @@ import time
 from .dock import Dock
 from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
 from .machine import Machine
-from .geometry import ProbeValue, gen_mark_grid, mark_strokes, wipe_slots, prime_strokes, plus_strokes
+from .geometry import ProbeValue, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes
 from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL, PANEL_ZHOME
 from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
 from . import marks
 from .rtp import Rtp
-from .fsr import Fsr, judge_survey
+from .fsr import Fsr, judge_survey, grid
 from . import fsr_map
 from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
@@ -190,6 +190,10 @@ class Limn:
             ('LRT_MESH_CALIBRATE', self.cmd_MESH_CALIBRATE,
              "LRT_MESH_CALIBRATE [IF_STALE=1]: meshes of the bed on the plotter, the whole bed without one"),
             ('LRT_MARKS', self.cmd_MARKS, "LRT_MARKS [RESET=1]: where the next test mark goes, RESET: new paper"),
+            ('LRT_MARK', self.cmd_MARK,
+             "LRT_MARK [TRIM=] [Z=]: the carried pen draws the next test mark now. TRIM: the dz trim to try (mm "
+             "past first touch, as DZ_TRIM; the tags have the calibration's, 0.3), Z: the pen-down G-code Z itself "
+             "(1.0 as a plot; lower is deeper). Neither: as a calibration draws it"),
             ('LRT_WIPE', self.cmd_WIPE, "LRT_WIPE [RESET=1]: the wipe area's next slot, RESET: a fresh pad"),
             ('LRT_CALIBRATE', self.cmd_CALIBRATE,
              "LRT_CALIBRATE [PRESS=] [DZ_TRIM=] [MESH=1]: calibrate the bed with the reference tool (T4); PRESS: mm "
@@ -605,10 +609,10 @@ class Limn:
             self.gcode.run_script_from_command(f"DOCK T={carried}")
 
     # Test marks (marks.py), where the last one ended, per placement of the bed
-    def _draw_test_mark(self, gcmd, bed):
+    def _draw_test_mark(self, gcmd, bed, pen_z=marks.PEN_Z, note=''):
         if 'marks' not in bed:
             return
-        points = gen_mark_grid(**bed['marks'])
+        points = mark_points(bed['marks'])
         record = self._vars().get('lrt_marks')
         why = []
         try:
@@ -624,15 +628,45 @@ class Limn:
         paper = self._mesh_profiles().get('lrt_paper')
         if not why:
             strokes = mark_strokes(points[i], points[i + 1], bed['marks']['arm'])
+            holder = self._carried()
+            if bed['marks'].get('ticks') and 41 <= holder <= 49:
+                strokes += holder_ticks(points[i], holder % 10, bed['marks']['arm'])
             svv = self._vars()
             offsets = tuple(float(svv.get(k, 0) or 0) for k in ('tool_offset_x', 'tool_offset_y', 'tool_offset_z'))
             why += marks.problems(strokes, offsets, mesh_bounds(paper))
         if why:
             gcmd.respond_info(f"[LRT][Mark] Not drawing the test mark: {'; '.join(why)}")
             return
-        marks.draw(Machine(self.printer, gcmd), strokes)
+        marks.draw(Machine(self.printer, gcmd), strokes, pen_z)
         self._save_vars({'lrt_marks': {'placement': self.placement, 'next': i + 1}})
-        gcmd.respond_info(f"[LRT][Mark] Mark {i + 1} of {len(points) - 1} drawn at {points[i]} -> {points[i + 1]}")
+        gcmd.respond_info(f"[LRT][Mark] Mark {i + 1} of {len(points) - 1} drawn at {points[i]} -> {points[i + 1]}"
+                          f", the pen at Z{pen_z:.2f}{note}")
+
+    def _tags_trim(self, bed):
+        '''The dz trim the tags were written with (the FSR calibration's), None off an FSR bed.'''
+        if bed['sensor'] != 'fsr':
+            return None
+        return float(self.profile.get('fsr_ref', {}).get('dz_trim', bed['fsr'].get('dz_trim', 0.0)))
+
+    def cmd_MARK(self, gcmd):
+        '''The carried pen draws the next test mark now, at Z1 (as a plot) or deeper/shallower to
+        try a trim. A pen's tag dz is its first touch over the BLTouch less the trim, and Z1 with it
+        presses `trim` past first touch; so a trim t is Z1 - (t - the tags' trim). Z= sets it as is.'''
+        bed = self._bed(gcmd)
+        trim, z = gcmd.get_float('TRIM', None, minval=-0.5, maxval=1.0), gcmd.get_float('Z', None)
+        if trim is not None and z is not None:
+            raise gcmd.error("[LRT][Mark] TRIM= or Z=, not both")
+        note = ''
+        if trim is not None:
+            written = self._tags_trim(bed)
+            if written is None:
+                raise gcmd.error(f"[LRT][Mark] TRIM= is for an FSR bed's tags; this is {self.bed}: Z= instead")
+            z = marks.PEN_Z - (trim - written)
+            note = f" (a trim of {trim:.2f}: the tags have {written:.2f})"
+        z = marks.PEN_Z if z is None else z
+        if not 0.3 <= z <= 2.0:
+            raise gcmd.error(f"[LRT][Mark] the pen at Z{z:.2f} is out of 0.3 .. 2.0 (Z1 is a plot's)")
+        self._draw_test_mark(gcmd, bed, z, note)
 
     # The wipe area (beds.py `wipe`): slots used one after another, per placement of the bed
     def _wipe(self):
@@ -866,7 +900,7 @@ class Limn:
         if self.bed not in BEDS or 'marks' not in BEDS[self.bed]:
             gcmd.respond_info(f"[LRT][Mark] No test marks on bed {self.bed}")
             return
-        n = len(gen_mark_grid(**BEDS[self.bed]['marks'])) - 1
+        n = len(mark_points(BEDS[self.bed]['marks'])) - 1
         i = next_mark(self._vars().get('lrt_marks'), self.placement)
         gcmd.respond_info(f"[LRT][Mark] Next test mark: {i + 1} of {n} on {self.bed}")
 
@@ -1127,7 +1161,8 @@ class Limn:
                         per_cell.setdefault((row, col), []).append(v)
                 median = {c: sorted(v)[len(v) // 2] for c, v in per_cell.items()}
                 top = sorted(median, key=lambda c: -median[c])[:6]
-                gcmd.respond_info(f"[LRT] hop {hop} cells: " + ', '.join(f"{c}={median[c]}" for c in top))
+                gcmd.respond_info(f"[LRT] hop {hop} cells: " + ', '.join(f"{c}={median[c]}" for c in top)
+                                  + f" [{grid(median)}]")
 
     def cmd_CHAIN(self, gcmd):
         if not self.dock.connect():

@@ -66,7 +66,8 @@ def wipe_problems(strokes, offsets, rect, mesh):
     return why
 
 
-def draw(machine, strokes):
+def draw(machine, strokes, pen_z=PEN_Z):
+    '''pen_z: the G-code Z the pen draws at, the tool's offsets applied (PEN_Z: as a plot).'''
     run = machine.gcode_run
     x, y = strokes[0][0]
     machine.move(z=max(machine.position()[2], PANEL_ZHOME))
@@ -77,7 +78,7 @@ def draw(machine, strokes):
     for stroke in strokes:
         (sx, sy), rest = stroke[0], stroke[1:]
         run(f"G1 X{sx} Y{sy}")
-        run(f"G1 Z{PEN_Z}")
+        run(f"G1 Z{round(pen_z, 3)}")
         for px, py in rest:
             run(f"G1 X{px} Y{py}")
         run(f"G1 Z{HOP_Z}")

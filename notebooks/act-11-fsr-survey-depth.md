@@ -150,3 +150,17 @@ Survey 12:42 (new code): faulty only (0, 5) (nothing), weak (2, 4) (76), median 
 
 Simulated: a Blue-like pen (tip 4.4 +X, 0.88 −Y of the reference, shorter by 0.3) after a reference calibration, on today's sheet model: 30/30 right at the saved aim [2.94, 6.03] and at [1.94, 5.03]. The 206-locate sweep unchanged (187 right, 0 wrong, 0 beside the sheet). 175 tests pass.
 To run: deploy, LRT_FSR_SURVEY (the aim moves to row 1), LRT_CALIBRATE (005), then the Blue.
+
+## 2026-10-13 afternoon: the calibration on the 13:12 survey, LRT_MARK, and a note for the next agent
+
+**The run (13:12-13:25, the deployed reach/aim code):** survey: nothing faulty, (1, 1), (1, 2) weak, median 157, aim [1.93, 5.01]. LRT_CALIBRATE: locate straight onto (1, 4), no extra taps; 8 borders all ±0.003-0.011. Z on three cells 2.539 / 2.531 / 2.532 (this morning they were 0.1 apart); contact over the BLTouch 2.532 (2.48 at noon), tag dz 2.23 with trim 0.3.
+**Open lead, depth:** the tip from border to border spread 0.22 in X and 0.19 in Y, and the outliers are the deepest taps: (0, 5)|(1, 5) at 0.20 gave −0.84 (others ~−1.0); (0, 4)|(0, 5) at 0.12 gave −1.41 (others ~−1.25). Deeper presses slide sideways. A pen compared border by border only cancels it if it presses each border about as deep as the reference did. Candidate: tap to a target reading per border (force), not a depth; or record each border's depth in fsr_ref['edges'] and press the pen's to it.
+
+**LRT_MARK [TRIM=] [Z=]** (uncommitted): the carried pen draws the next test mark now. TRIM is converted to the pen-down Z from the trim the tags were written with (fsr_ref['dz_trim'], stored by calibrate_reference from now on; older profiles: beds.py dz_trim): Z = 1 − (TRIM − that trim). Z= as is, 0.3..2.0. BED_5's marks now run down the paper in 2 columns from (84, 152) (high X by the dock, high Y), 10mm apart, arm 3, with holder ticks (one per holder number, 45: five) in the free quarter of each └ (geometry.mark_points, holder_ticks). Docs: docs/calibration.md. Tests: test_marks.py (178 pass).
+
+**For the next agent:**
+- The user tests on the plotter themselves and reports back; they deploy the code and restart Klipper (never RESTART for them). Ask before SSH; Moonraker (limn.nb.malow.im) is fine once they've offered the plotter in the conversation.
+- Current state: FSR calibration works end to end on this sheet (survey 13:12, reference Micron 005 in holder 45, T4). Next by the user: a manual mark test to pick dz_trim (LRT_MARKS RESET=1 first, the old grid's 2 marks are out of the new columns' way), then pens: the Micron 01 Blue (+4.4 X on purpose, to test locate's reach) and the others.
+- What to watch in their report: "[LRT] nothing at the aim by z=…" (the reach), "a quarter cell … from where it came down" and "a tap … answered on …" (_find_cell), "rough" tags, and dx/dy border by border.
+- Rules the user set: fix the estimator, not thresholds; keep the aim off the outer rows; gentle touches beside the sheet are fine; replay real data or simulate before claiming a fix; be plain about what a fix will and won't do. The BLTouch-pin reference idea is parked (memory: limn-bltouch-pin).
+- Simulation sweep pattern: a scratch script looping locate()/probe_tool() over tips with SHEET_10_13 from test_fsr.py (counts right / wrong / stopped / off_sheet); not kept in the repo.

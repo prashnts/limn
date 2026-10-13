@@ -4,7 +4,7 @@ import collections
 from fakes import run_tests
 from test_klipper import FakeGcmd, make, make_with_holder, raises
 from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
-from limn.geometry import gen_mark_grid, mark_strokes, wipe_slots, prime_strokes, plus_strokes
+from limn.geometry import gen_mark_grid, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes
 from limn.beds import BEDS
 from limn import marks
 
@@ -75,7 +75,7 @@ def test_mark_problems():
     for name, bed in BEDS.items():                          # each bed's marks fit its paper mesh
         paper_mesh = next(m for m in bed['meshes'] if m['profile'] == 'lrt_paper')
         (x0, y0), (w, h) = paper_mesh['origin'], paper_mesh['size']
-        points = gen_mark_grid(**bed['marks'])
+        points = mark_points(bed['marks'])
         for a, b in zip(points, points[1:]):
             assert marks.problems(mark_strokes(a, b, bed['marks']['arm']), (5, 5, 1.0),
                                   ((x0, y0), (x0 + w, y0 + h))) == [], name
@@ -655,3 +655,50 @@ def test_prepare_pauses_when_a_new_pen_cannot_be_measured():
 
 if __name__ == '__main__':
     run_tests(globals())
+
+
+def test_bed_5_marks_run_down_the_paper_from_its_top_left():
+    '''BED_5: two columns along Y from (84, 152), by the dock (high X) and the paper's far end (high Y),
+    10mm apart; each mark is still a └ and a ┐ that the next pen's └ makes a + with, and with the
+    holder ticks and a pen 5mm off every stroke is on the paper mesh.'''
+    m = BEDS['BED_5']['marks']
+    points = mark_points(m)
+    assert points[0] == (84, 152) and points[1] == (84, 142) and points[11] == (84, 42) and points[12] == (70, 152)
+    assert len(points) == 24
+    paper_mesh = next(x for x in BEDS['BED_5']['meshes'] if x['profile'] == 'lrt_paper')
+    (x0, y0), (w, h) = paper_mesh['origin'], paper_mesh['size']
+    for a, b in zip(points, points[1:]):
+        strokes = mark_strokes(a, b, m['arm']) + holder_ticks(a, 5, m['arm'])
+        for off in ((5, 5, 1.0), (-5, -5, 1.0), (5, -5, 1.0), (-5, 5, 1.0)):
+            assert marks.problems(strokes, off, ((x0, y0), (x0 + w, y0 + h))) == [], (a, b, off)
+
+
+def test_holder_ticks_keep_clear_of_the_crosses():
+    '''The ticks go in the quarter of the └'s corner no stroke uses (+X, -Y), and stop short of the next
+    point's └ (its +Y arm) 10mm on.'''
+    ticks = holder_ticks((84, 152), 5, 3)
+    assert len(ticks) == 5
+    for (xa, ya), (xb, yb) in ticks:
+        assert ya == yb and 84 < xa < xb <= 87 and 152 - 6 < ya < 152
+    assert min(p[1] for t in ticks for p in t) > 142 + 3
+
+
+def test_lrt_mark_draws_the_next_mark_at_a_trim():
+    '''LRT_MARK: the carried pen draws the next test mark now. TRIM= goes from the trim the tags were
+    written with (the calibration's): a trim 0.1 more is the pen 0.1 lower than Z1. Z= as is; not
+    both; out of 0.3 .. 2.0 refused. Each one moves the slot on, its ticks the holder (45: five).'''
+    p = plotter(carried=45, bed=reply('BED_5'))
+    p.ext.profile['fsr_ref'] = {'bed_z': [], 'dz_trim': 0.3}
+    p.run('LRT_MESH_CALIBRATE')
+    p.svv['currently_docked_tool'] = 45
+    p.run('LRT_MARK')
+    assert p.gcode.scripts.count('G1 Z1.0') == 2 + 5 and p.svv['lrt_marks']['next'] == 1
+    p.run('LRT_MARK', TRIM=0.4)
+    assert p.gcode.scripts.count('G1 Z0.9') == 7 and p.svv['lrt_marks']['next'] == 2 and p.said('a trim of 0.40')
+    p.run('LRT_MARK', Z=1.15)
+    assert p.gcode.scripts.count('G1 Z1.15') == 7 and p.svv['lrt_marks']['next'] == 3
+    assert 'not both' in raises(lambda: p.run('LRT_MARK', TRIM=0.4, Z=1.0))
+    assert 'out of 0.3' in raises(lambda: p.run('LRT_MARK', Z=0.1))
+    assert p.svv['lrt_marks']['next'] == 3
+    p = plotter(carried=42)                                                 # BED_3, an RTP bed: no trim
+    assert 'Z= instead' in raises(lambda: p.run('LRT_MARK', TRIM=0.4))

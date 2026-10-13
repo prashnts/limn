@@ -41,6 +41,21 @@ class FsrError(RuntimeError):
 
 
 HIGH_AT_REST = 40      # a cell this far over the sheet's median at rest, untouched, is faulty (BED_5's col 3: 75-100)
+BARS = '▁▂▃▄▅▆▇█'
+
+
+def grid(strengths, rows=4, cols=8, full=60):
+    '''The whole array on one line for the console: row 0 first, col 0 leftmost, each
+    cell a bar of its strength over the strongest's (at least `full`, so the noise at
+    rest stays flat); · nothing, x a cell not read (dead, faulty).'''
+    top = max(max(strengths.values(), default=0), full)
+
+    def bar(c):
+        if c not in strengths:
+            return 'x'
+        v = strengths[c] / top
+        return '·' if v < 1 / 16 else BARS[min(len(BARS) - 1, int(v * len(BARS)))]
+    return '|'.join(''.join(bar((r, c)) for c in range(cols)) for r in range(rows))
 
 
 def judge_survey(result, cfg, hop):
@@ -415,9 +430,9 @@ class Fsr:
         return s >= (level or self.cfg['respond']) and s >= self.cfg['dominance'] * max(strengths.values(), default=0)
 
     def top(self, strengths, n=3):
-        '''The strongest cells, for messages.'''
+        '''The strongest cells, and the whole array (grid()), for messages.'''
         cells = sorted(strengths, key=lambda c: -strengths[c])[:n]
-        return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells)
+        return ', '.join(f"{c}={strengths[c]:.0f}" for c in cells) + f" [{grid(strengths, full=self.cfg['respond'])}]"
 
     # Z
     def window(self, bed_z, prior=None):
@@ -1333,6 +1348,7 @@ class Fsr:
                              f"will be as unsure")
         self.machine.gcode_run(f"WRITE_TOOL_TAG DX=0 DY=0 DZ={tool_z:.3f} REFERENCE=1")
         ref['bed_z'] = [[*cell, z] for cell, z in bed_z.items()]
+        ref['dz_trim'] = self.dz_trim           # the tags' trim: LRT_MARK TRIM= goes from it
         return {'fsr_ref': ref}
 
     def probe_tool(self, profile):

@@ -27,6 +27,24 @@ def gen_mark_grid(*, nx, ny, xrange, yrange, **_):
     return [(round(float(x), 2), round(float(y), 2))
             for y in np.linspace(*yrange, ny) for x in np.linspace(*xrange, nx)]
 
+def mark_points(marks):
+    '''The corners of a bed's test marks, in the order they are used (mark i: point i to
+    point i + 1). A grid row by row (`nx`, `ny`, `xrange`, `yrange`), or columns along Y
+    (`start`, `step`, `rows`, `cols`, `col_gap`): the first column from `start` towards -Y,
+    each next one `col_gap` towards -X.'''
+    if 'xrange' in marks:
+        return gen_mark_grid(**marks)
+    (x0, y0) = marks['start']
+    return [(round(x0 - c * marks['col_gap'], 2), round(y0 - r * marks['step'], 2))
+            for c in range(marks['cols']) for r in range(marks['rows'])]
+
+def holder_ticks(at, n, arm, gap=1.0):
+    '''n short ticks along X beside the └ at `at`, in the quarter no corner uses there (+X,
+    -Y): the holder the pen came from (41: one ... 45: five).'''
+    x, y = at
+    return [[(round(x + arm / 2, 2), round(y - 1 - gap * k, 2)), (round(x + arm, 2), round(y - 1 - gap * k, 2))]
+            for k in range(n)]
+
 def wipe_slots(*, origin, size, nx, ny, **_):
     '''The wipe area's slots, in the order they are used: ((x0, y0), (x1, y1)) each, row by
     row along Y from its origin.'''
