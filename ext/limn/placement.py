@@ -10,6 +10,7 @@
 # Kept in save_variables:
 #   lrt_meshes  {'placement': key, 'profiles': {name: fingerprint}}
 #   lrt_marks   {'placement': key, 'next': index into the bed's mark grid}
+#   lrt_mesh_tops {bed: {profile: highest point of its last mesh}}: mesh_move_z
 import hashlib
 import json
 
@@ -59,6 +60,20 @@ def stale_meshes(record, key, profiles, names):
         elif fingerprint != record.get('profiles', {}).get(name):
             why.append(f"{name} isn't the mesh taken last (restarted without SAVE_CONFIG?)")
     return why
+
+
+MOVE_Z_MARGIN = 3.0     # mm the BLTouch pin deploys over the bed's highest point (the user's, 2026-10-14)
+
+
+def mesh_move_z(top, z_offset, default, margin=MOVE_Z_MARGIN):
+    '''Travel z of BED_MESH_CALIBRATE: `margin` over where the BLTouch triggered at the
+    highest point of the last mesh of this bed and profile (`top`, bed_mesh's z: the
+    trigger less z_offset). Never over `default` (horizontal_move_z), and it with no
+    mesh to go by. Each probe comes down and goes back up to it: 5.5 cost ~2.4s a
+    point over paper triggering at -1.5..-0.2 (2026-10-13).'''
+    if top is None:
+        return default
+    return round(min(default, top + z_offset + margin), 2)
 
 
 def next_mark(record, key):

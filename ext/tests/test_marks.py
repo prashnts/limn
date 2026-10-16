@@ -2,8 +2,8 @@
 # The bed's placement, its meshes and the test marks, over Klipper restarts.
 import collections
 from fakes import run_tests
-from test_klipper import FakeGcmd, make, make_with_holder, raises
-from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark
+from test_klipper import FakeGcmd, FakeProbe, make, make_with_holder, raises
+from limn.placement import placement_key, mesh_fingerprint, stale_meshes, next_mark, mesh_move_z
 from limn.geometry import (gen_mark_grid, mark_points, mark_strokes, holder_ticks, wipe_slots, prime_strokes, plus_strokes,
                            sheet_layout, purge_strokes, purge_slots, fill_order)
 from limn.beds import TOOL_MAX_DXY
@@ -235,7 +235,7 @@ class Plotter:
         self.bed_mesh = bed_mesh or FakeBedMesh()
         self.bed = bed or reply()
         self.toolhead = FakeToolhead()
-        printer.objects.update({'bed_mesh': self.bed_mesh, 'toolhead': self.toolhead, 'probe': object()})
+        printer.objects.update({'bed_mesh': self.bed_mesh, 'toolhead': self.toolhead, 'probe': FakeProbe()})
         self.gcode.on_script = self.on_script
         ext.dock.request = lambda cmd, kind, timeout=3: list(self.bed)
         ext._routine = lambda gcmd, bed: FakeRoutine(self, offsets)
@@ -286,6 +286,18 @@ class Plotter:
 def plotter(carried=42, **kwargs):
     ext, printer = make()
     return Plotter(ext, printer, svv={'currently_docked_tool': carried}, **kwargs)
+
+
+def test_a_bed_meshed_before_is_meshed_again_3mm_over_its_highest_point():
+    p = plotter(carried=0)
+    p.run('LRT_MESH_CALIBRATE')
+    meshes = [s for s in p.gcode.scripts if s.startswith('BED_MESH_CALIBRATE')]
+    assert not any('HORIZONTAL_MOVE_Z' in s for s in meshes)        # nothing to go by yet
+    assert p.svv['lrt_mesh_tops']['BED_3'] == {'lrt_paper': -1.8, 'lrt_panel': -1.81}
+    p.run('LRT_MESH_CALIBRATE')
+    meshes = [s for s in p.gcode.scripts if s.startswith('BED_MESH_CALIBRATE')][2:]
+    assert meshes[0].endswith('HORIZONTAL_MOVE_Z=2.00')               # -1.8 + z_offset 0.8 + 3
+    assert meshes[1].endswith('HORIZONTAL_MOVE_Z=1.99')
 
 
 def test_mesh_calibrate_remembers_the_placement():
@@ -814,3 +826,12 @@ def test_lrt_mark_draws_the_next_mark_at_a_trim():
     assert p.svv['lrt_marks']['next'] == 3
     p = plotter(carried=42)                                                 # BED_3, an RTP bed: no trim
     assert 'Z= instead' in raises(lambda: p.run('LRT_MARK', TRIM=0.4))
+
+
+def test_mesh_travel_goes_by_the_last_mesh_of_the_bed():
+    # 2026-10-13's lrt_paper: highest point -1.016, the BLTouch's z_offset 0.8
+    assert mesh_move_z(-1.016, 0.8, 5.5) == 2.78
+    # the FSR sits higher: never over horizontal_move_z
+    assert mesh_move_z(1.95, 0.8, 5.5) == 5.5
+    # no mesh of this bed yet
+    assert mesh_move_z(None, 0.8, 5.5) == 5.5

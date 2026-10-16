@@ -16,7 +16,7 @@ async function loadHeadSvg() {
     headSvg = { href: `/api/toolhead.svg?t=${Date.now()}`, box: vb };
   } catch { headSvg = null; }
 }
-const headOn = () => $('#show-head').checked;
+const headOn = () => $('#show-head').checked && !(typeof posterOn === 'function' && posterOn());   // a poster: no bed to show it on
 
 async function pollHead() {
   clearTimeout(headTimer);

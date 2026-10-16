@@ -15,7 +15,12 @@
 # It goes up where it is, across, and down only where it arrives.
 # Every z is kept inside the machine's and the tool's z limits; a z that had
 # to be clamped is a problem too.
+import collections
 import math
+import os
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,10 +31,10 @@ from shapely.ops import unary_union
 
 from .gcode import Writer, num
 from .order import improve, join, order
-from . import ink
+from . import ink, poster, svg
 from .preview import parse, stats
 from .profile import holder_tools, load_machine, load_pens, load_tools, plan_pens, reach, with_tags
-from .slicer import Cache, cut, goes_under, lightness
+from .slicer import Cache, cut, goes_under, lightness, slice_object
 from .tools import DRAW
 
 KEEP_OUT = math.inf
@@ -212,6 +217,8 @@ class Result:
     unsafe: list[str] = field(default_factory=list)     # it must not be sent to the plotter
     sim: object = None          # preview.Sim: the G-code read back
     plan: list = field(default_factory=list)    # the steps, in order: start, swap (by hand), tool, end
+    layout: object = None       # a poster's: poster.Layout
+    sheets: list = field(default_factory=list)  # a poster's sheets as plotted: {n, first, last} G-code lines
 
 
 def _fields(machine, tool, tools):
@@ -263,8 +270,9 @@ def swaps(machine, tools, used, problems):
     return out, order
 
 
-def _on_paper(machine, oid, tid, paths, placement, problems):
-    '''The paths placed, and clipped to the paper; a problem when that cut any.'''
+def _on_paper(machine, oid, tid, paths, placement, problems, quiet=False):
+    '''The paths placed, and clipped to the paper; a problem when that cut any (not `quiet`:
+    a poster's sheets cut every drawing that goes on to the next).'''
     if not paths:
         return []
     starts = np.cumsum([0] + [len(p) for p in paths[:-1]])
@@ -277,7 +285,7 @@ def _on_paper(machine, oid, tid, paths, placement, problems):
         if not cut_:
             out.append(p)
             continue
-        if not any(q.startswith(f'{oid}: {tid} draws') for q in problems):
+        if not quiet and not any(q.startswith(f'{oid}: {tid} draws') for q in problems):
             x, y = pts[a + int(np.argmax(bad[a:a + len(p)])), :2]
             problems.append(f'{oid}: {tid} draws at ({num(x)}, {num(y)}), outside the draw area '
                             f'{list(machine.draw_area)}: only the part on the paper is drawn')
@@ -337,6 +345,31 @@ def drawing_order(s, tid, budget):
     return s.orders[k]
 
 
+def counts(job, sliced):
+    out = {}
+    for obj in job.objects:
+        for tid, paths in sliced[obj.id].paths.items():
+            out[tid] = out.get(tid, 0) + len(paths)
+    return out
+
+
+def reaching(s, tid, budget, placement, rect):
+    '''Which of the slice's paths of a tool (in drawing order) can reach `rect` (bed mm) as the
+    drawing is placed: their boxes (object mm, kept on the slice) against the rect brought into
+    the drawing's frame. A poster's sheet only places and clips those.'''
+    k = ('boxes', tid, budget)
+    if k not in s.orders:
+        ps = drawing_order(s, tid, budget)
+        s.orders[k] = np.array([[p[:, 0].min(), p[:, 1].min(), p[:, 0].max(), p[:, 1].max()] for p in ps]) \
+            if ps else np.zeros((0, 4))
+    b = s.orders[k]
+    x0, y0, x1, y1 = rect
+    c = placement.local([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    lx0, ly0 = c.min(axis=0) - 1e-6
+    lx1, ly1 = c.max(axis=0) + 1e-6
+    return np.flatnonzero((b[:, 2] >= lx0) & (b[:, 0] <= lx1) & (b[:, 3] >= ly0) & (b[:, 1] <= ly1))
+
+
 def chain(blocks, start):
     '''Blocks of paths in their order, one after another: the nearest next, drawn from
     its last path back when that end is nearer.'''
@@ -351,15 +384,17 @@ def chain(blocks, start):
     return out
 
 
-def emit(job, machine, tools, sliced) -> Result:
+def emit(job, machine, tools, sliced, marks=None, quiet=False, count=None) -> Result:
+    '''marks: paths (bed mm, (n, 3)) the darkest pen it uses draws too, a poster sheet's crop marks.
+    quiet: a poster's sheet: drawings cut by the paper's edge are not a problem, and only their
+    paths that reach the paper are placed. count: paths of each tool, over the whole poster (its
+    ordering time is shared out by them: every sheet orders a drawing the same, once).'''
     problems = []
     by_tool: dict[str, list[list[np.ndarray]]] = {}     # tool -> each drawing's paths, in order
     obstacles = [ZoneObstacle(z) for z in machine.zones]
     under = hidden(job, tools, sliced)
-    count = {}                  # paths of each tool: its ordering time is shared out by them
-    for obj in job.objects:
-        for tid, paths in sliced[obj.id].paths.items():
-            count[tid] = count.get(tid, 0) + len(paths)
+    if count is None:           # paths of each tool: its ordering time is shared out by them
+        count = counts(job, sliced)
     for obj in job.objects:
         s = sliced[obj.id]
         problems += [p for p in s.problems if p not in problems]
@@ -374,14 +409,21 @@ def emit(job, machine, tools, sliced) -> Result:
                 continue
             budget = round(machine.order_time * len(s.paths[tid]) / count[tid], 3)
             paths = drawing_order(s, tid, budget)
+            if quiet:
+                paths = [paths[i] for i in reaching(s, tid, budget, obj.placement, machine.draw_area)]
+                if not paths:
+                    continue
             if tid in under.get(obj.id, {}):        # cut in order: the pieces stay in it
                 paths = [s.surface.drape(p) for p in cut([p[:, :2] for p in paths], under[obj.id][tid])]
-            placed = _on_paper(machine, obj.id, tid, paths, obj.placement, problems)
+            placed = _on_paper(machine, obj.id, tid, paths, obj.placement, problems, quiet)
             by_tool.setdefault(tools[tid].alias or tid, []).append(placed)     # a plan pen a holder has: its tool
 
     # The order asked for (the Layers panel; a plan pen a holder has: its tool), else light first:
     # where inks overlap uncut (text in a line font over a fill) the dark goes over the light
     by_tool = {t: bs for t, bs in by_tool.items() if any(bs)}
+    if marks and by_tool:
+        dark = min(by_tool, key=lambda t: lightness(tools[t].color))
+        by_tool[dark].append(list(marks))
     if job.tool_order:
         first = list(dict.fromkeys(tools[t].alias or t if t in tools else t for t in job.tool_order))
     else:
@@ -500,5 +542,113 @@ def plot(job, cache=None, fonts=None, tags=None) -> tuple[Result, dict]:
     '''Slice what isn't sliced yet (cache), and write the job's G-code.'''
     machine, tools = load(job, tags)
     cache = cache or Cache()
+    # the drawings not sliced yet, side by side: in processes of their own (the slicer is Python
+    # as much as shapely's C), else threads
+    todo = [o for o in job.objects if not cache.has(o, tools, job.root, fonts)]
+    if len(todo) > 1:
+        for o, s in zip(todo, _slice_many(todo, tools, job.root, fonts)):
+            cache.put(o, tools, job.root, fonts, s)
     sliced = {obj.id: cache.get(obj, tools, job.root, fonts) for obj in job.objects}
+    if job.poster:
+        return emit_poster(job, machine, tools, sliced), sliced
     return emit(job, machine, tools, sliced), sliced
+
+
+_POOL = None
+
+
+def _slice_many(objs, tools, root, fonts):
+    global _POOL
+    try:
+        if _POOL is None:
+            _POOL = ProcessPoolExecutor(WORKERS, mp_context=multiprocessing.get_context('spawn'))
+        return list(_POOL.map(slice_object, objs, [tools] * len(objs), [root] * len(objs),
+                              [None] * len(objs), [fonts] * len(objs)))
+    except (BrokenProcessPool, OSError, RuntimeError):
+        _POOL = None
+        with ThreadPoolExecutor(min(len(objs), WORKERS)) as ex:
+            return list(ex.map(lambda o: slice_object(o, tools, root, fonts=fonts), objs))
+
+
+def ink_boxes(job):
+    '''{object id: what of it is drawn, object mm}: the poster's grid goes round them.'''
+    return {o.id: poster.ink_box(svg.load_cached(job.root / o.svg, o.tolerance), o.scale) for o in job.objects}
+
+
+# A poster's sheets as they were written, by everything that makes them: a change that leaves a
+# sheet as it was (a drawing moved elsewhere on the poster, a lock) doesn't write it again
+SHEETS = collections.OrderedDict()
+SHEETS_KEEP = 400
+WORKERS = max(1, min(8, (os.cpu_count() or 2) - 1))     # threads slicing drawings, writing sheets
+
+
+def _sheet_key(sj, sh, machine, tools, sliced, marks):
+    return (tuple(sh.rect), marks, machine.model_dump_json(),
+            tuple(sorted((t, v.model_dump_json()) for t, v in tools.items())),
+            tuple(o.model_dump_json() for o in sj.objects), sj.tool_order and tuple(sj.tool_order))
+
+
+def emit_poster(job, machine, tools, sliced) -> Result:
+    '''The poster's sheets one after another (poster.py), SHEET_NEXT between them. Each sheet is
+    a plot of its own (PLOT_END puts the pen away): the plan says where each starts; the Result's
+    `sheets` where each sheet's lines are, to put them back onto the poster.'''
+    P = job.poster
+    turned = P.sheet == 'landscape'
+    boxes = ink_boxes(job)
+    lay = poster.layout(P, machine, job.objects, boxes)
+    problems, unsafe_, plan, texts, sheets, inks = [], [], [], [], [], []
+    line = 0
+    count = counts(job, sliced)
+    jobs = [(sliced[o.id], tid, round(machine.order_time * len(sliced[o.id].paths[tid]) / count[tid], 3), o.placement)
+            for o in job.objects for tid in sliced[o.id].paths if tid in tools and tools[tid].draws]
+    with ThreadPoolExecutor(WORKERS) as ex:     # the drawing orders first, once: the sheets share them
+        list(ex.map(lambda a: reaching(a[0], a[1], a[2], a[3], machine.draw_area), jobs))
+
+    def one(sh):
+        sj = poster.sheet_job(job, sh, machine, turned, boxes)
+        k = _sheet_key(sj, sh, machine, tools, sliced, P.marks)
+        made_of = [sliced[o.id] for o in sj.objects]        # the very slices (kept with it: an id isn't enough)
+        hit = SHEETS.get(k)
+        if hit and len(hit[1]) == len(made_of) and all(a is b for a, b in zip(hit[1], made_of)):
+            return k, hit[0], made_of, True
+        return k, emit(sj, machine, tools, sliced, marks=poster.marks(sh, machine, turned) if P.marks else None,
+                       quiet=True, count=count), made_of, False
+    with ThreadPoolExecutor(WORKERS) as ex:
+        done = list(ex.map(one, lay.sheets))
+    results = []
+    for sh, (k, r, made_of, was) in zip(lay.sheets, done):
+        if was:
+            SHEETS.move_to_end(k)
+        else:
+            SHEETS[k] = (r, made_of)
+            while len(SHEETS) > SHEETS_KEEP:
+                SHEETS.popitem(last=False)
+        if r.problems == ['nothing to draw'] or not r.sim or not len(r.sim.segs):
+            problems.append(f'sheet {sh.n}: nothing on it, left out')
+            continue
+        results.append((sh, r))
+    if not results:
+        return Result('', problems + ['nothing to draw'])
+    for k, (sh, r) in enumerate(results):
+        if k:
+            nxt = f'SHEET_NEXT N={sh.n} OF={len(lay.sheets)}'
+            texts.append(nxt)
+            line += 1
+            plan.append({'kind': 'sheet', 'sheet': sh.n, 'line': line})
+        elif len(results) > 1 or len(lay.sheets) > 1:
+            plan.append({'kind': 'sheet', 'sheet': sh.n, 'line': line + 1})
+        n = r.gcode.count('\n') + (0 if r.gcode.endswith('\n') else 1)
+        sheets.append({'n': sh.n, 'first': line + 1, 'last': line + n})
+        plan += [{**st, 'line': st['line'] + line, 'sheet': sh.n} for st in r.plan]
+        problems += [f'sheet {sh.n}: {p}' if p.startswith(('UNSAFE', 'a move')) else p for p in r.problems if p not in problems]
+        unsafe_ += r.unsafe
+        inks.append(r.stats.get('ink'))
+        texts.append(r.gcode.rstrip('\n'))
+        line += n
+    text = '\n'.join(texts) + '\n'
+    sim = parse(text)
+    st = stats(sim, machine, tools)
+    st['ink'] = inks
+    st['sheets'] = len(results)
+    st['time_s'] += (len(results) - 1) * getattr(machine, 'sheet_time', 60)
+    return Result(text, problems, st, unsafe_, sim, plan, lay, sheets)

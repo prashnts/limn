@@ -33,8 +33,9 @@ from link import T_OTA, BROADCAST
 
 NODES = HERE / 'nodes'
 COMMON = ['main.py', 'lib/link.py', 'lib/ota.py', 'lib/touch.py', 'lib/bridge.py']
+APP_LIBS = {'lrt_plot_bed': ['lib/ads1220.py']}     # only the apps that use them
 CHUNK = 192
-RP2040_VID = 0x2E8A
+RP2040_VIDS = (0x2E8A, 0x1B4F)    # Raspberry Pi, SparkFun (Pro Micro RP2040)
 BAUD = 115200
 
 app = typer.Typer(no_args_is_help=True)
@@ -44,7 +45,7 @@ PortOption = Annotated[str | None, typer.Option(help="Serial port, default: $LIM
 
 def files_for(app_name):
     '''(local path, path on the MCU) of every file a node runs.'''
-    return [(HERE / f, f) for f in COMMON + [app_name + '.py']]
+    return [(HERE / f, f) for f in COMMON + APP_LIBS.get(app_name, []) + [app_name + '.py']]
 
 def file_hash(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:ota.HASH_LEN]
@@ -61,7 +62,7 @@ def find_port(port=None):
     if port:
         return port
     from serial.tools import list_ports
-    boards = [p.device for p in list_ports.comports() if p.vid == RP2040_VID]
+    boards = [p.device for p in list_ports.comports() if p.vid in RP2040_VIDS]
     if len(boards) != 1:
         found = ', '.join(boards) or 'none'
         raise typer.BadParameter(f"pass --port, RP2040 boards found: {found}")
@@ -270,12 +271,12 @@ def ports():
     '''List connected RP2040 boards.'''
     from serial.tools import list_ports
     for p in list_ports.comports():
-        if p.vid == RP2040_VID:
+        if p.vid in RP2040_VIDS:
             print(f"{p.device}\t{p.serial_number}\t{p.description}")
 
 @app.command()
 def install(
-    config: Annotated[str, typer.Argument(help="Node config in micropython/nodes/, eg. dock, rtp, fsr, fsr_bed3.")],
+    config: Annotated[str, typer.Argument(help="Node config in micropython/nodes/, eg. dock, rtp, fsr, fsr_bed3, plot_bed.")],
     port: PortOption = None,
 ):
     '''First install (or reinstall) over USB: bootloader, libs, app and node.json.'''

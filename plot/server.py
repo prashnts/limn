@@ -11,24 +11,28 @@
 #   uv run python -m plot serve [--port 4220] [--data plot-data]
 import base64
 import json
+import math
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
+import zipfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import numpy as np
 import requests
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import pens as pen_library
-from . import profile, svg
-from .emit import load, plot
+from . import kicad, poster, profile, svg
+from .emit import ink_boxes, load, plot
 from .fonts import HERSHEY, FontStore
-from .job import Group, Job, Obj, PlanPen, Placement, ShapePaint
+from .job import Group, Job, Obj, PlanPen, Placement, Poster, ShapePaint
 from .preview import parse
 from .profile import bed_papers, bed_wipe, load_pens, reach
 from .raster import spec_of
@@ -39,7 +43,8 @@ STATIC = Path(__file__).parent / 'static'
 DEFAULT_DATA = Path(__file__).resolve().parent.parent / 'plot-data'
 MANUAL_HOLDER = 90      # printer.limn.tools' key of the tool docked by hand (MANUAL_TOOL in ext/limn)
 OBJ_KEYS = {'placement', 'scale', 'occlude', 'tolerance', 'groups', 'shapes', 'sets', 'group', 'text', 'texts', 'surface',
-            'masks', 'raster', 'images'}
+            'masks', 'raster', 'images', 'locked'}
+MOVES = {'placement', 'scale'}      # what a lock (the drawing's, the poster's) keeps as it is
 SETTINGS = {'printer_url': '',      # the web UI's own (settings.json): printer_url, where Fluidd and its cameras are;
             'endoscope_url': ''}    # the endoscope's snapshot URL (limn_endoscope, /snapshot.jpg?flip=1): a camera too
 
@@ -195,13 +200,27 @@ class Workspace:
                    for i, h in enumerate(machine.holders)]
         draw = {k: Tool.model_fields[k].default for k in DRAW if k in Tool.model_fields}
         draw['plunge_feed'] = None
+        lay = self.poster_layout(machine)
         return {'job': self.job.model_dump(), 'machine': m, 'beds': bed_papers(machine), 'draw': draw,
+                'poster': lay.dump() if lay else None,
                 'wipe': bed_wipe(machine),
                 'tools': {k: {**t.model_dump(), 'spacing': t.spacing, 'draws': t.draws} for k, t in tools.items()},
                 'pens': pens, 'kinds': pen_library.kinds(), 'holders': holders,
                 'fonts': [f.__dict__ for f in self.fonts.fonts()],
                 'line_fonts': HERSHEY + [f.file for f in self.fonts.fonts() if f.kind == 'line'],
                 'objects': objects}
+
+    def poster_layout(self, machine=None):
+        '''The poster's sheets as the job is now (poster.layout), None: not a poster.'''
+        if not self.job.poster:
+            return None
+        machine = machine or load(self.job, self.tags)[0]
+        return poster.layout(self.job.poster, machine, self.job.objects, ink_boxes(self.job_rooted()))
+
+    def job_rooted(self):
+        job = self.job.model_copy()
+        job._root = self.data
+        return job
 
     def shapes(self, o):
         '''What the drawing looks like, for the UI: its shapes, object mm (y up). The clip-paths and
@@ -255,7 +274,8 @@ class Workspace:
             t0 = time.monotonic()
             result, sliced = plot(job, self.cache, self.fonts, tags)
             sim = result.sim or parse(result.gcode)
-            runs = [[k, t, n, np.round(pts[:, :2], 3).ravel().tolist()] for k, t, pts, n in sim.runs()]
+            back = self.to_poster(job, result)
+            runs = [[k, t, n, np.round(back(n, pts[:, :2]), 3).ravel().tolist()] for k, t, pts, n in sim.runs()]
             bounds = {}
             for o in job.objects:
                 b = sliced[o.id].bounds
@@ -268,11 +288,27 @@ class Workspace:
                 self.unsafe = result.unsafe
                 self.sliced_for = made_of
             return {'tools': sim.tools, 'runs': runs, 'lines': result.gcode.count('\n'), 'stats': result.stats,
-                    'plan': result.plan,
+                    'plan': result.plan, 'sheets': result.sheets,
                     'problems': result.problems, 'unsafe': bool(result.unsafe), 'bounds': bounds,
                     'small': {o.id: sliced[o.id].small for o in job.objects if sliced[o.id].small},
                     'dense': {o.id: sliced[o.id].dense for o in job.objects if sliced[o.id].dense},
                     'ms': round((time.monotonic() - t0) * 1000)}
+
+    @staticmethod
+    def to_poster(job, result):
+        '''(G-code line, bed mm) -> where it is drawn: on the bed, or for a poster, on the poster
+        by the sheet that line is in (its travels between sheets: where the sheet before left off).'''
+        if not job.poster or not result.layout:
+            return lambda n, pts: pts
+        machine, _ = load(job)
+        by_n = {s.n: s for s in result.layout.sheets}
+        spans = [(x['first'], x['last'], by_n[x['n']]) for x in result.sheets]
+        turned = job.poster.sheet == 'landscape'
+
+        def back(n, pts):
+            sh = next((s for a, b, s in spans if n <= b), spans[-1][2])
+            return poster.to_poster(sh, machine, turned, pts)
+        return back
 
     def sliced(self):
         '''(gcode, name, unsafe) of the job as it is now: sliced again if it changed since.'''
@@ -320,10 +356,15 @@ def create_app(data=None):
         return FileResponse(machine.bed_art)
 
     @app.post('/api/objects')
-    async def add_object(file: UploadFile = File(...)):
+    async def add_object(file: UploadFile = File(...), layers: str = Form(''), mirror: int = Form(0), frame: int = Form(0)):
+        '''An SVG, or a KiCad schematic, board or project .zip (kicad.py): layers (a board's, comma
+        separated), mirror (a board seen from below), frame (a schematic's drawing sheet).'''
         data = await file.read()          # its <image>s stay: left out, or made into lines (Obj.raster)
+        name = file.filename or 'drawing'
+        if kicad.kind(name):
+            return add_kicad(name, data, [x for x in layers.split(',') if x.strip()], bool(mirror), bool(frame))
         with ws.lock:
-            oid = _unique({o.id for o in ws.job.objects}, Path(file.filename or 'drawing').stem)
+            oid = _unique({o.id for o in ws.job.objects}, Path(name).stem)
             # its own file: a deleted drawing's stays, for undo
             path = ws.uploads / f'{_unique({p.stem for p in ws.uploads.glob("*.svg")}, oid)}.svg'
             path.write_bytes(data)
@@ -331,18 +372,80 @@ def create_app(data=None):
                 d = svg.load_cached(path)
             except Exception as e:
                 path.unlink()
-                raise HTTPException(400, f'{file.filename}: not an SVG I can read ({e})')
-            machine, _ = load(ws.job)
-            x0, y0, x1, y1 = machine.draw_area
-            w, h = d.size
-            scale = min(1.0, 0.95 * (x1 - x0) / w, 0.95 * (y1 - y0) / h) if w and h else 1.0
-            obj = Obj(id=oid, svg=f'uploads/{path.name}', scale=round(scale, 4),
-                      placement=Placement(x=(x0 + x1 - w * scale) / 2, y=(y0 + y1 - h * scale) / 2))
+                raise HTTPException(400, f'{name}: not an SVG I can read ({e})')
+            obj = place_new(oid, path, d)
             ws.remember()
             ws.job.objects.append(obj)
             ws.save()
             return {'id': oid, 'images': len(d.images), 'gradients': sum(im.gradient for im in d.images), 'unreadable': d.skipped.get('image (not embedded)', 0),
                     'state': ws.state()}
+
+    def add_kicad(name, data, layers, mirror, frame):
+        '''A KiCad file through kicad-cli: a drawing for each of its SVGs (a schematic's sheets),
+        side by side, each with its colours' first say (kicad.groups).'''
+        stem = _unique({p.name for p in (ws.uploads / 'kicad').glob('*')} if (ws.uploads / 'kicad').exists() else set(),
+                       re.sub(r'[^\w.-]+', '_', Path(name).stem) or 'kicad')
+        work = ws.uploads / 'kicad' / stem
+        (work / 'src').mkdir(parents=True)
+        src = work / 'src' / Path(name).name
+        src.write_bytes(data)
+        try:
+            if kicad.kind(name) == 'project':
+                src = kicad.unpack(src, work / 'src')
+            svgs = kicad.to_svgs(src, work / 'svg', layers=layers, mirror=mirror, frame=frame)
+        except (kicad.KicadError, zipfile.BadZipFile, subprocess.TimeoutExpired) as e:
+            shutil.rmtree(work, ignore_errors=True)
+            raise HTTPException(400, f'{name}: {e}')
+        what = 'board' if src.suffix == '.kicad_pcb' else 'schematic'
+        with ws.lock:
+            ws.remember()
+            # a schematic's sheets in rows, about as many as across: the first where a new drawing goes
+            ids, after, per_row = [], None, max(1, math.ceil(math.sqrt(len(svgs))))
+            row = []                                    # the placed boxes of this row
+            for i, f in enumerate(svgs):
+                d = svg.load_cached(f)
+                oid = _unique({o.id for o in ws.job.objects}, f.stem)
+                if row and i % per_row == 0:            # a new row, under the last
+                    after = (row[0][0], min(b[1] for b in row) - 10)
+                    row = []
+                obj = place_new(oid, f, d, ink=True, after=after).model_copy(update={'groups': kicad.groups(what, d)})
+                b = poster.placed_box(obj, poster.ink_box(d, obj.scale) or (0, 0, 0, 0))
+                row.append(b)
+                after = (b[2] + 10, row[0][3])
+                ws.job.objects.append(obj)
+                ids.append(oid)
+            ws.save()
+            return {'id': ids[0], 'ids': ids, 'kicad': what, 'images': 0, 'gradients': 0, 'unreadable': 0, 'state': ws.state()}
+
+    def place_new(oid, path, d, ink=False, after=None):
+        '''A new drawing of the file at `path`: fitted onto the paper, in its middle (ink: by what is
+        drawn, not its page: a KiCad page is mostly empty); on a poster as big as it is, beside what
+        is on it already. after: (x, top) where it goes, its top left (a schematic's next sheet).'''
+        machine, _ = load(ws.job)
+        x0, y0, x1, y1 = machine.draw_area
+        bx0, by0, bx1, by1 = (poster.ink_box(d, 1.0) if ink else None) or (0.0, 0.0, *d.size)
+        w, h = bx1 - bx0, by1 - by0
+        scale = min(1.0, 0.95 * (x1 - x0) / w, 0.95 * (y1 - y0) / h) if w and h else 1.0
+        at = Placement(x=(x0 + x1 - w * scale) / 2 - bx0 * scale, y=(y0 + y1 - h * scale) / 2 - by0 * scale)
+        if ws.job.poster:                   # a poster: as big as it is, beside what is on it already
+            scale, lay = 1.0, ws.poster_layout(machine)
+            at = (Placement(x=lay.content[2] + 10 - bx0, y=lay.content[1] - by0) if lay and lay.content
+                  else Placement(x=-bx0, y=-by0))
+        if after:
+            at = Placement(x=after[0] - bx0 * scale, y=after[1] - by1 * scale)
+        return Obj(id=oid, svg=str(path.relative_to(ws.data)), scale=round(scale, 4), placement=at)
+
+    def check_lock(o, changes):
+        '''A locked drawing (or every one, on a locked poster) stays where it is and its size.'''
+        def same(k):
+            cur, v = getattr(o, k), changes[k]
+            return Placement(**{**cur.model_dump(), **v}) == cur if k == 'placement' else float(v) == cur
+        if all(same(k) for k in MOVES & set(changes)):
+            return
+        if o.locked and changes.get('locked') is not False:
+            raise HTTPException(409, f'{o.id} is locked: unlock it to move or scale it')
+        if ws.job.poster and ws.job.poster.locked:
+            raise HTTPException(409, 'the poster is locked: unlock it to move or scale its drawings')
 
     @app.patch('/api/objects/{oid}')
     def patch_object(oid: str, body: dict = Body(...)):
@@ -351,6 +454,7 @@ def create_app(data=None):
             bad = set(body) - OBJ_KEYS
             if bad:
                 raise HTTPException(400, f'not changeable: {", ".join(sorted(bad))}')
+            check_lock(o, body)
             try:
                 new = Obj(**{**o.model_dump(), **body})
             except ValueError as e:
@@ -370,6 +474,7 @@ def create_app(data=None):
                 bad = set(changes) - OBJ_KEYS
                 if bad:
                     raise HTTPException(400, f'not changeable: {", ".join(sorted(bad))}')
+                check_lock(o, changes)
                 try:
                     news[oid] = Obj(**{**o.model_dump(), **changes})
                 except ValueError as e:
@@ -491,6 +596,21 @@ def create_app(data=None):
                     plan[pid] = PlanPen(**{**(plan[pid].model_dump() if pid in plan else {}), **spec})
                 except ValueError as e:
                     raise HTTPException(400, f'{pid}: {e}')
+            post = job.poster
+            if 'poster' in body:                # null: the drawings back on the bed, as they are
+                if body['poster'] is None:
+                    post = None
+                else:
+                    try:
+                        post = Poster(**{**(post.model_dump() if post else {}), **body['poster']})
+                    except ValueError as e:
+                        raise HTTPException(400, f'poster: {e}')
+                    if post.locked and not (job.poster and job.poster.locked):     # locked now: the grid stays as it is
+                        lay = poster.layout(post.model_copy(update={'locked': False}), machine, job.objects,
+                                            ink_boxes(ws.job_rooted()))
+                        post = post.model_copy(update={'origin': lay.origin, 'cols': lay.cols, 'rows': lay.rows})
+                    elif not post.locked:
+                        post = post.model_copy(update={'origin': None, 'cols': None, 'rows': None})
             mo, draw = dict(job.machine_overrides), dict(job.draw)
             for cur, key in ((mo, 'machine_overrides'), (draw, 'draw')):
                 for k, v in (body.get(key) or {}).items():
@@ -507,7 +627,7 @@ def create_app(data=None):
                     else:
                         cur[k] = v
             new = job.model_copy(update={'machine_overrides': mo, 'draw': draw, 'tool_overrides': {k: v for k, v in to.items() if v},
-                                         'tool_order': body.get('tool_order', job.tool_order), 'pens': plan})
+                                         'tool_order': body.get('tool_order', job.tool_order), 'pens': plan, 'poster': post})
             new._root = ws.data
             try:
                 load(new, ws.tags)

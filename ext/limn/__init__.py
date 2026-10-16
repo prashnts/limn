@@ -48,7 +48,7 @@ from .samples import Samples, Sample, FSR, RTP, S_SAMPLE, S_MATRIX
 from .machine import Machine
 from .geometry import ProbeValue, wipe_slots, prime_strokes, plus_strokes
 from .beds import BEDS, NO_BED_MESHES, REFERENCE_TOOL, PANEL_ZHOME
-from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark
+from .placement import placement_key, mesh_fingerprint, mesh_bounds, stale_meshes, next_mark, mesh_move_z, MOVE_Z_MARGIN
 from . import marks
 from .rtp import Rtp
 from .fsr import Fsr, judge_survey, grid
@@ -77,11 +77,11 @@ SCAN_LATE = 60.0        # s after which a scan is forgotten without a word
 SCAN_SAME = 3.0         # s: the same tag again within this is the same scan
 SCAN_FAST = 0.5         # s between listens after a hand was on the holders,
 SCAN_AWAKE = 60.0       #   for this long
-# Docked by hand: scanned, then pushed onto the carriage (the key's switch triggers)
-# within MANUAL_WINDOW. It has no holder: the carriage stays out of the dock (X up
+# Docked by hand: scanned, then pushed onto the carriage and locked (the key's switch
+# stops triggering, ~1 mm off open) within MANUAL_WINDOW. It has no holder: the carriage stays out of the dock (X up
 # to manual_dock_x_max) until DOCK_CLEAR, or the same tag held to the reader again.
 MANUAL_TOOL = 90        # currently_docked_tool of a tool docked by hand
-MANUAL_WINDOW = 20.0    # s from the scan until the key's switch triggers
+MANUAL_WINDOW = 20.0    # s from the scan until the key is turned off open
 MANUAL_POLL = 0.2       # s between looks at the key's switch, in that window
 MANUAL_X_MAX = 110.0
 INKY = ('pen', 'pencil', 'brush')      # tool kinds (plot/tools.py) that dry out uncapped
@@ -170,7 +170,7 @@ class Limn:
         self._calibrate_next = set()    # holders whose pen is probed once picked up (TOOL_PREPARE)
         self.manual_window, self.manual_x_max = MANUAL_WINDOW, MANUAL_X_MAX
         self._manual_timer = None   # looks at the key's switch after a scan, while the carriage is empty
-        self._key_closed_seen = False
+        self._key_open_seen = False
         self._cleared = None        # the tag that just took the tool docked by hand off, while held there
         self._check_move = None     # the kinematics' own check_move, while the dock is fenced off
         bus = config.getint('tool_holder_i2c_bus', None)
@@ -565,22 +565,39 @@ class Limn:
         surface = (BEDS.get(self.bed) or {}).get('fsr', {}).get('surface_mesh')
         if any(m['profile'] == surface for m in meshes):
             self._clean_for_bltouch(gcmd)
+        all_tops = dict(self._vars().get('lrt_mesh_tops') or {})
+        tops = dict(all_tops.get(self.bed) or {})
+        default = self._horizontal_move_z()
+        probe = self.printer.lookup_object('probe', None)
         for mesh in meshes:
             gcmd.respond_info(f"[LRT][Mesh] Starting mesh calibration with profile={mesh}")
+            top = tops.get(mesh['profile']) if probe else None
+            move_z = mesh_move_z(top, probe.get_offsets()[2] if probe else 0.0, default)
+            travel = ""
+            if move_z < default:
+                gcmd.respond_info(f"[LRT][Mesh] {mesh['profile']}: travel at Z{move_z:.2f}, the pin "
+                                  f"deploys {MOVE_Z_MARGIN:g}mm over its last mesh's highest point")
+                travel = f" HORIZONTAL_MOVE_Z={move_z:.2f}"
             if 'origin' in mesh:
                 x0, y0 = mesh['origin']
                 w, h = mesh['size']
                 self.gcode.run_script_from_command(
                     f"BED_MESH_CALIBRATE PROFILE={mesh['profile']} mesh_min={x0},{y0} "
-                    f"mesh_max={x0 + w},{y0 + h} probe_count={mesh['probe_count']}")
+                    f"mesh_max={x0 + w},{y0 + h} probe_count={mesh['probe_count']}{travel}")
             else:
-                self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={mesh['profile']}")
+                self.gcode.run_script_from_command(f"BED_MESH_CALIBRATE PROFILE={mesh['profile']}{travel}")
         if rebase and self.bed in BEDS and self.calibrated(BEDS[self.bed]['sensor']):
             self._rebase(gcmd, BEDS[self.bed])
         self._read_bed_id(gcmd)
         if self.placement != key:
             raise gcmd.error("[LRT][Mesh] the bed moved while it was meshed, LRT_MESH_CALIBRATE again")
         profiles = self._mesh_profiles()
+        for m in meshes:
+            points = (profiles.get(m['profile']) or {}).get('points')
+            if points:
+                tops[m['profile']] = round(max(float(v) for row in points for v in row), 3)
+        all_tops[self.bed] = tops
+        self._save_vars({'lrt_mesh_tops': all_tops})
         self._save_vars({'lrt_meshes': {'placement': key, 'profiles': {
             m['profile']: mesh_fingerprint(profiles.get(m['profile'])) for m in meshes}}})
         # The meshes themselves, put back after a restart without SAVE_CONFIG (_restore_meshes).
@@ -594,6 +611,11 @@ class Limn:
             gcmd.respond_info(f"[LRT][Mesh] the meshes weren't kept over a restart ({e}): SAVE_CONFIG keeps them")
         gcmd.respond_info("[LRT][Mesh] Done (kept over a restart, the saved variables)")
         return carried
+
+    def _horizontal_move_z(self):
+        '''bed_mesh's horizontal_move_z as configured (Klipper's default 5).'''
+        settings = self.printer.lookup_object('configfile').get_status(self.reactor.monotonic())['settings']
+        return float(settings.get('bed_mesh', {}).get('horizontal_move_z', 5.0))
 
     def _rebase(self, gcmd, bed):
         '''The bed moved: the calibration's bed z (BLTouch, the carriage empty) again.
@@ -1715,7 +1737,7 @@ class Limn:
         return {'uid': t.uid, 'name': t.name, 'pen': t.pen, 'color': t.color,
                 'left': round(SCAN_WINDOW - (eventtime - self.scan['seen']), 1)}
 
-    # Docked by hand: no holder, the key's switch says it is on (MANUAL_TOOL)
+    # Docked by hand: no holder, the key turned off open says it is on (MANUAL_TOOL)
     def _key_open_at(self, eventtime):
         '''The key's switch now, without waiting on the moves (as _key_open() does):
         for a timer. None: no such endstop.'''
@@ -1728,9 +1750,10 @@ class Limn:
         return None
 
     def _watch_key(self):
-        '''After a scan with the carriage empty: the key's switch going from closed to
-        triggered (a tool pushed on) within manual_dock_window docks the scanned tool.'''
-        self._key_closed_seen = False
+        '''After a scan with the carriage empty: the key's switch going from triggered
+        (open) to not (turned ~1 mm towards locked, not fully locked: the motor can't
+        tell) within manual_dock_window docks the scanned tool.'''
+        self._key_open_seen = False
         if self._manual_timer is None:
             self._manual_timer = self.reactor.register_timer(self._manual_tick, self.reactor.NOW)
         else:
@@ -1741,7 +1764,7 @@ class Limn:
         if not scan or self._carried() or eventtime - scan['seen'] > self.manual_window:
             return self.reactor.NEVER
         if self.holder.busy() or self.leds.phase in CHANGE_PHASES or self._printing():
-            self._key_closed_seen = False       # the key moved by G-code isn't a hand
+            self._key_open_seen = False         # the key moved by G-code isn't a hand
             return eventtime + MANUAL_POLL
         try:
             key = self._key_open_at(eventtime)
@@ -1750,10 +1773,10 @@ class Limn:
             return eventtime + MANUAL_POLL
         if key is None:
             return self.reactor.NEVER
-        if key and self._key_closed_seen:
+        if not key and self._key_open_seen:
             self._manual_dock(scan['tag'])
             return self.reactor.NEVER
-        self._key_closed_seen = self._key_closed_seen or not key
+        self._key_open_seen = self._key_open_seen or key
         return eventtime + MANUAL_POLL
 
     def _manual_dock(self, tag):

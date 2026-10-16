@@ -356,12 +356,37 @@ def pack_fsr(state, touches, limit=FSR_MAX_TOUCHES):
 def pack_rtp(state, x, y, z):
     return struct.pack('<BBHHI', RTP_ID_LM, state, x, y, z)
 
+LOAD_ID_LM = 0x6
+
+# Plot bed flags
+LOAD_TOUCH   = 0x01     # the touch line says touched (or failed safe)
+LOAD_ARMED   = 0x02
+LOAD_CAL     = 0x04     # grams come from a calibration, not the estimate
+LOAD_SUM_OK  = 0x08     # the sum ADC delivers samples
+LOAD_FEET_OK = 0x10     # the feet ADC delivers samples
+LOAD_TARING  = 0x20
+
+def pack_load(state, flags, sum_mg, sum_raw, feet):
+    '''Plot bed: sum and per foot load. feet: [(mg, raw counts)].'''
+    out = struct.pack('<BBBBii', LOAD_ID_LM, state, flags, len(feet), sum_mg, sum_raw)
+    for mg, raw in feet:
+        out += struct.pack('<ii', mg, raw)
+    return out
+
 def unpack_data(payload):
     '''T_DATA payload -> (kind, state, values), or None when malformed.
-    FSR values: [[row, col, strength], ...], RTP values: [x, y, z].'''
+    FSR values: [[row, col, strength], ...], RTP values: [x, y, z],
+    plot bed values: [flags, sum_mg, sum_raw, [[mg, raw], ...per foot]].'''
     if len(payload) < 2:
         return None
     kind, state = payload[0], payload[1]
+    if kind == LOAD_ID_LM and len(payload) >= 12:
+        flags, n = payload[2], payload[3]
+        if len(payload) != 12 + 8 * n:
+            return None
+        sum_mg, sum_raw = struct.unpack_from('<ii', payload, 4)
+        feet = [list(struct.unpack_from('<ii', payload, 12 + 8 * i)) for i in range(n)]
+        return kind, state, [flags, sum_mg, sum_raw, feet]
     if kind == FSR_ID_LM and len(payload) >= 3:
         n = payload[2]
         if len(payload) != 3 + 4 * n:

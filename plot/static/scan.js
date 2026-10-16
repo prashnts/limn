@@ -23,6 +23,7 @@ function setTab(t) {
   $$('#ribbon [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
   if (t === 'scan') loadCamera();
   else closeViewer();
+  if (S && S.poster) { bedSig = null; renderBed(); fit(); if (typeof drawHead === 'function') drawHead(); }     // the bed, or the poster's sheets
   drawScanLayer();
   drawUnder();
 }

@@ -133,6 +133,11 @@ def scanning(served, monkeypatch):
     return url
 
 
+def dock_tab(page, side, tab):
+    '''The docks show one tab of panels at a time (panels.js): this one.'''
+    page.click(f'#{side} .dtabs [data-dtab="{tab}"]')
+
+
 def open_scan(page, url):
     page.goto(url + '/')
     page.click('#ribbon [data-tab="scan"]')
@@ -278,6 +283,7 @@ def test_scans_show_and_hide(page, scanning, tmp_path):
     # Both under the plot, then one hidden, then one unpinned
     page.evaluate(f'() => localStorage.setItem("limn-plot:scanUnders", JSON.stringify(["{a}", "{b}"]))')
     page.click('#ribbon [data-tab="plot"]')
+    dock_tab(page, 'left', 'layers')
     page.wait_for_function('() => document.querySelectorAll("#scan-under image").length === 2')
     assert page.locator('#unders li').count() == 2
     page.click(f'#unders li[data-under="{a}"] [data-act="eye"]')
@@ -414,11 +420,12 @@ def test_panels_fold_float_dock_and_reset(page, base, drawing):
     page.reload()
     page.wait_for_selector('section[data-panel="paint"] .phead')
     assert page.locator('#ruler-x').bounding_box()['width'] > 200          # the rulers sit between the panels
-    # A tap on the header folds it, another unfolds it
-    page.click('section[data-panel="output"] .phead h2')
-    assert 'collapsed' in page.get_attribute('section[data-panel="output"]', 'class')
+    # Output starts folded to a button over the canvas: a tap unfolds it, another folds it
+    assert page.locator('#outbar section[data-panel="output"].collapsed').count() == 1
     page.click('section[data-panel="output"] .phead h2')
     assert 'collapsed' not in page.get_attribute('section[data-panel="output"]', 'class')
+    page.click('section[data-panel="output"] .phead h2')
+    assert 'collapsed' in page.get_attribute('section[data-panel="output"]', 'class')
     # Out over the canvas: it floats
     h = page.locator('section[data-panel="paint"] .phead h2').bounding_box()
     drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
@@ -429,7 +436,10 @@ def test_panels_fold_float_dock_and_reset(page, base, drawing):
     assert page.locator('#left section[data-panel="paint"]').count() == 1
     page.reload()
     page.wait_for_selector('#left section[data-panel="paint"]')
+    assert page.is_visible('#left section[data-panel="paint"]')            # its tab came with it
     # The fixed one doesn't move
+    dock_tab(page, 'left', 'objects')
+    assert not page.is_visible('#left section[data-panel="paint"]')
     h = page.locator('section[data-panel="drawings"] .phead h2').bounding_box()
     drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
     assert page.locator('#left section[data-panel="drawings"]').count() == 1
@@ -491,6 +501,7 @@ def test_the_led_display_shows_klipper(page, served, monkeypatch):
     real = srv.requests.get
     monkeypatch.setattr(srv.requests, 'get', lambda u, params=None, **kw: R() if params and 'neopixel picam' in params else real(u, params=params, **kw))
     page.goto(url + '/')
+    dock_tab(page, 'right', 'printer')
     page.wait_for_selector('#leds .ledmatrix rect.led.lit')
     assert page.locator('#leds .ledmatrix rect.led.lit').count() == 5
     assert page.locator('#leds .dockstrip rect.led.lit').count() == 30
@@ -615,6 +626,7 @@ def test_mask_a_region_with_the_mask_tool(page, base, drawing):
 def test_how_every_tool_draws(page, base, drawing):
     drawing()
     page.goto(base + '/')
+    dock_tab(page, 'right', 'tools')
     page.click('section[data-panel="drawset"] .phead h2')
     page.wait_for_selector('#drawset [data-dk="bleed"]')
     page.fill('#drawset [data-dk="bleed"]', '0.3')
@@ -635,6 +647,8 @@ def test_colour_buttons_are_round(page, base, drawing):
     drawing()
     page.goto(base + '/')
     page.wait_for_selector('#palette .swatch')
+    dock_tab(page, 'right', 'all')
+    page.click('#tools .tile[data-t="T1"] > .head .tname')                 # a tool's tile opens its setup
     for sel in ('#palette .swatch', '#tools .sws input[type=color]'):
         b = page.locator(sel).first.bounding_box()
         assert abs(b['width'] - b['height']) < 1, sel
@@ -671,6 +685,7 @@ def test_macro_buttons_run_on_klipper(page, served, monkeypatch):
     app.state.ws.gcode_help = None
     try:
         page.goto(url + '/')
+        dock_tab(page, 'right', 'printer')
         page.wait_for_selector('#macros button[data-gcode="G28"]')
         assert page.locator('#macros button[data-gcode="LIMN_CALIBRATE_ALL"]').count() == 0     # Klipper hasn't it
         assert page.locator('#macros button[data-gcode="T0"] .swatch').count() == 1
@@ -709,6 +724,7 @@ def test_where_fluidd_is_for_the_cameras(page, served, monkeypatch):
     monkeypatch.setattr(srv.requests, 'get', lambda u, **kw: R() if 'webcams/list' in u else real(u, **kw))
     try:
         page.goto(url + '/')
+        dock_tab(page, 'right', 'printer')
         page.wait_for_selector('#printer-url-in')
         page.fill('#printer-url-in', 'https://limn.example')
         page.click('#printer-url [data-act="save-url"]')
@@ -771,3 +787,154 @@ def test_an_svg_with_a_picture_asks_what_to_do_with_it(page, base, tmp_path):
     assert o['raster']['mode'] == 'lines'
     page.select_option('#r-mode', 'skip')                       # left out after all
     page.wait_for_selector('#object-panel #r-pitch', state='detached')
+
+
+def test_dock_tabs_and_find_a_setting(page, served, monkeypatch, drawing):
+    url, app = served
+    drawing()
+    page.goto(url + '/')
+    page.evaluate('() => localStorage.removeItem("limn-plot:layout")')
+    page.reload()
+    page.wait_for_selector('section[data-panel="paint"] .phead')
+    # One tab of each side at a time; Output stays under every one
+    assert page.is_visible('section[data-panel="paint"]') and not page.is_visible('section[data-panel="machine"]')
+    page.keyboard.press('Escape')
+    dock_tab(page, 'right', 'printer')
+    assert page.is_visible('section[data-panel="machine"]') and not page.is_visible('section[data-panel="paint"]')
+    assert page.is_visible('section[data-panel="output"]')
+    page.reload()                                                          # remembered
+    page.wait_for_selector('section[data-panel="machine"]')
+    assert page.is_visible('section[data-panel="machine"]')
+    # Find a setting (/): every panel's, whatever tab is on, folded or not
+    page.mouse.click(5, 400)
+    page.keyboard.press('/')
+    page.keyboard.type('bleed')
+    assert page.is_visible('#drawset [data-dk="bleed"]')                  # Drawing starts folded
+    assert not page.is_visible('#drawset [data-dk="feed"]')
+    assert not page.is_visible('section[data-panel="machine"]')           # nothing of it there
+    page.fill('#find-setting', 'z travel')
+    assert page.is_visible('#m-z_travel') and not page.is_visible('#m-bed')
+    page.press('#find-setting', 'Escape')
+    assert page.input_value('#find-setting') == '' and page.is_visible('#m-bed')
+    assert not page.is_visible('#drawset [data-dk="bleed"]')              # folded again
+
+
+def test_the_drawings_settings_are_in_tabs(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('#objects li')
+    page.click('#objects li .name')
+    page.wait_for_selector('#object-panel .otabs [data-otab="layers"]')
+    assert page.is_visible('#object-panel [data-opane="layers"]') and not page.is_visible('#object-panel [data-opane="masks"]')
+    page.click('#object-panel .otabs [data-otab="masks"]')
+    assert page.is_visible('#object-panel [data-opane="masks"]') and not page.is_visible('#object-panel [data-opane="layers"]')
+    page.reload()
+    page.click('#objects li .name')
+    page.wait_for_selector('#object-panel [data-opane="masks"]')
+    assert page.is_visible('#object-panel [data-opane="masks"]')          # the tab left on
+
+
+def test_a_panel_out_leaves_its_title_and_output_floats_back(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.evaluate('() => localStorage.removeItem("limn-plot:layout")')
+    page.reload()
+    page.wait_for_selector('section[data-panel="paint"] .phead')
+    h = page.locator('section[data-panel="paint"] .phead h2').bounding_box()
+    drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
+    assert page.locator('#floats section[data-panel="paint"]').count() == 1
+    assert page.locator('#right .pstub[data-of="paint"]').count() == 1     # its title stays behind
+    page.click('#right .pstub[data-of="paint"]')                          # a tap: back
+    assert page.locator('#right section[data-panel="paint"]').count() == 1 and page.locator('.pstub').count() == 0
+    # Output: out over the canvas, then back onto its place over the scrubber
+    h = page.locator('section[data-panel="output"] .phead h2').bounding_box()
+    drag(page, (h['x'] + 4, h['y'] + 6), (640, 300))
+    assert page.locator('#floats section[data-panel="output"]').count() == 1
+    assert page.locator('#outbar .pstub[data-of="output"]').count() == 1
+    h = page.locator('section[data-panel="output"] .phead h2').bounding_box()
+    vh = page.viewport_size['height']
+    drag(page, (h['x'] + 4, h['y'] + 6), (640, vh - 80))
+    assert page.locator('#outbar section[data-panel="output"]').count() == 1
+
+
+def test_a_pen_of_the_plan_tunes_like_a_holders_tool(page, base, drawing):
+    drawing()
+    requests.patch(base + '/api/job', json={'pens': {'T5': {'pen': 'mic-01', 'color': '#123456'}}})
+    try:
+        page.goto(base + '/')
+        dock_tab(page, 'right', 'tools')
+        page.click('#tools .tile[data-t="T5"] > .head .tname')
+        page.wait_for_selector('#tools .tile[data-t="T5"] [data-k="feed"]')
+        with page.expect_response(lambda r: '/api/job' in r.url):
+            page.fill('#tools .tile[data-t="T5"] [data-k="feed"]', '1234')
+            page.press('#tools .tile[data-t="T5"] [data-k="feed"]', 'Enter')
+            page.locator('#tools .tile[data-t="T5"] [data-k="feed"]').blur()
+        st = requests.get(base + '/api/state').json()
+        assert st['job']['tool_overrides']['T5'] == {'feed': 1234} and st['tools']['T5']['feed'] == 1234
+        page.wait_for_selector('#tools .tile[data-t="T5"] .badge:has-text("tuned 1")')
+    finally:
+        requests.patch(base + '/api/job', json={'pens': {'T5': None}, 'tool_overrides': {'T5': {'feed': None}}})
+
+
+def test_a_layers_shapes_show_boxed_and_chips_go_to_a_pen_together(page, base, drawing):
+    drawing()
+    page.goto(base + '/')
+    page.wait_for_selector('#objects li')
+    page.click('#objects li .name')
+    page.wait_for_selector('#object-panel .chip')
+    # Under the pointer: a box round its shapes, the rest faded
+    page.hover('#object-panel .layer[data-layer="T3"] > .lhead .lname')
+    page.wait_for_selector('#design-layer .spot-boxes rect.all')
+    assert page.locator('#design-layer path.shape.spot-on').count() >= 1
+    page.mouse.move(700, 450)                                             # off the panel: gone
+    page.wait_for_selector('#design-layer .spot-boxes', state='detached')
+    # Two chips picked (Shift-click), one pen for both
+    chips = page.locator('#object-panel .chip')
+    keys = [chips.nth(i).get_attribute('data-chip') for i in (0, 1)]
+    chips.nth(0).click(modifiers=['Shift'])
+    chips.nth(1).click(modifiers=['Shift'])
+    assert page.locator('#object-panel .chip.picked').count() == 2
+    with page.expect_response(lambda r: '/api/objects/' in r.url):
+        page.select_option('#object-panel .bulk select', 'T4')
+    groups = requests.get(base + '/api/state').json()['job']['objects'][0]['groups']
+    assert all(groups[k]['tool'] == 'T4' for k in keys)
+    page.wait_for_selector('#object-panel .bulk', state='detached')
+
+
+def test_a_poster_is_sheets_of_the_paper_and_its_lock_holds(page, base, tmp_path):
+    from .test_poster import FRAME
+    from .conftest import svg_text
+    for o in requests.get(base + '/api/state').json()['job']['objects']:
+        requests.delete(f"{base}/api/objects/{o['id']}")
+    requests.post(base + '/api/objects', files={'file': ('f.svg', svg_text(FRAME, 300, 200).encode(), 'image/svg+xml')})
+    try:
+        page.goto(base + '/')
+        page.wait_for_selector('#paper [data-paper="poster"]')
+        assert page.locator('#bed-layer .sheet').count() == 0
+        page.click('#paper [data-paper="poster"]')
+        page.wait_for_selector('#bed-layer .sheet')
+        assert page.locator('#bed-layer .sheet').count() == 1            # scaled to fit one at upload
+        assert page.is_disabled('#show-art')                              # no bed to show the art of
+        page.click('#paper [data-act="full-size"]')
+        page.wait_for_function('() => document.querySelectorAll("#bed-layer .sheet").length >= 4')
+        n = page.locator('#bed-layer .sheet').count()
+        assert page.locator('#bed-layer .sheet-cut').count() > 0
+        # Locked: the sheets and the drawing stay; a drag doesn't move it
+        page.click('#p-lock')
+        page.wait_for_selector('#p-lock.on')
+        page.click('#objects li .name')
+        x0 = requests.get(base + '/api/state').json()['job']['objects'][0]['placement']['x']
+        b = page.locator('#design-layer g.obj').bounding_box()
+        drag((page), (b['x'] + b['width'] / 2, b['y'] + b['height'] / 2), (b['x'] + b['width'] / 2 + 80, b['y'] + b['height'] / 2))
+        page.wait_for_selector('#hint:has-text("locked")', timeout=3000)
+        assert requests.get(base + '/api/state').json()['job']['objects'][0]['placement']['x'] == x0
+        assert page.locator('#bed-layer .sheet').count() == n
+        assert page.is_disabled('#f-x')
+        # Back to one sheet: the bed again
+        page.click('#p-lock')
+        page.click('#p-lock')                                             # twice(): unlocking asks
+        page.wait_for_selector('#p-lock:not(.on)')
+        page.click('#paper [data-paper="one"]')
+        page.wait_for_selector('#bed-layer .sheet', state='detached')
+    finally:
+        requests.patch(base + '/api/job', json={'poster': None})

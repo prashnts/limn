@@ -556,6 +556,16 @@ class Cache:
             data['surface'] = [str(sp.resolve()), sp.stat().st_mtime_ns]
         return hashlib.sha1(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
 
+    def has(self, obj, tools, root=Path('.'), fonts=None):
+        return self.key(obj, tools, root, fonts) in self.sliced
+
+    def put(self, obj, tools, root, fonts, sliced):
+        '''A slice made elsewhere (emit: in another process).'''
+        if len(self.sliced) > 64:
+            self.sliced.pop(next(iter(self.sliced)))
+        self.sliced[self.key(obj, tools, root, fonts)] = sliced
+        self.slices += 1
+
     def get(self, obj, tools, root=Path('.'), fonts=None):
         k = self.key(obj, tools, root, fonts)
         if k not in self.sliced:

@@ -55,12 +55,13 @@ END | type:u8 hop:u8 seq:u8 payload... crc32:u32le | END      (0xC0 and 0xDB esc
 | `T_HELLO` | up        | `b'<role>>><emblem>'`                     |
 | `T_CMD`   | down      | command text, eg. `b'calibrate()'`        |
 | `T_LOG`   | up        | text                                      |
-| `T_DATA`  | up        | `pack_fsr()` / `pack_rtp()`               |
+| `T_DATA`  | up        | `pack_fsr()` / `pack_rtp()` / `pack_load()` |
 | `T_OTA`   | both      | update request / reply, see `lib/ota.py`  |
 
 Sensor payloads (little endian):
 - FSR: `kind=0x4, state, n, n x (row:u8, col:u8, strength:u16 0..1000)`
 - RTP: `kind=0x5, state, x:u16, y:u16, z:u32`
+- Plot bed: `kind=0x6, state, flags:u8, n:u8, sum_mg:i32, sum_raw:i32, n x (mg:i32, raw:i32)`; flags 1 touched, 2 armed, 4 calibrated, 8/16 sum/feet ADC ok, 32 taring
 - state: `12` calibrating, `13` calibration failed, `14` calibrated, `42` sample, `43` matrix (all cells)
 
 ### Routing
@@ -156,3 +157,5 @@ lrt_*.py       the app
 - [ ] Tune `touch_threshold`, `SETTLE_US` and `max_spread` on the real panel
 - [ ] FSR pull-downs: `mcu.py send 'diag()'`. If `pull_down=0`, try `"fsr_pull_down": true` in node.json and re-tune the thresholds
 - [ ] FSR touch IRQ
+- [x] Plot bed (`lrt_plot_bed.py`, 2026-10-16): load cells on 2 ADS1220s, its own fail-safe touch line to a Klipper endstop (not DETECT), USB-only (hop 0). The rescue loop now listens on USB when a node has no up UART (the Dock too), and feeds the watchdog. `docs/load-cell.md` *Firmware*.
+- [ ] Plot bed on the real board: `diag()` noise, rates, loop time; the Klipper side (`ext/limn`)

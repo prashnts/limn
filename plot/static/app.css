@@ -401,6 +401,80 @@ input[type=number], .stats, .status, .pill, #scrub-line, .cursor, .hint, .gcode,
 .opts input, .form .mono, .mono, .note.mono, .ledlegend dd, #head-layer .head-label, .zoombadge, .captures .name .note {
   font-family: var(--mono); font-variant-numeric: tabular-nums; }
 input[type=number] { font-size: 12px; }
+.list li > .note, .plan .note, .otabs .n, .text-style .row .note, .text-run .row .note, .ink .note, .masks .name,
+.groups .key, .tools .grid input, .drawset input, .form input[type=text].num, #m-bed {
+  font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* The docks' tabs, as in a slicer (panels.js): one group of panels at a time, Output pinned under them */
+.dhead { position: sticky; top: 0; z-index: 3; pointer-events: auto; flex: none; display: flex; flex-direction: column; gap: 6px;
+  padding: 6px; border-radius: var(--r); background: var(--panel); box-shadow: var(--shadow); }
+.dtabs { display: flex; gap: 2px; flex-wrap: wrap; }
+.dtabs button { flex: 1 1 auto; min-height: var(--touch); padding: 4px 8px; border: none; background: none; color: var(--muted);
+  border-radius: 8px; font-weight: 600; font-size: 12px; white-space: nowrap; }
+.dtabs button:hover { color: var(--ink); background: var(--bg); }
+.dtabs button.on { color: var(--accent-ink); background: var(--accent); }
+.find input { width: 100%; min-height: var(--touch); font-family: var(--mono); font-size: 12px; }
+section.panel.tab-off { display: none; }
+@media (min-width: 761px) {
+  .dock > section.panel[data-panel="output"]:not(.floating) { position: sticky; bottom: 0; z-index: 2; margin-top: auto; }
+  .dock > section.panel[data-panel="output"]:not(.floating) .pbody { max-height: 42vh; overflow: auto; }
+}
+/* Output over the canvas (panels.js #outbar): folded, a button over the scrubber; unfolded, it grows upwards */
+.outbar { position: fixed; z-index: 5; left: calc(var(--dock-l) + 10px); right: calc(var(--dock-r) + 10px); bottom: 66px;
+  display: flex; justify-content: center; pointer-events: none; }
+.outbar > section.panel, .outbar > .pstub { pointer-events: auto; width: min(460px, 100%); }
+.outbar > section.panel.collapsed { width: auto; border-radius: 99px; }
+.outbar > section.panel.collapsed .phead { min-height: 38px; padding-right: 2px; }
+.outbar > section.panel .pbody { max-height: min(56vh, calc(100vh - var(--top) - 140px)); overflow: auto; }
+.outbar > section.panel.collapsed .pcollapse { transform: rotate(180deg); }      /* ▴: it opens upwards */
+.outbar.drop-here::before { content: ""; position: absolute; inset: -6px 20%; border: 2px dashed var(--accent); border-radius: var(--r); }
+#out-sum { text-transform: none; letter-spacing: 0; font-weight: 400; }
+#out-sum.warn { color: var(--warn); }
+/* A panel out over the canvas leaves its title where it was: a tap puts it back */
+.pstub { pointer-events: auto; flex: none; display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 4px 0 12px;
+  border-radius: var(--r); border: 1.5px dashed var(--line); background: color-mix(in srgb, var(--card) 60%, transparent); cursor: pointer; }
+.pstub h2 { flex: 1; margin: 0; }
+.pstub .pchev { color: var(--muted); font-size: 11px; }
+.pstub:hover { border-color: var(--accent); }
+.pstub.tab-off { display: none; }
+.outbar > .pstub { width: auto; border-radius: 99px; }
+
+/* Tools as tiles (app.js renderTools): pills say how each is; a tap opens its whole setup */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 6px; }
+.tools .tool.tile { margin: 0; padding: 0; overflow: hidden; }
+.tools .tool.tile.open { grid-column: 1 / -1; border-color: var(--accent); }
+.tile > .head { display: grid !important; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 4px 6px;
+  padding: 6px 8px; margin: 0 !important; cursor: pointer; user-select: none; }
+.tile > .head:hover { background: var(--bg); }
+.tile > .head b { font-family: var(--mono); }
+.tile > .head .chev { color: var(--muted); font-size: 11px; transition: transform .15s; }
+.tile.open > .head .chev { transform: rotate(90deg); }
+.tile > .head .pills { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 3px; }
+.tile > .head .tname { font-size: 12px; }
+.tile .setup { padding: 0 8px 8px; border-top: 1px solid var(--line); }
+.tile .setup h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 10px 0 4px; }
+.pill { font-family: var(--mono); }
+.tiles .badge { font-family: var(--mono); font-size: 10px; }
+.tools h3.plan-head { margin-top: 14px; }
+
+/* Find a setting: only the panels and rows that have it */
+body.finding section.panel.find-miss { display: none; }
+body.finding section.panel:not(.find-all) .form > :not(.find-hit):not(details),
+body.finding section.panel:not(.find-all) .grid > label:not(.find-hit),
+body.finding section.panel:not(.find-all) #macros button:not(.find-hit),
+body.finding section.panel:not(.find-all) .mgroup:not(:has(.find-hit)) { display: none; }
+body.finding .find-hit { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px; }
+body.finding section.panel.collapsed:not(.find-miss) .pbody { display: block; }
+body.finding .opane[hidden] { display: block !important; }
+body.finding .otabs { display: none; }
+
+/* The selected drawing's tabs (app.js otabs) */
+.otabs { display: flex; gap: 0; margin: 10px 0 8px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.otabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted);
+  padding: 6px 9px; font-weight: 600; font-size: 12px; white-space: nowrap; margin-bottom: -1px; }
+.otabs button:hover { color: var(--ink); }
+.otabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.otabs .n { font-weight: 400; color: var(--muted); font-size: 11px; }
 
 /* Windows: the scan viewer, the cameras */
 .win { position: fixed; z-index: 7; display: flex; flex-direction: column; overflow: hidden; border-radius: var(--r);
@@ -541,6 +615,13 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px s
   #right { order: 3; padding-bottom: 16px; }
   #floats { display: none; }
   .phead { cursor: pointer; touch-action: auto; }
+  .dtabs { display: none; }                 /* one column: every panel, scrolled */
+  section.panel.tab-off:not(.find-miss) { display: block; }
+  .dhead { position: static; backdrop-filter: none; background: var(--panel); }
+  #left .dhead { display: none; }
+  .outbar { position: static; order: 2; padding: 8px 8px 0; pointer-events: auto; display: block; }
+  .outbar > section.panel, .outbar > section.panel.collapsed { width: auto; border-radius: var(--r); }
+  .pstub { display: none; }
   .phead .grip { display: none; }
   section.panel { backdrop-filter: none; background: var(--panel); }
   .ruler.x { width: calc(100% - var(--ruler)); }
@@ -646,3 +727,55 @@ ol.plan li.swap { background: color-mix(in srgb, var(--warn) 12%, transparent); 
 .toast.busy::before { content: ''; display: inline-block; width: .8em; height: .8em; margin-right: .5em; vertical-align: -.1em;
   border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* The item of the drawing's panel under the pointer, or picked (app.js drawSpot): a box round each of
+   its shapes and round them all, the rest of the drawing faded */
+#design-layer g.obj.spotting path.shape:not(.spot-on), #design-layer g.obj.spotting image.pic { opacity: .18 !important; }
+.spot-boxes rect { fill: none; vector-effect: non-scaling-stroke; pointer-events: none; }
+.spot-boxes rect.one { stroke: var(--accent); stroke-width: 1px; stroke-dasharray: 3 2; }
+.spot-boxes rect.all { stroke: #e0245e; stroke-width: 2px; paint-order: stroke; }
+.layer > .lhead, .text-style, .text-run { cursor: pointer; border-radius: 4px; }
+.layer > .lhead:hover, .text-style:hover, .text-run:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* Bigger to press: the drawing's tabs, its layers' chips and buttons */
+.otabs button { min-height: 38px; padding: 7px 12px; font-size: 13px; }
+.chips { gap: 5px; margin-top: 6px; }
+.chip { min-height: 34px !important; min-width: 44px; justify-content: center; padding: 4px 10px; gap: 4px; }
+.chip .swatch { width: 18px; height: 18px; }
+.chip .swatch.stroke { border-width: 4px; }
+.chip.picked { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); border-color: var(--accent); }
+.layer { padding: 6px 8px; }
+.layer > .lhead { min-height: 38px; font-size: 13px; }
+.layer > .lhead button { min-height: 34px; min-width: 34px; font-size: 13px; }
+.panel button.small, .panel .button.small, .image-pick button { min-height: 34px; padding: 4px 12px; }
+.layers { display: grid; gap: 6px; }
+/* Chips picked together: one pen for all */
+.bulk { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 6px 8px; margin-bottom: 6px;
+  border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
+.bulk .grow { flex: 1; }
+.bulk select { min-width: 96px; }
+
+/* A poster (app.js renderPosterBed): its sheets of the bed's paper instead of the bed */
+#bed-layer.poster .sheet-paper { fill: var(--paper, #ffffff); stroke: var(--accent); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+#bed-layer.poster .sheet-overlap { fill: var(--accent); opacity: .07; stroke: none; }
+#bed-layer.poster .sheet-cut { stroke: #e0245e; stroke-width: 1px; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; opacity: .7; }
+#bed-layer.poster .sheet-n { fill: var(--accent); opacity: .22; font-family: var(--mono); font-weight: 700; }
+body.poster.tab-scan #design-layer { display: none; }      /* the Scan tab is the bed: the poster's drawings aren't on it */
+.check:has(input:disabled) { opacity: .45; }
+/* Locks: a drawing's, the poster's */
+button.lock { white-space: nowrap; }
+button.lock.on { background: color-mix(in srgb, var(--warn) 16%, var(--panel)); border-color: var(--warn); color: var(--ink); }
+button.lock.big { width: 100%; margin-top: 10px; min-height: 40px; font-weight: 600; }
+.list li .icon.lock { opacity: 0; }
+.list li:hover .icon.lock, .list li.on .icon.lock, .list li .icon.lock.on { opacity: .85; }
+.objhead { margin: 0 0 8px; }
+.objhead .objname { margin: 0; }
+fieldset.plain { border: none; margin: 0; padding: 0; min-width: 0; }
+fieldset.plain:disabled { opacity: .55; }
+.frame.locked { stroke: var(--warn); stroke-dasharray: 4 3; }
+.lock-badge { pointer-events: none; }
+.paper .seg { margin-bottom: 8px; }
+.plan li.sheet .what { font-weight: 500; }
+
+.kicad-ask .row.wrap { gap: 4px 12px; margin-bottom: 8px; }
+.kicad-ask h3 { margin: 10px 0 6px; }

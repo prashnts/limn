@@ -110,8 +110,8 @@
     <section class="plot-only" data-panel="drawings" data-fixed>
       <h2 title="The drawings on the bed: drop SVGs to add one; the eye hides one from view">Drawings</h2>
       <label id="drop" class="drop" title="SVG files to place on the bed: drop them anywhere on the page, or click to pick">
-        <input type="file" id="svg-input" accept=".svg,image/svg+xml" multiple hidden>
-        <b>Drop SVGs</b> on the bed, or click here
+        <input type="file" id="svg-input" accept=".svg,image/svg+xml,.kicad_sch,.kicad_pcb,.zip" multiple hidden>
+        <b>Drop SVGs</b> or KiCad files on the bed, or click here
       </label>
       <ul id="objects" class="list"></ul>
       <div class="row"><button id="clear-objects" class="small danger" title="Remove every drawing from the bed (press twice; Undo brings them back)">Clear all</button>
@@ -119,6 +119,10 @@
         <button id="ungroup-objects" class="small" hidden title="Ungroup the selected drawing's group (Ctrl+Shift+G)">Ungroup</button></div>
       <div class="row"><a id="job-save" class="button small" href="/api/job/file" title="Save the whole job as one file: the drawings, their painting, masks, image settings, the plan's pens and order (Ctrl+Shift+S)">Save job</a>
         <label class="button small" title="Open a saved job (.limnplot.json, or drop it on the page): it replaces this one, Undo brings this back">Open job…<input type="file" id="job-input" accept=".json,application/json" hidden></label></div>
+    </section>
+    <section class="plot-only" data-panel="paper">
+      <h2 title="One sheet on the bed, or a poster: drawings bigger than the paper, cut into sheets of it">Paper</h2>
+      <div id="paper" class="paper"></div>
     </section>
     <section class="plot-only" data-panel="layers">
       <h2 title="Each pen's layer over every drawing, in the order they plot, and the scans under the plot: drag a pen to plot it earlier or later; the eye hides one from view (it still plots)">Layers</h2>
@@ -133,14 +137,6 @@
     <section class="plot-only" data-panel="drawing">
       <h2 title="The selected drawing: where it is, its colours and tools, its texts">Selected drawing</h2>
       <div id="object-panel" hidden></div>
-    </section>
-    <section class="plot-only" data-panel="fonts" data-collapsed>
-      <h2 title="Fonts for the texts of the drawings: TTF/OTF as they are, SVG fonts drawn as single lines">Fonts</h2>
-      <label class="drop small" title="Upload fonts: click to pick, or drop them on the page">
-        <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
-        Upload TTF / OTF (source) or SVG fonts (single line)
-      </label>
-      <ul id="fonts" class="list"></ul>
     </section>
   </aside>
 
@@ -174,8 +170,44 @@
       <p class="note">Pick a tool, then click shapes. Shift-click paints the whole colour. Esc stops.</p>
       <p class="note">Shift+0-9 paints with T0-T9. <a href="#" data-act="keys">Keyboard shortcuts</a> (?)</p>
     </section>
-    <section class="plot-only" data-panel="output">
-      <h2 title="What the plot will take, what may go wrong, and sending it to Klipper">Output</h2>
+    <section class="plot-only" data-panel="drawset" data-collapsed>
+      <h2 title="How every tool draws, whatever its pen: speed, fills, the gap kept from other inks (bleed), shapes too small for the line">Drawing</h2>
+      <div id="drawset" class="drawset"></div>
+    </section>
+    <section data-panel="tools">
+      <h2 title="What is in each holder, from its tag: give a tool its pen type and colour, tune how it draws">Tools</h2>
+      <div id="tools" class="tools"></div>
+    </section>
+    <section class="plot-only" data-panel="pens" data-collapsed>
+      <h2 title="The library of tool types (plot/profiles/pens.toml): pens and how they draw, and cameras">Pens</h2>
+      <div id="pens" class="pens"></div>
+    </section>
+    <section data-panel="printer">
+      <h2 title="Klipper, through Moonraker: its state, buttons for its macros, where Fluidd is">Printer</h2>
+      <div id="printer" class="form"></div>
+      <div id="macros" class="macros"></div>
+      <div id="printer-url" class="form printer-url"></div>
+    </section>
+    <section class="plot-only" data-panel="machine">
+      <h2 title="The plotter's settings for this job: the bed, z limits, travels. A changed one shows ↺ to go back">Machine</h2>
+      <div id="machine" class="form"></div>
+    </section>
+    <section data-panel="display">
+      <h2 title="The LED matrix UI on the toolhead side (a Unicorn pHAT, 8 x 4) and the dock strip, as they shine now">Display</h2>
+      <div id="leds"></div>
+    </section>
+    <section class="plot-only" data-panel="fonts" data-collapsed>
+      <h2 title="Fonts for the texts of the drawings: TTF/OTF as they are, SVG fonts drawn as single lines">Fonts</h2>
+      <label class="drop small" title="Upload fonts: click to pick, or drop them on the page">
+        <input type="file" id="font-input" accept=".ttf,.otf,.svg" multiple hidden>
+        Upload TTF / OTF (source) or SVG fonts (single line)
+      </label>
+      <ul id="fonts" class="list"></ul>
+    </section>
+  </aside>
+<div id="outbar" class="outbar plot-only" aria-label="Output">
+  <section class="plot-only" data-panel="output" data-collapsed>
+      <h2 title="What the plot will take, what may go wrong, and sending it to Klipper">Output <span id="out-sum" class="note mono"></span></h2>
       <div id="stats" class="stats"></div>
       <div id="swap-now" class="swap-now" hidden></div>
       <div id="plan"></div>
@@ -186,33 +218,7 @@
         <button id="print" class="primary" title="Send the G-code to Klipper and start plotting it">Upload &amp; plot</button>
       </div>
     </section>
-    <section data-panel="printer">
-      <h2 title="Klipper, through Moonraker: its state, buttons for its macros, where Fluidd is">Printer</h2>
-      <div id="printer" class="form"></div>
-      <div id="macros" class="macros"></div>
-      <div id="printer-url" class="form printer-url"></div>
-    </section>
-    <section data-panel="tools">
-      <h2 title="What is in each holder, from its tag: give a tool its pen type and colour, tune how it draws">Tools</h2>
-      <div id="tools" class="tools"></div>
-    </section>
-    <section data-panel="display">
-      <h2 title="The LED matrix UI on the toolhead side (a Unicorn pHAT, 8 x 4) and the dock strip, as they shine now">Display</h2>
-      <div id="leds"></div>
-    </section>
-    <section class="plot-only" data-panel="drawset" data-collapsed>
-      <h2 title="How every tool draws, whatever its pen: speed, fills, the gap kept from other inks (bleed), shapes too small for the line">Drawing</h2>
-      <div id="drawset" class="drawset"></div>
-    </section>
-    <section class="plot-only" data-panel="machine">
-      <h2 title="The plotter's settings for this job: the bed, z limits, travels. A changed one shows ↺ to go back">Machine</h2>
-      <div id="machine" class="form"></div>
-    </section>
-    <section class="plot-only" data-panel="pens" data-collapsed>
-      <h2 title="The library of tool types (plot/profiles/pens.toml): pens and how they draw, and cameras">Pens</h2>
-      <div id="pens" class="pens"></div>
-    </section>
-  </aside>
+</div>
 <div id="floats"></div>
 <div id="keys-help" class="keys-help" hidden role="dialog" aria-label="Keyboard shortcuts"></div>
 <div id="image-ask" class="keys-help ask" hidden role="dialog" aria-label="Pictures in the SVG"></div>

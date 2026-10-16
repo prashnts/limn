@@ -156,6 +156,13 @@ def test_fsr_payload():
     assert link.unpack_data(link.pack_fsr(12, [])) == (link.FSR_ID_LM, 12, [])
     assert link.unpack_data(link.pack_fsr(42, touches)[:-1]) is None
 
+def test_load_payload():
+    feet = [(1500, -2048), (-20, 7), (0, 8388607)]
+    packed = link.pack_load(42, link.LOAD_TOUCH | link.LOAD_CAL, 1480, -8388608, feet)
+    assert link.unpack_data(packed) == (link.LOAD_ID_LM, 42, [5, 1480, -8388608, [[1500, -2048], [-20, 7], [0, 8388607]]])
+    assert link.unpack_data(link.pack_load(42, 0, 0, 0, [])) == (link.LOAD_ID_LM, 42, [0, 0, 0, []])
+    assert link.unpack_data(packed[:-1]) is None
+
 def test_flush_empties_queues():
     up, _ = wire()
     node = Link(up=up)

@@ -147,11 +147,35 @@ def rescue(node, root=''):
     link = from_config(node)
     link.root = root
     hello = ('rescue:' + node.get('role', '?') + '>>app failed to start').encode()
+
+    def handle(frame):
+        if frame.type == T_CMD and frame.payload == b'ping()':
+            link.send(T_HELLO, hello)
+
+    # Without an up UART (the Dock, a USB-only node) updates come over USB.
+    bridge = None
+    if not node.get('up'):
+        try:
+            from bridge import Bridge
+            bridge = Bridge(link)
+        except Exception as e:
+            print('ota: no USB bridge in rescue:', repr(e))
+    # The app may have started the watchdog before failing; it can't be stopped.
+    try:
+        from machine import WDT
+        wdt = WDT(timeout=8000)
+    except Exception:
+        wdt = None
     link.send(T_HELLO, hello)
     while True:
+        if wdt:
+            wdt.feed()
         for frame in link.poll():
-            if frame.type == T_CMD and frame.payload == b'ping()':
-                link.send(T_HELLO, hello)
+            handle(frame)
+        if bridge:
+            cmd = bridge.read_command()
+            if cmd:
+                bridge.from_host(cmd, handle)
         time.sleep_ms(1)
 
 

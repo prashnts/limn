@@ -279,7 +279,24 @@ function status(text, busy = false) {
 const svg = $('#canvas');
 const world = $('#world');
 
+// A poster (job.poster, plot/poster.py): on the Plot tab the drawings are on a grid of sheets of the
+// bed's paper (S.poster: the server's layout), not on the bed; the Scan tab is the bed as ever
+const posterOn = () => !!(S && S.poster && !document.body.classList.contains('tab-scan'));
+// Locked: the drawing's own lock, or the poster's (every drawing on it). The server refuses moves too
+const isLocked = (o) => !!(o && (o.locked || (S.job.poster && S.job.poster.locked)));
+function lockedSay(o) {
+  flash(o.locked ? `${o.id} is locked: unlock it (🔒) to move or scale it` : 'The poster is locked: unlock it (Paper) to move its drawings');
+}
+function posterRect() {
+  const P = S.poster, [gx, gy] = P.origin;
+  return [gx, gy, gx + P.cols * (P.sheet[0] - P.overlap) + P.overlap, gy + P.rows * (P.sheet[1] - P.overlap) + P.overlap];
+}
+const paperRect = () => (posterOn() ? posterRect() : S.machine.draw_area);
 function extent() {
+  if (posterOn()) {
+    const [x0, y0, x1, y1] = posterRect(), c = S.poster.content || [x0, y0, x1, y1];
+    return [Math.min(x0, c[0]) - 10, Math.min(y0, c[1]) - 10, Math.max(x1, c[2]) + 10, Math.max(y1, c[3]) + 10];
+  }
   const m = S.machine;
   const [tx0, ty0, tx1, ty1] = m.travel_area;
   return [Math.min(0, tx0), Math.min(0, ty0), Math.max(m.bed[0], tx1), Math.max(m.bed[1], ty1)];
@@ -484,6 +501,7 @@ svg.addEventListener('pointerdown', (e) => {
     return;
   }
   if (e.button !== 0) return;
+  if (handle && sel && isLocked(obj(sel))) { lockedSay(obj(sel)); return; }
   if (handle && sel) {
     const o = obj(sel), [w, h] = info(sel).size;
     const kind = handle.dataset.handle;
@@ -511,7 +529,8 @@ svg.addEventListener('pointerdown', (e) => {
   }
   if (!multi.has(id)) multi.clear();
   if (sel !== id) { sel = id; store.set('sel', sel); render(); }
-  drag = { kind: 'move', id, start: worldPt(e), ps: Object.fromEntries(movers(id).map((m) => [m.id, { ...m.placement }])), moved: false };
+  drag = { kind: 'move', id, start: worldPt(e), ps: Object.fromEntries(movers(id).map((m) => [m.id, { ...m.placement }])), moved: false,
+           locked: movers(id).find(isLocked) || null };
   capture();
 });
 
@@ -547,11 +566,12 @@ function revealPicked(id, i) {
     imageSel[id] = String(i);
     open = ['images'];
   } else if ((I.texts || []).some((t) => t.index === i)) open = ['texts', 'texts-each'];
-  for (const k of open) store.set('sect:' + k, true);
+  if (open.length) store.set('otab', open[0]);
+  for (const k of open.slice(1)) store.set('sect:' + k, true);
   if (open.length) renderObjectPanel();
   if (typeof unfoldPanel === 'function') unfoldPanel('drawing');
   const P = $('#object-panel');
-  if (open[0] === 'images') el = $('[data-sect="images"]', P);
+  if (open[0] === 'images') el = $('[data-opane="images"]', P);
   else if (open[0] === 'texts') el = $(`.text-run[data-i="${i}"]`, P);
   else el = $('.picked-head', P);
   if (!el) return;
@@ -610,6 +630,10 @@ svg.addEventListener('pointermove', (e) => {
   const o = obj(drag.id);
   drag.moved = true;
   $('#paths-layer').classList.add('stale');
+  if (drag.kind === 'move' && drag.locked) {      // picked, not moved: it is locked
+    if (!drag.said && Math.hypot(w.x - drag.start.x, w.y - drag.start.y) > 4 * mmPerPx()) { drag.said = true; lockedSay(drag.locked); }
+    return;
+  }
   if (drag.kind === 'move') {
     for (const [mid, p] of Object.entries(drag.ps)) {
       const m = obj(mid);
@@ -702,6 +726,15 @@ function drawHandles() {
   L.innerHTML = '';
   const o = sel && obj(sel);
   if (!o || !info(o.id) || mode === 'paint' || mode === 'mask' || hiddenObjs.has(o.id)) return;
+  if (isLocked(o)) {                            // its frame only, and a padlock: nothing to drag
+    const [w, h] = info(o.id).size, pl = o.placement;
+    const pts = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }].map((p) => toWorld(pl, p));
+    svgEl('polygon', { class: 'frame locked', points: pts.map((p) => `${p.x},${p.y}`).join(' ') }, L);
+    const px = mmPerPx(), c = pts[3];
+    const t = svgEl('text', { class: 'lock-badge', x: c.x, y: -c.y - 4 * px, transform: 'scale(1,-1)', 'font-size': 14 * px }, L);
+    t.textContent = '🔒';
+    return;
+  }
   const [w0, h0] = info(o.id).size;
   const k = drag && drag.kind === 'scale' && drag.id === o.id ? drag.k : 1;
   const w = w0 * k, h = h0 * k, pl = o.placement;
@@ -727,7 +760,8 @@ function drawRulers() {
   const style = getComputedStyle(document.documentElement);
   const ink = style.getPropertyValue('--muted').trim(), accent = style.getPropertyValue('--accent').trim();
   const pxmm = ctm.a;
-  const step = [1, 2, 5, 10, 20, 50, 100].find((s) => s * pxmm >= 45) || 100;
+  // a label's room: wider for longer numbers (a poster runs to thousands of mm)
+  const step = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000].find((s) => s * pxmm >= Math.max(45, 7 * String(Math.round(s * 20)).length + 14)) || 1000;
   const minor = step / (step % 5 === 0 && step >= 5 ? 5 : 2);
   let ext = null;
   const o = sel && obj(sel);
@@ -757,6 +791,22 @@ function drawRulers() {
       const [a, b] = axis === 'x' ? [at(ext[0]), at(ext[2])] : [at(ext[3]), at(ext[1])];
       axis === 'x' ? g.fillRect(a, 0, b - a, H) : g.fillRect(0, a, W, b - a);
       g.globalAlpha = 1; g.fillStyle = ink;
+    }
+    if (posterOn()) {                         // the sheets along it: every other one tinted, where they are cut
+      const P = S.poster, i0 = axis === 'x' ? 0 : 1, size = P.sheet[i0], pitch = size - P.overlap, n = axis === 'x' ? P.cols : P.rows;
+      g.save(); g.fillStyle = accent; g.strokeStyle = accent;
+      for (let i = 0; i < n; i++) {
+        const a0 = P.origin[i0] + i * pitch, [a, b] = [at(a0), at(a0 + size)];
+        g.globalAlpha = i % 2 ? 0.05 : 0.11;
+        axis === 'x' ? g.fillRect(a, 0, b - a, H) : g.fillRect(0, Math.min(a, b), W, Math.abs(b - a));
+        if (i) {
+          const c = Math.round(at(P.origin[i0] + i * pitch + P.overlap / 2)) + 0.5;
+          g.globalAlpha = 0.8; g.beginPath();
+          axis === 'x' ? (g.moveTo(c, 0), g.lineTo(c, H)) : (g.moveTo(0, c), g.lineTo(W, c));
+          g.stroke();
+        }
+      }
+      g.restore();
     }
     for (let v = Math.floor(Math.min(lo, hi) / minor) * minor; v <= Math.max(lo, hi); v += minor) {
       const p = Math.round(at(v)) + 0.5;
@@ -805,11 +855,14 @@ function wipeUsed() {
 }
 function renderBed() {
   const m = S.machine;
-  const sig = JSON.stringify([m.bed, m.bed_art, m.draw_area, m.zones, $('#show-art').checked, S.wipe, wipeUsed()]);
+  const sig = JSON.stringify([m.bed, m.bed_art, m.draw_area, m.zones, $('#show-art').checked, S.wipe, wipeUsed(),
+    posterOn() && S.poster]);
   if (sig === bedSig) return;
   bedSig = sig;
   const L = $('#bed-layer');
   L.innerHTML = '';
+  L.classList.remove('poster');
+  if (posterOn()) return renderPosterBed(L);
   rect([0, 0, m.bed[0], m.bed[1]], 'bed-rect', L);
   if (m.bed_art && $('#show-art').checked) {
     svgEl('image', { href: '/api/bed-art', x: 0, y: -m.bed[1], width: m.bed[0], height: m.bed[1],
@@ -830,6 +883,29 @@ function renderBed() {
     }
     svgEl('title', {}, g).textContent = `Wipe area: pens are primed here${w.enabled ? '' : ' (switched off in beds.py: not measured yet)'}`
       + (used >= 0 ? `, ${used} of ${w.nx * w.ny} slots used` : '');
+  }
+}
+
+// The poster's sheets instead of the bed: each its paper, numbered in the order they plot; the strips
+// two sheets share (overlap) shaded, the lines they are cut along to be joined dashed
+function renderPosterBed(L) {
+  const P = S.poster, ov = P.overlap;
+  L.classList.add('poster');
+  for (const sh of P.sheets) {
+    const [x0, y0, x1, y1] = sh.rect, g = svgEl('g', { class: 'sheet', 'data-sheet': sh.n }, L);
+    rect(sh.rect, 'sheet-paper', g);
+    if (sh.col > 0) rect([x0, y0, x0 + ov, y1], 'sheet-overlap', g);
+    if (sh.row > 0) rect([x0, y0, x1, y0 + ov], 'sheet-overlap', g);
+    const k = Math.min(x1 - x0, y1 - y0) / 6;
+    const t = svgEl('text', { class: 'sheet-n', x: x0 + k * 0.35, y: -(y1 - k * 1.1), transform: 'scale(1,-1)', 'font-size': k }, g);
+    t.textContent = sh.n;
+    svgEl('title', {}, g).textContent = `Sheet ${sh.n} of ${P.sheets.length}: ${num(x1 - x0, 0)} × ${num(y1 - y0, 0)} mm`;
+  }
+  for (const sh of P.sheets) {
+    const [x0, y0, x1, y1] = sh.rect;
+    for (const [a, v] of sh.cuts) {
+      svgEl('line', a === 'x' ? { class: 'sheet-cut', x1: v, y1: y0, x2: v, y2: y1 } : { class: 'sheet-cut', x1: x0, y1: v, x2: x1, y2: v }, L);
+    }
   }
 }
 
@@ -894,7 +970,7 @@ function placeObject(o, k = 1) {
 
 let objRender = Promise.resolve();
 function renderObjects() {
-  objRender = objRender.then(drawObjects).catch((e) => console.error(e));
+  objRender = objRender.then(drawObjects).then(drawSpot).catch((e) => console.error(e));
   return objRender;
 }
 async function drawObjects() {
@@ -1043,6 +1119,60 @@ function styleObject(o, g, data) {
 }
 
 let runEls = [];
+// --- the paper: one sheet on the bed, or a poster of sheets ----------------------
+function renderPaper() {
+  const P = S.job.poster, L = S.poster, [x0, y0, x1, y1] = S.machine.draw_area, lock = !!(P && P.locked);
+  const seg = (attr, cur, opts) => `<div class="seg" role="group">${opts.map(([v, l, t]) =>
+    `<button data-${attr}="${v}" class="${v === cur ? 'on' : ''}" title="${esc(t)}"${lock ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
+  const one = seg('paper', P ? 'poster' : 'one', [['one', 'One sheet', 'The drawings on the bed\'s paper'],
+    ['poster', 'Poster', 'Bigger than the paper: cut into sheets of it, plotted one after another (a new sheet on between them)']]);
+  if (!P) {
+    fill($('#paper'), `${one}<p class="note">The bed's paper: <span class="mono">${num(x1 - x0, 0)} × ${num(y1 - y0, 0)} mm</span>. A poster is bigger: its sheets plot one after another, a new sheet on between them.</p>`);
+  } else {
+    const n = L ? L.sheets.length : 0, plotted = preview && preview.sheets ? preview.sheets.length : null;
+    const small = S.job.objects.filter((o) => o.scale < 1 && !isLocked(o));
+    fill($('#paper'), `${one}
+      <div class="form">
+        <label>Sheets</label>${seg('psheet', P.sheet, [['portrait', 'portrait', 'As the paper sits on the bed'], ['landscape', 'landscape', 'Turned a quarter: the long side across']])}
+        <label for="p-ov">Overlap</label><div class="row"><input id="p-ov" type="number" step="1" min="0" value="${num(P.overlap)}"${lock ? ' disabled' : ''}
+          title="mm each sheet shares with the next: drawn on both, one is cut along the middle of it to join them"> <span class="note">mm</span></div>
+        <label></label><label class="check" title="Short ticks at the paper's edge where neighbouring sheets are cut to be joined"><input type="checkbox" id="p-marks"${P.marks ? ' checked' : ''}${lock ? ' disabled' : ''}> crop marks</label>
+        <label>Grid</label><div class="mono">${L ? `${L.cols} × ${L.rows}: ${n} sheet${n > 1 ? 's' : ''}` : '—'}</div>
+        <label title="A sheet is the bed's paper (its paper mesh, as far as the plotter reaches): the Machine panel's Paper">Sheet</label>
+        <div class="mono">${L ? `${num(L.sheet[0], 0)} × ${num(L.sheet[1], 0)} mm` : '—'} <span class="note">the bed's paper${S.machine.bed_id ? ` (${esc(S.machine.bed_id)})` : ''}</span></div>
+        ${plotted !== null && plotted < n ? `<label></label><div class="note">${n - plotted} with nothing on ${n - plotted > 1 ? 'them' : 'it'}: left out</div>` : ''}
+      </div>
+      ${small.length ? `<p class="note">${small.length > 1 ? `${small.length} drawings are` : `${esc(small[0].id)} is`} scaled to fit one sheet
+        <button data-act="full-size" title="Back to 100%: as big as the SVG says, over as many sheets as that takes"${lock ? ' disabled' : ''}>Full size</button></p>` : ''}
+      <button id="p-lock" class="lock big${lock ? ' on' : ''}" title="${lock ? 'Unlock: the drawings can move again, the sheets follow them' : 'Lock the sheets and every drawing where they are: nothing moves or scales by accident'}">${lock ? '🔒 Locked: sheets and drawings stay' : '🔓 Lock the layout'}</button>`);
+  }
+  document.body.classList.toggle('poster', !!S.poster);
+  const art = $('#show-art');
+  art.disabled = posterOn();
+  art.closest('label').title = posterOn() ? 'A poster: its sheets, not the bed' : 'Show the bed\'s artwork under the drawing, as a guide';
+}
+async function patchPoster(body) { setState(await api('PATCH', '/api/job', { poster: body })); fit(); }
+$('#paper').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled) return;
+  if (b.dataset.paper === 'poster' && !S.job.poster) return patchPoster({ sheet: 'portrait' });
+  if (b.dataset.paper === 'one' && S.job.poster) return patchPoster(null);
+  if (b.dataset.act === 'full-size') {
+    const ms = S.job.objects.filter((o) => o.scale < 1 && !isLocked(o));
+    return api('PATCH', '/api/objects', Object.fromEntries(ms.map((o) => [o.id, { scale: 1 }]))).then((st) => { setState(st); fit(); });
+  }
+  if (b.dataset.psheet && b.dataset.psheet !== S.job.poster.sheet) return patchPoster({ sheet: b.dataset.psheet });
+  if (b.id === 'p-lock') {
+    const on = !S.job.poster.locked;
+    if (!on && !twice('poster-unlock', b, 'Unlock: the drawings can move again, and the sheets follow them')) return;
+    return patchPoster({ locked: on }).then(() => toast(on ? 'Locked: the sheets and drawings stay where they are' : 'Unlocked'));
+  }
+});
+$('#paper').addEventListener('change', (e) => {
+  if (e.target.id === 'p-ov') return patchPoster({ overlap: Math.max(0, +e.target.value || 0) });
+  if (e.target.id === 'p-marks') return patchPoster({ marks: e.target.checked });
+});
+
 function renderPreview() {
   const L = $('#paths-layer');
   L.classList.remove('stale');
@@ -1161,6 +1291,7 @@ function renderObjectList() {
     return `<li data-id="${esc(o.id)}" class="${o.id === sel ? 'on' : ''}${multi.has(o.id) ? ' multi' : ''}${o.group ? ' grouped' : ''}${hiddenObjs.has(o.id) ? ' hidden' : ''}">
       <button class="icon eye" data-act="eye" title="${hiddenObjs.has(o.id) ? 'Hidden: show it' : 'Hide it (only from view: it still plots)'}">${hiddenObjs.has(o.id) ? '◌' : '◉'}</button>
       <span class="name">${esc(o.id)}</span>
+      <button class="icon lock${o.locked ? ' on' : ''}" data-act="lock" title="${o.locked ? 'Locked where it is: unlock it' : 'Lock it where it is'}">${o.locked ? '🔒' : '🔓'}</button>
       <button class="icon" data-act="dup" title="Duplicate (Ctrl+D)">⧉</button>
       <button class="icon" data-act="del" title="Remove (Del)">✕</button>
       ${o.id === sel && n > 1 ? `<div class="order" role="group" aria-label="Order">${ORDER.map(([to, icon, title]) =>
@@ -1313,6 +1444,7 @@ $('#objects').addEventListener('click', async (e) => {
   if (!id) return;
   if (e.target.dataset.order) return reorder(id, e.target.dataset.order);
   if (act === 'eye') return setHidden(id, !hiddenObjs.has(id));
+  if (act === 'lock') return patchObj(id, { locked: !obj(id).locked });
   if (e.shiftKey && !act && !e.target.dataset.order) {        // picked with the others: to group them
     if (!multi.size && sel && sel !== id) multi.add(sel);
     multi.has(id) ? multi.delete(id) : multi.add(id);
@@ -1367,8 +1499,9 @@ function layersHtml(o) {
   const chips = chipsOf(o), shapes = layerShapes(o);
   const tos = [...Object.values(S.tools).filter((t) => t.draws !== false).map((t) => t.id), 'mix', 'mask', 'skip'];
   for (const c of chips) if (!tos.includes(c.to)) tos.splice(-3, 0, c.to);      // a tool not in a holder any more
-  const chip = (c) => `<button class="chip${openChip === `${o.id}|${c.keys[0]}` ? ' on' : ''}" draggable="true" data-chip="${esc(c.keys[0])}"
-      title="${esc(`${c.part === 'stroke' ? 'Outlines' : 'Fills'} ${c.colours.slice(0, 6).join(', ')}${c.colours.length > 6 ? ` and ${c.colours.length - 6} more` : ''}: ${c.shapes} shape${c.shapes > 1 ? 's' : ''}. Drag onto another pen, click for its settings`)}">${swatchOf(c.part, c.colour)}${c.colours.length > 1 ? `<span class="n">${c.colours.length}</span>` : ''}</button>`;
+  pickedChips(o);
+  const chip = (c) => `<button class="chip${openChip === `${o.id}|${c.keys[0]}` ? ' on' : ''}${chipPick.has(c.keys[0]) ? ' picked' : ''}" draggable="true" data-chip="${esc(c.keys[0])}"
+      title="${esc(`${c.part === 'stroke' ? 'Outlines' : 'Fills'} ${c.colours.slice(0, 6).join(', ')}${c.colours.length > 6 ? ` and ${c.colours.length - 6} more` : ''}: ${c.shapes} shape${c.shapes > 1 ? 's' : ''}. Drag onto another pen, click for its settings, Shift-click to pick it with others`)}">${swatchOf(c.part, c.colour)}${c.colours.length > 1 ? `<span class="n">${c.colours.length}</span>` : ''}</button>`;
   return tos.map((to) => {
     const cs = chips.filter((c) => c.to === to), t = S.tools[to], key = `${o.id}|${to}`;
     const all = openLayers.has(key), n = (shapes[to] || []).length;
@@ -1376,6 +1509,7 @@ function layersHtml(o) {
     const off = hiddenLayers.has(to);
     return `<div class="layer${cs.length || n ? '' : ' empty'}${off ? ' off' : ''}" data-layer="${esc(to)}">
       <div class="lhead"><button class="icon eye" data-act="layer-eye" title="${off ? 'Hidden: show it' : 'Hide it, from the canvas and the paths (it still plots)'}">${off ? '◌' : '◉'}</button>${sw}<span class="lname">${t ? `${esc(t.id)} <span class="note">${esc(t.name)}</span>` : esc(LAYER_NAMES[to] || to)}</span>
+        ${cs.length > 1 ? `<button class="icon" data-act="pick-chips" title="Pick all its chips, to give them another pen at once">all</button>` : ''}
         ${n ? `<button class="icon" data-act="pick-layer" title="Pick its ${n} shape${n > 1 ? 's' : ''} (the shapes tool, A)">${n} ⬚</button>` : '<span class="note">drop here</span>'}</div>
       ${cs.length ? `<div class="chips">${(all ? cs : cs.slice(0, CHIPS)).map(chip).join('')}${cs.length > CHIPS
         ? `<button class="icon" data-act="all-chips" title="${all ? 'Fewer' : 'Every colour of it'}">${all ? '−' : `+${cs.length - CHIPS}`}</button>` : ''}</div>` : ''}
@@ -1459,7 +1593,7 @@ function pickedHtml(o) {
   const pics = shs.filter((sh) => sh.pic).length;
   if (pics && pics === shs.length) {
     return `<h3 class="picked-head">Picked ${pics > 1 ? `pictures (${pics})` : 'picture'}</h3>
-      <p class="note">An image or a gradient fill: how ${pics > 1 ? 'they are' : 'it is'} drawn is in <i>Images</i> below (its pen: the layer of its ink)</p>
+      <p class="note">An image or a gradient fill: how ${pics > 1 ? 'they are' : 'it is'} drawn is in the <i>Images</i> tab (its pen: the layer of its ink)</p>
       <div class="buttons"><button data-act="unpick" title="Pick none (Esc)">Done</button></div>`;
   }
   return `<h3 class="picked-head">${st ? `Group “${esc(st.name)}”` : 'Picked shapes'} (${shs.length})</h3>
@@ -1525,6 +1659,25 @@ document.addEventListener('toggle', (e) => {
   const d = e.target;
   if (d.matches && d.matches('details[data-sect]')) store.set('sect:' + d.dataset.sect, d.open);
 }, true);
+// The selected drawing's settings in tabs, as in a slicer: one in view at a time, the one
+// left on staying on (for every drawing that has it). A tab: {key, title, n, html, help}
+function otabs(list) {
+  list = list.filter(Boolean);
+  if (!list.length) return '';
+  const want = store.get('otab', 'layers'), on = list.some((t) => t.key === want) ? want : list[0].key;
+  return `<div class="otabs" role="tablist" aria-label="The drawing's settings">${list.map((t) => `<button role="tab" data-otab="${t.key}"
+      class="${t.key === on ? 'on' : ''}" aria-selected="${t.key === on}" title="${esc(t.help || '')}">${esc(t.title)}${t.n ? ` <span class="n">${t.n}</span>` : ''}</button>`).join('')}</div>
+    ${list.map((t) => `<div class="opane" data-opane="${t.key}"${t.key === on ? '' : ' hidden'}>${t.html}</div>`).join('')}`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-otab]');
+  if (!b) return;
+  store.set('otab', b.dataset.otab);
+  const bar = b.parentElement;
+  $$('button[data-otab]', bar).forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
+  $$(':scope > [data-opane]', bar.parentElement).forEach((x) => { x.hidden = x.dataset.opane !== b.dataset.otab; });
+  drawSpot();                     // a picked item's box shows with its tab
+});
 
 // Texts by their style (font, weight, size, colour): one row of settings for each, not one per text.
 // Each text apart only under 'Each text'.
@@ -1547,8 +1700,8 @@ function textOpts(spec, attr) {
     <select ${attr} data-f="fit" title="Line font size">${mixed('fit')}${[['cap', 'cap height'], ['width', 'cap + width']].map(([x, l]) => opt(x, v('fit'), l)).join('')}</select>
     <select ${attr} data-f="font" title="Source font">${mixed('font')}${opt('', v('font'), 'by family')}${srcFonts.map((f) => opt(f.file, v('font'), `${f.family} ${f.style}`)).join('')}</select>`;
 }
-function textsHtml(o, I) {
-  if (!I.texts.length) return '';
+function textsTab(o, I) {
+  if (!I.texts.length) return null;
   const styles = textStyles(I);
   const specOf = (t) => t.spec;
   const common = (runs) => Object.fromEntries(['mode', 'line_font', 'fit', 'font'].map((k) => {
@@ -1565,14 +1718,15 @@ function textsHtml(o, I) {
         <span class="note">${num(t.size, 1)} mm${t.found ? '' : ' · no source font'}</span></div>
       <div class="opts">${textOpts(t.spec, '')}</div></div>`).join('');
   const found = I.texts.filter((t) => t.found).length;
-  return sect('texts', 'Texts', `<p class="note">${styles.length} style${styles.length > 1 ? 's' : ''}; ${found ? `${found} in an uploaded font` : 'no source font uploaded: line fonts (Fonts panel)'}</p>${rows}
-    ${sect('texts-each', 'Each text', each, { n: I.texts.length })}`, { n: I.texts.length, help: 'How its texts are drawn: by style, or each apart' });
+  return { key: 'texts', title: 'Text', n: I.texts.length, help: 'How its texts are drawn: by style, or each apart',
+    html: `<p class="note">${styles.length} style${styles.length > 1 ? 's' : ''}; ${found ? `${found} in an uploaded font` : 'no source font uploaded: line fonts (Fonts panel)'}</p>${rows}
+    ${sect('texts-each', 'Each text', each, { n: I.texts.length })}` };
 }
 
 function renderObjectPanel() {
   const P = $('#object-panel');
   const o = sel && obj(sel);
-  if (!o) { P.hidden = true; return; }
+  if (!o) { P.hidden = true; drawSpot(); return; }
   P.hidden = false;
   const I = info(o.id);
   const painted = Object.keys(o.shapes).length;
@@ -1582,23 +1736,27 @@ function renderObjectPanel() {
         <div class="row"><button data-act="unmask-all">Clear all</button></div>`
     : `<p class="note">Nothing of it is drawn in a masked region, eg. over what is on the paper already. <button data-act="mask-tool" title="M">Mask tool</button></p>`;
   fill(P, `
-    <h3 class="objname">${esc(o.id)}</h3>
-    <div class="form">
+    <div class="row objhead"><h3 class="objname grow">${esc(o.id)}</h3>
+      <button class="lock${o.locked ? ' on' : ''}" data-act="lock" title="${o.locked ? 'Locked: it stays where it is and its size. Unlock it to move it' : 'Lock it where it is: nothing moves or scales it by accident'}">${o.locked ? '🔒 Locked' : '🔓 Lock'}</button></div>
+    ${S.job.poster && S.job.poster.locked ? '<p class="note">The poster is locked: its drawings stay where they are (Paper).</p>' : ''}
+    <fieldset class="form plain"${isLocked(o) ? ' disabled' : ''}>
       <label for="f-x">X</label><div class="row"><input id="f-x" type="number" step="0.5" value="${num(o.placement.x)}"> <label for="f-y">Y</label><input id="f-y" type="number" step="0.5" value="${num(o.placement.y)}"></div>
       <label for="f-r">Rotate</label><div class="row"><input id="f-r" type="number" step="15" value="${num(o.placement.rotate)}"> <button data-act="rot90" title="R">⟲ 90°</button></div>
       <label for="f-s">Scale %</label><div class="row"><input id="f-s" type="number" step="1" min="1" value="${num(o.scale * 100, 1)}"> <button data-act="fit" title="Fit to the draw area">Fit</button> <button data-act="center" title="C">Centre</button></div>
-      <label>Size</label><div>${num(I.size[0], 1)} × ${num(I.size[1], 1)} mm</div>
+      <label>Size</label><div class="mono">${num(I.size[0], 1)} × ${num(I.size[1], 1)} mm</div>
+    </fieldset>
+    <div class="form">
       <label></label><label class="check"><input type="checkbox" id="f-occ"${o.occlude ? ' checked' : ''}> what is on top hides what is under</label>
     </div>
-    ${sect('layers', 'Layers', `<div class="layers">${layersHtml(o)}</div>`, { open: true,
-      help: 'Each pen and what it draws of this drawing: its colours, alike ones as one chip (outlines a ring, fills a dot). Drag a chip onto another pen, or click it for its settings; the eye hides a pen from view' })}
     ${pickedHtml(o)}
-    ${setsHtml(o)}
-    ${imagesHtml(o, I)}
-    ${textsHtml(o, I)}
-    ${sect('masks', 'Masked regions', masks, { n: o.masks.length || null })}
+    ${otabs([{ key: 'layers', title: 'Layers', html: `${bulkHtml(o)}<div class="layers">${layersHtml(o)}</div>`,
+      help: 'Each pen and what it draws of this drawing: its colours, alike ones as one chip (outlines a ring, fills a dot). Drag a chip onto another pen, or click it for its settings; the eye hides a pen from view' },
+      (o.sets || []).length && { key: 'groups', title: 'Groups', n: o.sets.length, html: setsHtml(o), help: 'Shapes grouped by hand (the shapes tool, Ctrl+G)' },
+      imagesTab(o, I), textsTab(o, I),
+      { key: 'masks', title: 'Masks', n: o.masks.length || null, html: masks, help: 'Regions of it that are not drawn' }])}
     ${painted ? `<div class="row note">${painted} shape${painted > 1 ? 's' : ''} painted apart from their colour <button data-act="unpaint">Clear</button></div>` : ''}
     ${Object.keys(I.skipped || {}).length ? `<p class="note">Not drawn: ${esc(Object.entries(I.skipped).map(([k, v]) => `${v} ${k}`).join(', '))}</p>` : ''}`);
+  drawSpot();
 }
 
 async function patchObj(id, body) { setState(await api('PATCH', `/api/objects/${id}`, body)); }
@@ -1620,9 +1778,9 @@ function rasterPatch(o, update) {
   if (k === 'all') return { raster: { ...o.raster, ...update } };
   return { images: { ...o.images, [k]: { ...(o.images[k] || o.raster), ...update } } };
 }
-function imagesHtml(o, I) {
+function imagesTab(o, I) {
   const ims = I.images || [];
-  if (!ims.length) return '';
+  if (!ims.length) return null;
   const k = imageKey(o), own = k !== 'all' && o.images[k] !== undefined;
   const r = imageSpec(o), on = r.mode !== 'skip';
   const picker = ims.length > 1 || Object.keys(o.images).length ? `<div class="row wrap image-pick">
@@ -1640,7 +1798,8 @@ function imagesHtml(o, I) {
       <span class="note">${x.length ? `${num(x.length / 1000, 1)} m` : 'nothing'}</span></div>`).join('');
   const grads = ims.filter((im) => im.gradient).length;
   const title = !grads ? 'Images' : grads === ims.length ? 'Gradients' : 'Images & gradients';
-  return sect('images', title, `${picker}<div class="form raster">
+  return { key: 'images', title, n: ims.length, help: 'The SVG\'s pictures and gradient fills: a pen can\'t draw them as they are. A gradient is drawn inside its shape',
+    html: `${picker}<div class="form raster">
       <label for="r-mode">Draw as</label><select id="r-mode" data-r="mode">${RASTER_MODES.map(([m, l, t]) => `<option value="${m}" title="${esc(t)}"${m === r.mode ? ' selected' : ''}>${l}</option>`).join('')}</select>
       ${on ? `<label for="r-sep">Inks</label><select id="r-sep" data-r="separate">
           ${SEPARATIONS.map(([v, l, t]) => `<option value="${v}" title="${esc(t)}"${v === r.separate ? ' selected' : ''}>${l}</option>`).join('')}</select>
@@ -1658,7 +1817,7 @@ function imagesHtml(o, I) {
           title="Anything this light (% grey) or lighter is the paper: no ink, so a light background isn't speckled"> <span class="note">% grey</span>
           <label class="check"><input type="checkbox" data-r="invert"${r.invert ? ' checked' : ''}> invert</label></div>
         <label></label><div class="note">${ims.map((im) => `${num(im.size[0], 0)} × ${num(im.size[1], 0)} mm`).join(', ')}</div>` : ''}
-    </div>`, { n: ims.length, open: true, help: 'The SVG\'s pictures and gradient fills: a pen can\'t draw them as they are. A gradient is drawn inside its shape' });
+    </div>` };
 }
 
 $('#object-panel').addEventListener('change', async (e) => {
@@ -1682,6 +1841,11 @@ $('#object-panel').addEventListener('change', async (e) => {
     const pens = t.checked ? [...cur, t.dataset.rpen] : cur.filter((x) => x !== t.dataset.rpen);
     if (!pens.length) { t.checked = true; return flash('At least one pen'); }
     return patchObj(o.id, rasterPatch(o, { pens: pens.length === all.length ? [] : all.filter((x) => pens.includes(x)) }));
+  }
+  if (t.dataset.bulk === 'to' && t.value) {
+    const keys = pickedChips(o).flatMap((c) => c.keys);
+    chipPick.clear();
+    return setChip(o, keys, (g) => toPen(g, t.value));
   }
   const cf = t.dataset.cf;
   if (cf) {
@@ -1749,10 +1913,27 @@ $('#object-panel').addEventListener('click', async (e) => {
     const images = { ...o.images };
     delete images[imageKey(o)];
     patchObj(o.id, { images });
+  } else if (chip && chip.classList.contains('chip') && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+    pickedChips(o);                               // picked with the others: one pen for all of them
+    chipPick.has(chip.dataset.chip) ? chipPick.delete(chip.dataset.chip) : chipPick.add(chip.dataset.chip);
+    renderObjectPanel();
   } else if (chip && chip.classList.contains('chip')) {
     const k = `${o.id}|${chip.dataset.chip}`;
     openChip = openChip === k ? null : k;
     renderObjectPanel();
+  } else if (act === 'pick-chips') {              // a layer's chips, all picked (or none again)
+    pickedChips(o);
+    const keys = chipsOf(o).filter((c) => c.to === layer.dataset.layer).map((c) => c.keys[0]);
+    const all = keys.every((k) => chipPick.has(k));
+    keys.forEach((k) => (all ? chipPick.delete(k) : chipPick.add(k)));
+    renderObjectPanel();
+  } else if (act === 'bulk-clear') {
+    chipPick.clear();
+    renderObjectPanel();
+  } else if (!act && e.target.closest('.layer > .lhead, .text-style, .text-run') && !e.target.closest('button, select, input, label')) {
+    const it = spotOf(e.target.closest('.layer > .lhead, .text-style, .text-run'));       // picked: its box stays
+    spotPin = spotPin && spotPin.id === o.id && spotPin.kind === it.kind && spotPin.key === it.key ? null : { id: o.id, ...it };
+    drawSpot();
   } else if (act === 'chip-close') {
     openChip = null;
     renderObjectPanel();
@@ -1790,8 +1971,12 @@ $('#object-panel').addEventListener('click', async (e) => {
     const [w, h] = info(o.id).size, c = { x: w / 2, y: h / 2 };
     const wc = toWorld(o.placement, c), a = (o.placement.rotate + 90) % 360, r = rot(c, a);
     patchObj(o.id, { placement: { x: +(wc.x - r.x).toFixed(3), y: +(wc.y - r.y).toFixed(3), rotate: a } });
+  } else if (isLocked(o) && ['fit', 'center', 'rot90'].includes(act)) {
+    lockedSay(o);
+  } else if (act === 'lock') {
+    patchObj(o.id, { locked: !o.locked });
   } else if (act === 'fit') {
-    const [x0, y0, x1, y1] = S.machine.draw_area;
+    const [x0, y0, x1, y1] = paperRect();
     const [w, h] = info(o.id).size.map((v) => v / o.scale);
     const s = 0.95 * Math.min((x1 - x0) / w, (y1 - y0) / h);
     await scaleTo(o, s, true);
@@ -1839,8 +2024,111 @@ $('#object-panel').addEventListener('drop', (e) => {
   e.preventDefault();
   const c = chipsOf(o).find((x) => x.keys[0] === dragChip);
   dragChip = null;
-  if (c && c.to !== L.dataset.layer) setChip(o, c.keys, (g) => toPen(g, L.dataset.layer));
+  const picked = chipPick.has(c && c.keys[0]) ? pickedChips(o) : c ? [c] : [];      // a picked one brings the others along
+  const keys = picked.filter((x) => x.to !== L.dataset.layer).flatMap((x) => x.keys);
+  if (picked.length > 1) chipPick.clear();
+  if (keys.length) setChip(o, keys, (g) => toPen(g, L.dataset.layer));
 });
+
+// Chips picked together (Shift- or Ctrl-click, or a layer's *all*): one pen for all of them at once
+const chipPick = new Set();     // chips' first keys, of the selected drawing
+let chipPickOf = null;
+function pickedChips(o) {
+  if (chipPickOf !== o.id) { chipPick.clear(); chipPickOf = o.id; }
+  return chipsOf(o).filter((c) => chipPick.has(c.keys[0]));
+}
+function bulkHtml(o) {
+  const cs = pickedChips(o);
+  if (!cs.length) return '';
+  const n = cs.reduce((a, c) => a + c.shapes, 0), cols = cs.reduce((a, c) => a + c.colours.length, 0);
+  return `<div class="bulk"><span class="grow"><b>${cs.length}</b> chip${cs.length > 1 ? 's' : ''} <span class="note">${cols} colour${cols > 1 ? 's' : ''} · ${n} shape${n > 1 ? 's' : ''}</span></span>
+    <select data-bulk="to" title="Every colour picked to this pen (or drag one of them onto a layer)">${opt('', '', 'to pen…')}${pens('')}</select>
+    <button class="icon" data-act="bulk-clear" title="Pick none (Esc)">✕</button></div>`;
+}
+
+// What an item of the drawing's panel stands for, on the canvas: a box round each of its shapes and
+// one round them all, the rest faded. The one under the pointer; else the one picked (a chip open, an
+// image of the Images tab, a text, a layer or a group clicked), while its tab is on
+let spotHover = null, spotPin = null;           // {id, kind, key}
+const SPOT_ITEMS = '.chip[data-chip], .layer[data-layer] > .lhead, button[data-img], .text-style, .text-run, li[data-set], [data-opane="images"]';
+const SPOT_TAB = { chip: 'layers', layer: 'layers', image: 'images', tstyle: 'texts', text: 'texts', set: 'groups' };
+function spotOf(el) {
+  if (el.matches('.chip')) return { kind: 'chip', key: el.dataset.chip };
+  if (el.matches('.lhead')) return { kind: 'layer', key: el.parentElement.dataset.layer };
+  if (el.matches('[data-img]')) return { kind: 'image', key: el.dataset.img };
+  if (el.matches('[data-opane]')) return { kind: 'image', key: 'all' };           // the Images tab: its pictures
+  if (el.matches('.text-style')) return { kind: 'tstyle', key: el.dataset.style };
+  if (el.matches('.text-run')) return { kind: 'text', key: el.dataset.i };
+  return { kind: 'set', key: el.dataset.set };
+}
+function spotShapes(o, { kind, key }) {
+  const data = geo[o.id] && geo[o.id].data;
+  if (!data) return [];
+  if (kind === 'chip') {
+    const c = chipsOf(o).find((x) => x.keys[0] === key), keys = c ? c.keys : [key];
+    return data.shapes.filter((sh) => keys.some((k) => {
+      const [part, col] = k.split(' ');
+      return part === 'stroke' ? sh.stroke === col : sh.fill === col && (sh.fillable || sh.line);
+    })).map((sh) => sh.i);
+  }
+  if (kind === 'layer') return layerShapes(o)[key] || [];
+  if (kind === 'image') return key === 'all' ? data.shapes.filter((sh) => sh.pic).map((sh) => sh.i) : [+key];
+  if (kind === 'text') return [+key];
+  if (kind === 'tstyle') return ((textStyles(info(o.id))[+key] || {}).runs || []).map((t) => t.index);
+  if (kind === 'set') return ((o.sets || [])[+key] || {}).shapes || [];
+  return [];
+}
+function pinnedSpot(o) {
+  if (spotPin && spotPin.id === o.id) return spotPin;
+  if (openChip && openChip.startsWith(o.id + '|')) return { kind: 'chip', key: openChip.slice(o.id.length + 1) };
+  if (imageKey(o) !== 'all') return { kind: 'image', key: imageKey(o) };
+  return null;
+}
+const SPOT_BOXES = 300;         // more shapes than this: only the box round them all
+function drawSpot() {
+  $$('#design-layer .spot-boxes').forEach((x) => x.remove());
+  $$('#design-layer g.obj.spotting').forEach((g) => g.classList.remove('spotting'));
+  $$('#design-layer path.shape.spot-on').forEach((p) => p.classList.remove('spot-on'));
+  const o = sel && obj(sel);
+  if (!o) return;
+  const tab = store.get('otab', 'layers');
+  const pin = pinnedSpot(o), sp = (spotHover && spotHover.id === o.id && spotHover) || (pin && SPOT_TAB[pin.kind] === tab ? pin : null);
+  const g = sp && $(`#design-layer g.obj[data-id="${CSS.escape(o.id)}"]`);
+  if (!g) return;
+  const boxes = [];
+  for (const i of spotShapes(o, sp)) {
+    const p = $(`path.shape[data-i="${i}"]`, g);
+    if (!p) continue;
+    p.classList.add('spot-on');
+    const b = p.getBBox();
+    if (b.width || b.height) boxes.push(b);
+  }
+  if (!boxes.length) return;
+  g.classList.add('spotting');
+  const NS = 'http://www.w3.org/2000/svg', box = document.createElementNS(NS, 'g');
+  box.setAttribute('class', 'spot-boxes');
+  const rect = (b, cls) => {
+    const r = document.createElementNS(NS, 'rect'), pad = cls === 'all' ? 0.8 : 0.3;
+    r.setAttribute('x', b.x - pad); r.setAttribute('y', b.y - pad);
+    r.setAttribute('width', b.width + 2 * pad); r.setAttribute('height', b.height + 2 * pad);
+    r.setAttribute('class', cls);
+    box.append(r);
+  };
+  if (boxes.length > 1 && boxes.length <= SPOT_BOXES) boxes.forEach((b) => rect(b, 'one'));
+  {                               // round them all (one alone: round it)
+    const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+    rect({ x: x0, y: y0, width: Math.max(...boxes.map((b) => b.x + b.width)) - x0, height: Math.max(...boxes.map((b) => b.y + b.height)) - y0 }, 'all');
+  }
+  g.append(box);
+}
+$('#object-panel').addEventListener('pointerover', (e) => {
+  const it = e.target.closest(SPOT_ITEMS), o = sel && obj(sel);
+  const now = it && o ? { id: o.id, ...spotOf(it) } : null;
+  if (JSON.stringify(now) === JSON.stringify(spotHover)) return;
+  spotHover = now;
+  drawSpot();
+});
+$('#object-panel').addEventListener('pointerleave', () => { spotHover = null; drawSpot(); });
 
 async function scaleTo(o, s, recentre = false) {
   // Keep the middle where it is (or centre it)
@@ -1852,7 +2140,7 @@ async function scaleTo(o, s, recentre = false) {
   if (recentre) centre(obj(o.id));
 }
 function centre(o) {
-  const [x0, y0, x1, y1] = S.machine.draw_area;
+  const [x0, y0, x1, y1] = paperRect();
   const [w, h] = info(o.id).size;
   const r = o.placement.rotate * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   // the middle of the object, placed
@@ -1899,10 +2187,15 @@ function renderOutput() {
       const tool = S.tools[id] || {};
       return `<div class="tool-line"><span class="swatch" style="background:${esc(tool.color || '#222')}"></span>${esc(id)} ${num(t.draw_mm / 1000, 2)} m · ${t.strokes} strokes</div>`;
     }).join('');
-    $('#stats').innerHTML = `<div><b>~${mins(st.time_s)}</b> · ${st.tool_changes} tool change${st.tool_changes === 1 ? '' : 's'}</div>
+    $('#stats').innerHTML = `<div><b>~${mins(st.time_s)}</b>${st.sheets ? ` · ${st.sheets} sheets` : ''} · ${st.tool_changes} tool change${st.tool_changes === 1 ? '' : 's'}</div>
       <div>draw ${num(st.draw_mm / 1000, 2)} m · travel ${num(st.travel_mm / 1000, 2)} m</div>${tools}`;
   }
   $('#plan').innerHTML = planHtml();
+  // folded to a button over the canvas (panels.js #outbar): what it would say, in short
+  const nprob = preview ? preview.problems.length : 0;
+  $('#out-sum').textContent = !st || !st.draw_mm ? '· nothing yet'
+    : `· ~${mins(st.time_s)} · ${Object.keys(st.tools).length} pen${Object.keys(st.tools).length === 1 ? '' : 's'}${nprob ? ` · ⚠ ${nprob}` : ''}`;
+  $('#out-sum').classList.toggle('warn', !!nprob);
   if (S) renderLayers();                  // in the order the plan has them
   $('#problems').innerHTML = (preview ? preview.problems : []).map((p) => `<li>${esc(p)}</li>`).join('');
   for (const b of ['#upload', '#print']) {
@@ -1921,6 +2214,11 @@ function planHtml() {
   let t = 0;
   const rows = plan.map((st) => {
     const at = clock(t);
+    if (st.kind === 'sheet') {
+      if (st.line > 1) t += m.sheet_time || 60;
+      return `<li class="sheet" data-line="${st.line}" title="${st.line > 1 ? 'The plot pauses (SHEET_NEXT): take the sheet off, put a new one on the bed, then RESUME' : 'The first sheet on the bed'}">
+        <span class="when mono">${clock(t)}</span><span class="what">📄 <b>Sheet ${st.sheet}</b> of ${S.poster ? S.poster.sheets.length : '?'}${st.line > 1 ? ': a new sheet on, RESUME' : ''}</span></li>`;
+    }
     if (st.kind === 'start') return `<li data-line="${st.line}"><span class="when mono">${at}</span><span class="what">Home, start</span></li>`;
     if (st.kind === 'end') return `<li data-line="${st.line}"><span class="when mono">${clock(t)}</span><span class="what">Pen away, done</span></li>`;
     const tool = S.tools[st.tool] || {};
@@ -2072,7 +2370,6 @@ $('#drawset').addEventListener('click', async (e) => {
 });
 // Each holder: what its tag says, and what the card would write to it (draft)
 const drafts = {};
-const openTune = new Set();     // tool cards with their tuning open
 const penName = (key) => (S.pens[key] || {}).name || key || '';
 function colourName(pen, hex) {
   const c = (S.pens[pen] || {}).colors || {};
@@ -2092,8 +2389,32 @@ function draftOf(t, tag, tool) {
   }
   return drafts[t];
 }
+// Tools as tiles: pills say how each is (its tag, uncapped, tuned); a tap on one opens its whole setup:
+// the tag's pen, colour and name, and its tuning. A pen of the plan (T5 on) tunes the same way, unless a
+// holder's tool draws it (then it draws as that one)
+const openTiles = new Set(store.get('openTiles', []));
+function tile(t, { swatch, pills, name, setup, attrs = '', cls = '' }) {
+  const open = openTiles.has(t);
+  return `<div class="tool tile ${cls}${open ? ' open' : ''}" data-t="${esc(t)}" ${attrs}>
+    <div class="head" data-act="tile" role="button" tabindex="0" aria-expanded="${open}" title="${open ? 'Close' : 'Open'} its setup">
+      ${swatch}<b>${esc(t)}</b><span class="tname" title="${esc(name)}">${esc(name)}</span><span class="chev" aria-hidden="true">▸</span>
+      <div class="pills">${pills}</div></div>
+    ${open ? `<div class="setup">${setup}</div>` : ''}</div>`;
+}
+// Its tuning (tool_overrides): the numbers of its kind, then the choices
+function tuneHtml(t, tool) {
+  const o = S.job.tool_overrides[t] || {};
+  // with a press, z_down and hop don't count: pen-down is z_touch less it, the lift comes from it and the play
+  const fields = TOOL_FIELDS.filter((k) => k in tool && !(tool.press != null && (k === 'z_down' || k === 'hop'))).map((k) =>
+    `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
+  const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${CHOICE_LABELS[k] || k}${choices(k, k in o ? tool[k] : null,
+    k in S.job.draw ? S.job.draw[k] : S.draw[k], `data-k="${k}" data-sel="1"${k in o ? ' class="changed"' : ''}`)}</label>`).join('');
+  const tuned = Object.keys(o).length;
+  return `<h4>Tuning <span class="note">${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ` · ${tuned} changed here` : ''}</span></h4>
+    <div class="grid">${fields}</div><div class="grid choices">${sels}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}`;
+}
+const tunedPill = (t) => { const n = Object.keys(S.job.tool_overrides[t] || {}).length; return n ? `<span class="badge" title="Tuned for this job: ${n} setting${n > 1 ? 's' : ''}">tuned ${n}</span>` : ''; };
 function renderTools() {
-  const over = S.job.tool_overrides;
   const job = printer && printer.job;
   const busy = !!(job && !job.done);
   const status = busy ? `${esc(job.what)}…` : job ? (job.error ? `⚠ ${esc(job.error)}` : `${esc(job.what)}: done`) : 'reads every tool’s tag';
@@ -2105,16 +2426,14 @@ function renderTools() {
     : '<p class="note">Or by hand: hold a pen to the reader until it beeps, then put it into a holder within 8 s.</p>'}`;
   const cards = S.holders.map(({ t, holder, tag }) => {
     const tool = S.tools[t] || {};
+    const holderPill = `<span class="badge" title="Its holder">${holder}</span>`;
     if (tool.kind === 'camera') {
       // A camera: nothing to paint or press with; it is used from the Scan tab
-      return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}" title="A camera tool: it takes photos from the Scan tab">
-        <div class="head"><span class="swatch cam">◉</span><b>${esc(t)}</b><span class="note">${holder}</span>
-          <span class="tname" title="${esc(tool.name)}">${esc((tag && tag.name) || tool.name || '')}</span>
-          ${tag ? '<span class="badge ok" title="Its tag names a camera type">camera</span>' : ''}</div>
-        <div class="note mono" title="One shot, its focus height and the height it moves at (machine Z); in pens.toml">${esc(tool.pen || '')} · ${num(tool.fov[0], 1)} × ${num(tool.fov[1], 1)} mm · focus Z${num(tool.focus_z, 2)} · clear Z${num(tool.clear_z, 2)}</div>
-      </div>`;
+      return tile(t, { swatch: '<span class="swatch cam">◉</span>', name: (tag && tag.name) || tool.name || '', attrs: `data-holder="${holder}"`,
+        pills: holderPill + (tag ? '<span class="badge ok" title="Its tag names a camera type">camera</span>' : '<span class="badge">not scanned</span>'),
+        setup: `<p class="note mono" title="One shot, its focus height and the height it moves at (machine Z); in pens.toml">${esc(tool.pen || '')} · ${num(tool.fov[0], 1)} × ${num(tool.fov[1], 1)} mm · focus Z${num(tool.focus_z, 2)} · clear Z${num(tool.clear_z, 2)}</p>
+          <p class="note">A camera tool: it takes photos from the Scan tab.</p>` });
     }
-    const o = over[t] || {};
     const d = draftOf(t, tag, tool);
     const badge = !tag ? '<span class="badge">not scanned</span>'
       : tag.stale ? '<span class="badge warn" title="A hand was on this holder since: scan it again, at the reader by hand or with Scan holders">stale</span>'
@@ -2128,29 +2447,19 @@ function renderTools() {
       `<button class="sw${hex.toLowerCase() === d.color.toLowerCase() ? ' on' : ''}" data-color="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
     const changed = tag ? (d.pen !== (tag.pen || '') || d.color.toLowerCase() !== (tag.color || '').toLowerCase() || d.name !== (tag.name || ''))
       : !!d.pen;
-    // with a press, z_down and hop don't count: pen-down is z_touch less it, the lift comes from it and the play
-    const fields = TOOL_FIELDS.filter((k) => k in tool && !(tool.press != null && (k === 'z_down' || k === 'hop'))).map((k) =>
-      `<label>${k.replace('_', ' ')}<input type="number" step="any" data-k="${k}" value="${tool[k] === null ? '' : num(tool[k], 3)}"${k === 'link' && tool[k] === null ? ` placeholder="${num(tool.width / 2, 3)}"` : ''}${k in o ? ' class="changed"' : ''}></label>`).join('');
-    const sels = Object.keys(DRAW_CHOICES).map((k) => `<label>${CHOICE_LABELS[k] || k}${choices(k, k in o ? tool[k] : null,
-      k in S.job.draw ? S.job.draw[k] : S.draw[k], `data-k="${k}" data-sel="1"${k in o ? ' class="changed"' : ''}`)}</label>`).join('');
-    const tuned = Object.keys(o).length;
     const dry = ((printer && printer.drying) || {})[String(holder)];
     const dryBadge = dry ? `<span class="badge ${dry.stage ? 'bad' : 'warn'}" title="Out of its cap in the machine, left alone${dry.paused ? ' (in use now: the clock stands still)' : ''}; ${Math.round(dry.limit / 60)} min allowed (TOOL_DRY RESET=1 T=${holder} after priming it)">uncapped ${Math.floor(dry.uncapped / 60)} min</span>` : '';
-    return `<div class="tool" data-t="${esc(t)}" data-holder="${holder}">
-      <div class="head"><span class="swatch" style="background:${esc(tool.color || '#000')}"></span><b>${esc(t)}</b>
-        <span class="note">${holder}</span><span class="tname" title="${esc(tool.name)}">${esc((tag && tag.name) || tool.name || '')}</span>${badge}${dryBadge}</div>
-      ${tag ? `<div class="note mono">${tag.pen ? esc(penName(tag.pen)) + ' · ' : ''}${num(tool.width)} mm · dx ${num(tag.dx)} dy ${num(tag.dy)} dz ${num(tag.dz)}</div>` : ''}
-      <div class="assign">
+    return tile(t, { swatch: `<span class="swatch" style="background:${esc(tool.color || '#000')}"></span>`, name: (tag && tag.name) || tool.name || '',
+      attrs: `data-holder="${holder}"`, pills: holderPill + badge + dryBadge + tunedPill(t),
+      setup: `${tag ? `<p class="note mono">${tag.pen ? esc(penName(tag.pen)) + ' · ' : ''}${num(tool.width)} mm · dx ${num(tag.dx)} dy ${num(tag.dy)} dz ${num(tag.dz)}</p>` : ''}
+      <h4>Tag</h4><div class="assign">
         <select data-d="pen" title="The kind of pen (pens.toml)">${pens}</select>
         <div class="sws">${sws}<input type="color" data-d="color" value="${esc(d.color)}" title="Any colour"></div>
         <input data-d="name" maxlength="20" value="${esc(d.name)}" placeholder="${esc(suggestName(d.pen, d.color) || 'name')}" title="The tag's name, up to 20">
         <button data-act="write" class="${changed ? 'primary' : ''}"${busy || !changed ? ' disabled' : ''} title="Dock ${esc(t)}, write this onto its tag, put it back">Write to tag</button>
-      </div>
-      <details data-tune="${esc(t)}"${tuned || openTune.has(t) ? ' open' : ''}><summary>tune: ${esc(tool.kind || 'pen')} ${num(tool.width)} mm${tuned ? ' · changed here' : ''}</summary>
-        <div class="grid">${fields}</div><div class="grid choices">${sels}</div>${tuned ? '<button class="icon" data-act="reset" title="Back to the pen library / tools.toml">↺ undo tuning</button>' : ''}</details>
-    </div>`;
+      </div>${tuneHtml(t, tool)}` });
   }).join('');
-  fill($('#tools'), head + cards + planPensHtml());
+  fill($('#tools'), `${head}<div class="tiles">${cards}</div>${planPensHtml()}`);
 }
 
 // Pens of the plan (job.pens): T5 on, pens not in the dock, scanned or not. They are painted like any
@@ -2173,18 +2482,19 @@ function planPensHtml() {
       `<button class="sw${hex.toLowerCase() === spec.color.toLowerCase() ? ' on' : ''}" data-pcolor="${esc(hex)}" title="${esc(n)}" style="background:${esc(hex)}"></button>`).join('');
     const state = t.alias ? `<span class="badge ok" title="A holder has this pen in this colour: it draws it, no swap">in ${esc(t.alias)}</span>`
       : `<span class="badge warn" title="Not in the dock: the plot pauses for it to be swapped into a holder">swap</span>`;
-    return `<div class="tool plan-pen" data-pid="${esc(pid)}">
-      <div class="head"><span class="swatch" style="background:${esc(spec.color)}"></span><b>${esc(pid)}</b>
-        <span class="tname">${esc(t.name || '')}</span>${state}<button class="icon" data-act="unplan" title="Remove this pen from the plan (its colours go back to the holders' pens)">✕</button></div>
-      <div class="assign">
+    const tune = t.alias ? `<p class="note">${esc(t.alias)} draws it, as it is: its tuning is ${esc(t.alias)}'s.</p>` : t.id ? tuneHtml(pid, t) : '';
+    return tile(pid, { swatch: `<span class="swatch" style="background:${esc(spec.color)}"></span>`, name: t.name || '', cls: 'plan-pen',
+      attrs: `data-pid="${esc(pid)}"`, pills: `<span class="badge" title="A pen of the plan: not a holder's">plan</span>${state}${t.alias ? '' : tunedPill(pid)}`,
+      setup: `<h4>Pen</h4><div class="assign">
         <select data-pp="pen" title="The kind of pen (pens.toml)">${opt('', spec.pen || '', 'pen…')}${libPens.map(([k, p]) => opt(k, spec.pen || '', `${p.name} · ${num(p.width)} mm`)).join('')}</select>
         <div class="sws">${sws}<input type="color" data-pp="color" value="${esc(spec.color)}" title="Any colour"></div>
         <select data-pp="route" title="Where it comes from when the plot is made">${routes}</select>
         <label class="check" title="Measure it on the bed's sensor once it is in, whatever its tag says (a pen whose tag has no offsets always is)"><input type="checkbox" data-pp="calibrate"${spec.calibrate ? ' checked' : ''}> probe it</label>
-      </div></div>`;
+        <button data-act="unplan" class="danger" title="Remove this pen from the plan (its colours go back to the holders' pens)">Remove from the plan</button>
+      </div>${tune}` });
   }).join('');
   return `<h3 class="plan-head" title="Pens the plot is planned with that are not in the dock (T5 on): paint with them like any tool. A pen a holder has is drawn by it; the others are swapped in by hand mid-plot, the plot waits">Pens for the plan</h3>
-    ${rows || '<p class="note">More pens than holders, or pens not scanned yet: add them here and paint with them.</p>'}
+    ${rows ? `<div class="tiles">${rows}</div>` : '<p class="note">More pens than holders, or pens not scanned yet: add them here and paint with them.</p>'}
     <button data-act="plan-add" title="A pen for the plan: T${S.holders.length + Object.keys(S.job.pens || {}).length} on">+ Pen</button>`;
 }
 async function patchPlan(pid, spec) {
@@ -2229,8 +2539,19 @@ $('#tools').addEventListener('change', async (e) => {
   const v = el.dataset.sel ? fromChoice(el.dataset.k, el.value) : el.value === '' ? null : +el.value;
   setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: { [el.dataset.k]: v } } }));
 });
+function toggleTile(t) {
+  openTiles.has(t) ? openTiles.delete(t) : openTiles.add(t);
+  store.set('openTiles', [...openTiles]);
+  renderTools();
+}
+$('#tools').addEventListener('keydown', (e) => {
+  const h = e.target.closest('.tile > .head');
+  if (h && e.target === h && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleTile(h.parentElement.dataset.t); }
+});
 $('#tools').addEventListener('click', async (e) => {
   const el = e.target;
+  const th = el.closest('.tile > .head');
+  if (th && !el.closest('button, input, select, a, label')) return toggleTile(th.parentElement.dataset.t);
   const pcard = el.closest('.plan-pen');
   if (el.dataset.act === 'plan-add') {
     const used = new Set([...Object.keys(S.tools), ...Object.keys(S.job.pens || {})]);
@@ -2246,7 +2567,7 @@ $('#tools').addEventListener('click', async (e) => {
     const pid = pcard.dataset.pid;
     if (el.dataset.pcolor) return patchPlan(pid, { color: el.dataset.pcolor });
     if (el.dataset.act === 'unplan' && twice(`unplan-${pid}`, el, `Remove ${pid} from the plan`)) return patchPlan(pid, null);
-    return;
+    if (el.dataset.act !== 'reset') return;
   }
   if (el.dataset.act === 'scan') {
     if (!twice('scan-tags', el, 'Take each tool to the tag reader in turn and read its tag')) return;
@@ -2269,10 +2590,6 @@ $('#tools').addEventListener('click', async (e) => {
     setState(await api('PATCH', '/api/job', { tool_overrides: { [t]: keys } }));
   }
 });
-$('#tools').addEventListener('toggle', (e) => {
-  const t = e.target.dataset && e.target.dataset.tune;
-  if (t) e.target.open ? openTune.add(t) : openTune.delete(t);
-}, true);
 let jobTimer = null;
 function watchJob() {
   clearTimeout(jobTimer);
@@ -2613,9 +2930,42 @@ function postFile(url, fd, progress) {
   });
 }
 const mb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} kB`);
+// KiCad (plot/kicad.py, kicad-cli on the server): a schematic, a board, or a project as a .zip (a
+// schematic's sub-sheets). Asked first: a board's layers and whether it is seen from below, a
+// schematic's drawing sheet
+const isKicad = (f) => /\.(kicad_sch|kicad_pcb|zip)$/i.test(f.name);
+const KICAD_LAYERS = ['F.Cu', 'B.Cu', 'F.Silkscreen', 'B.Silkscreen', 'F.Mask', 'B.Mask', 'F.Fab', 'B.Fab',
+  'F.Courtyard', 'B.Courtyard', 'Edge.Cuts', 'User.Drawings', 'User.Comments'];
+function askKicad(f) {
+  return new Promise((done) => {
+    const el = $('#image-ask'), board = /\.kicad_pcb$/i.test(f.name), sch = /\.kicad_sch$/i.test(f.name), zip = /\.zip$/i.test(f.name);
+    const was = store.get('kicadLayers', ['F.Cu', 'Edge.Cuts']);
+    el.innerHTML = `<div class="card kicad-ask"><h2>${esc(f.name)}</h2>
+      <p>${zip ? 'A KiCad project: its root schematic (the one its .kicad_pro names), or its one board.' : board ? 'A KiCad board: the layers asked for, as one drawing, each layer a colour of its own (a pen each).'
+        : 'A KiCad schematic: a drawing for each of its sheets, wires, symbols and text each a colour of their own (a pen each).'}</p>
+      ${board || zip ? `<h3>Board layers</h3><div class="row wrap">${KICAD_LAYERS.map((l) => `<label class="check"><input type="checkbox" data-layer="${l}"${was.includes(l) ? ' checked' : ''}> ${l}</label>`).join('')}</div>
+        <label class="check" title="The board seen from below: for its B. layers, the way they sit on the copper"><input type="checkbox" id="k-mirror"> mirrored (seen from below)</label>` : ''}
+      ${sch || zip ? `<label class="check" title="The page's frame and title block too"><input type="checkbox" id="k-frame"> with its frame and title block</label>` : ''}
+      <div class="buttons"><button data-k="cancel">Cancel</button><button data-k="ok" class="primary">Add</button></div></div>`;
+    el.hidden = false;
+    el.onclick = (e) => {
+      const k = e.target === el ? 'cancel' : e.target.dataset.k;
+      if (!k) return;
+      const layers = $$('[data-layer]', el).filter((x) => x.checked).map((x) => x.dataset.layer);
+      const opts = { layers, mirror: !!($('#k-mirror', el) || {}).checked, frame: !!($('#k-frame', el) || {}).checked };
+      el.hidden = true;
+      el.onclick = null;
+      if (k === 'ok' && layers.length) store.set('kicadLayers', layers);
+      done(k === 'ok' ? opts : null);
+    };
+  });
+}
 async function addSvgs(files, at) {
   for (const [n, f] of files.entries()) {
     const fd = new FormData(); fd.append('file', f);
+    const kc = isKicad(f) ? await askKicad(f) : null;
+    if (isKicad(f) && !kc) continue;
+    if (kc) { fd.append('layers', kc.layers.join(',')); fd.append('mirror', kc.mirror ? 1 : 0); fd.append('frame', kc.frame ? 1 : 0); }
     const of = files.length > 1 ? ` (${n + 1} of ${files.length})` : '';
     const done = working(`Uploading ${f.name}${of}, ${mb(f.size)}…`);
     let r;
@@ -2625,6 +2975,12 @@ async function addSvgs(files, at) {
     } catch { done(); continue; }
     done();
     sel = r.id;
+    if (r.kicad) {
+      setState(r.state);
+      fit();
+      toast(r.ids.length > 1 ? `${f.name}: ${r.ids.length} sheets, a drawing each (${r.ids.join(', ')})` : `${r.id} added, from KiCad`);
+      continue;
+    }
     if (at) {
       const s = r.state.objects[r.id].size;
       const o = r.state.job.objects.find((x) => x.id === r.id);
@@ -2636,7 +2992,7 @@ async function addSvgs(files, at) {
 }
 // An SVG with pictures in it: a pen can't draw them as they are. Leave them out, or make
 // them into lines (dither, lines, halftone: Obj.raster, raster.py); the drawing's Images
-// section tunes them after.
+// tab tunes them after.
 const RASTER_MODES = [['skip', 'Leave out', 'Not drawn: only the rest of the SVG'],
   ['dither', 'Dither', 'Dots of ink on a fine grid, joined along each row: the most detail, the longest plot'],
   ['lines', 'Lines', 'Rows of lines, more of them where it is darker: quick to plot, a drawn look'],
@@ -2647,13 +3003,14 @@ function askImages(id, n, grads = 0) {
     const pics = n - grads, what = [pics && `${pics} picture${pics > 1 ? 's' : ''}`, grads && `${grads} gradient fill${grads > 1 ? 's' : ''}`].filter(Boolean).join(' and ');
     el.innerHTML = `<div class="card"><h2>${what} in ${esc(id)}</h2>
       <p>A pen can't draw ${n > 1 ? 'them' : 'it'} as ${n > 1 ? 'they are' : 'it is'}: leave ${n > 1 ? 'them' : 'it'} out, or make ${n > 1 ? 'them' : 'it'} into lines.
-        You can change this later (the drawing's <i>Images</i>).</p>
+        You can change this later (the drawing's <i>Images</i> tab).</p>
       <div class="buttons">${RASTER_MODES.map(([m, label, title]) => `<button data-raster="${m}" class="${m === 'skip' ? '' : 'primary'}" title="${esc(title)}">${label}</button>`).join('')}</div></div>`;
     el.hidden = false;
     const pick = async (m) => {
       el.hidden = true;
       el.onclick = null;
       if (m && m !== 'skip') {
+        store.set('otab', 'images');           // its settings in view
         await patchObj(id, { raster: { ...obj(id).raster, mode: m } });
         toast(`${id}: ${m}: its lines are in the ${obj(id).raster.colour} layer`);
       }
@@ -2693,7 +3050,7 @@ window.addEventListener('drop', (e) => {
   if (innerDrag) return;
   const dt = e.dataTransfer, files = [...dt.files];
   const isSvg = (f) => /\.svg$/i.test(f.name) || f.type === 'image/svg+xml';
-  const svgs = files.filter((f) => isSvg(f) && !/font/i.test(f.name));
+  const svgs = files.filter((f) => (isSvg(f) && !/font/i.test(f.name)) || isKicad(f));
   const fonts = files.filter((f) => /\.(ttf|otf)$/i.test(f.name) || (isSvg(f) && /font/i.test(f.name)));
   const saved = files.find((f) => /\.json$/i.test(f.name));
   const at = e.target.closest && e.target.closest('#canvas') ? worldPt(e) : null;
@@ -2705,7 +3062,7 @@ window.addEventListener('drop', (e) => {
     return toast(`Nothing to add from this drop (${what || 'empty'}): drop .svg files, or save it as an SVG first`, true);
   }
   const left = files.filter((f) => !svgs.includes(f) && !fonts.includes(f));
-  if (left.length) toast(`Not added: ${left.map((f) => f.name).join(', ')} (SVGs, fonts or a saved job only)`, true);
+  if (left.length) toast(`Not added: ${left.map((f) => f.name).join(', ')} (SVGs, KiCad files, fonts or a saved job only)`, true);
   if (fonts.length) uploadFonts(fonts);
   if (svgs.length) addSvgs(svgs, at);
 });
@@ -2806,7 +3163,9 @@ window.addEventListener('keydown', async (e) => {
   if (e.key === ' ') { spaceDown = true; svg.classList.add('pan-mode'); e.preventDefault(); return; }
   if (e.key === '?') return toggleKeys(true);
   if (e.key === 'Escape') {
-    if (shapeSel.idx.size) { shapeSel = { id: null, idx: new Set() }; render(); }
+    if (chipPick.size) { chipPick.clear(); renderObjectPanel(); }
+    else if (spotPin) { spotPin = null; drawSpot(); }
+    else if (shapeSel.idx.size) { shapeSel = { id: null, idx: new Set() }; render(); }
     else if (multi.size) { multi.clear(); render(); }
     else if (mode !== 'select') setMode('select');
     else if (sel) { sel = null; store.set('sel', sel); render(); }
@@ -2872,9 +3231,10 @@ window.addEventListener('keydown', async (e) => {
   }
   if (e.code === 'BracketRight') return reorder(o.id, e.shiftKey ? 'front' : 'forward');
   if (e.code === 'BracketLeft') return reorder(o.id, e.shiftKey ? 'back' : 'backward');
-  if (key === 'c') return centre(o);
   const d = e.shiftKey ? 10 : e.altKey ? 0.1 : 1;
   const moves = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, d], ArrowDown: [0, -d] };
+  if ((key === 'c' || key === 'r' || moves[e.key]) && movers(o.id).some(isLocked)) { e.preventDefault(); return lockedSay(movers(o.id).find(isLocked)); }
+  if (key === 'c') return centre(o);
   if (moves[e.key]) {
     e.preventDefault();
     const [dx, dy] = moves[e.key], ms = movers(o.id);
@@ -2909,6 +3269,7 @@ function render() {
   renderBed();
   renderObjects();
   renderObjectList();
+  renderPaper();
   renderLayers();
   renderObjectPanel();
   renderPalette();

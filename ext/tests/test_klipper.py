@@ -212,12 +212,20 @@ class FakeQueryEndstops:
         self.endstops = [(self.Endstop(key_open), 'manual_stepper axis_k')]
 
 
+class FakeProbe:
+    def get_offsets(self):
+        return -34.34, 25.0, 0.8        # the BLTouch's
+
+
 class FakeConfigfile:
     def __init__(self):
         self.saved = {}
 
     def set(self, section, key, value):
         self.saved[(section, key)] = value
+
+    def get_status(self, eventtime):
+        return {'settings': {'bed_mesh': {'horizontal_move_z': 5.5}}}
 
 
 class FakePrinter:
@@ -285,7 +293,7 @@ def test_moves_reach_klipper_as_plain_floats():
     import numpy as np
     from limn.machine import Machine
     _, printer = make()
-    printer.objects['probe'] = object()
+    printer.objects['probe'] = FakeProbe()
     toolhead = printer.objects['toolhead']
     machine = Machine(printer, None)
     machine.move(*(np.array([111.75, 44.75]) - np.array([-34.34, 25.0])))
@@ -309,7 +317,7 @@ def test_a_garbled_dock_line_does_not_stop_klipper():
 
 def test_fsr_matrix_reports_what_arrives():
     ext, printer = make()
-    printer.objects['probe'] = object()
+    printer.objects['probe'] = FakeProbe()
     gcode, reactor = printer.objects['gcode'], printer.reactor
     ext.dock.request = lambda cmd, kind, timeout=3: ['BED_5', ['BED_5', 22000, 43000, 47500],
                                                      {'boot': 'b', 'placed': 1, 'powered': True}]
@@ -768,14 +776,15 @@ def _out_of_dock(printer):
     return False
 
 def test_dock_by_hand_then_take_it_off_at_the_reader():
-    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=False)
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=True)      # empty carriage: the key open
     nfc = _nfc(ext)
     nfc.pages = tag_pages(name='Pi HQ cam')
     wait(printer, 2.5)
     assert any('onto the carriage within 20 s' in m for m in gcode.said)
     nfc.pages = None
-    wait(printer, 3)                                    # the tool pushed on: the key's switch triggers
-    _key(printer).triggered = True
+    wait(printer, 3)
+    assert svv['currently_docked_tool'] == 0             # pushed on, the key still open: not yet
+    _key(printer).triggered = False                     # the key turned ~1 mm towards locked
     wait(printer, 0.5)
     assert svv['currently_docked_tool'] == limn.MANUAL_TOOL and svv['tool_name'] == 'Pi HQ cam'
     assert svv['tool_offset_x'] == 1.25 and svv['manual_tool']['name'] == 'Pi HQ cam'
@@ -787,8 +796,8 @@ def test_dock_by_hand_then_take_it_off_at_the_reader():
     assert printer.objects['toolhead'].kin.checked[-1] == (100.0, 50.0, 7.0, 0.0)
     assert 'docked by hand' in raises(lambda: gcode.run('TOOL_TAG_READ'))
     assert 'on the carriage' in raises(lambda: gcode.run('DOCK_MANUAL'))
-    # Off by hand, held to the reader again
-    _key(printer).triggered = False
+    # Off by hand (the key opened), held to the reader again
+    _key(printer).triggered = True
     nfc.pages = tag_pages(name='Pi HQ cam')
     wait(printer, 2.5)
     assert svv['currently_docked_tool'] == 0 and svv['manual_tool'] is None and ext.manual is None
@@ -797,17 +806,17 @@ def test_dock_by_hand_then_take_it_off_at_the_reader():
     wait(printer, 2.5)                                  # still held there: not a new scan
     assert not any('Scanned' in m for m in gcode.said[said:])
 
-def test_dock_by_hand_too_late_or_key_already_open():
-    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=True)
+def test_dock_by_hand_too_late_or_key_already_locked():
+    ext, printer, mcp, gcode, svv, leds = make_with_leds(key_open=False)
     nfc = _nfc(ext)
     nfc.pages = tag_pages(name='Pi HQ cam')
     wait(printer, 2.5)
     nfc.pages = None
-    wait(printer, 2)                                    # open all along: no edge, nothing docked
+    wait(printer, 2)                                    # locked all along: no edge, nothing docked
     assert svv['currently_docked_tool'] == 0
-    _key(printer).triggered = False
-    wait(printer, 20)                                   # closed now, but the window is over
     _key(printer).triggered = True
+    wait(printer, 20)                                   # open now, but the window is over
+    _key(printer).triggered = False
     wait(printer, 1)
     assert svv['currently_docked_tool'] == 0 and ext.manual is None
 
@@ -846,7 +855,7 @@ class FakePrintStats:
 def swapping(low=(15, 14, 13, 12, 11), **kw):
     ext, printer, mcp, gcode, svv, leds = make_with_leds(low=low, **kw)
     printer.objects['print_stats'] = FakePrintStats()
-    printer.objects['probe'] = object()
+    printer.objects['probe'] = FakeProbe()
     printer.objects['toolhead'].get_position = lambda: [130.0, 5.0, 3.0, 0.0]
     gcode.commands['PAUSE_BASE'] = lambda gcmd: None    # Fluidd's client.cfg renamed pause_resume's
     gcode.commands['RESUME_BASE'] = lambda gcmd: None

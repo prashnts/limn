@@ -522,6 +522,9 @@ def load(src, tolerance=0.02) -> Drawing:
                 continue
             fill, _ = paint(e.fill, _opacity(e.values, 'opacity', 'fill-opacity'))
             stroke, _ = paint(e.stroke, _opacity(e.values, 'opacity', 'stroke-opacity'))
+            if not fill and not stroke:         # not painted (KiCad's opacity 0 copies, to search by): nothing to draw
+                index += 1
+                continue
             m = e.transform
             texts.append(TextRun(index, e.id, e.text or '', e.font_family, e.font_size or 16,
                                  e.font_weight, e.values.get('font-style'), e.values.get('text-anchor'),

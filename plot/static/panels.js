@@ -10,9 +10,16 @@
 //
 // On a phone (narrow) there is no room to float: the canvas takes the top of the page
 // and the panels follow it, one column, scrolled like a page; a header only folds.
+//
+// Tabs, as in a slicer: each dock shows one group of its panels at a time (GROUPS; *All*:
+// every one, as before). A panel moved to the other dock takes its group's tab with it;
+// one moved out over the canvas leaves its title behind (a stub: a tap puts it back).
+// Output is no dock's: it sits over the canvas at the bottom (#outbar), folded to a
+// button, and unfolds upwards, or floats like the others. *Find a setting* (/) looks
+// through every panel's settings and macro buttons, the tabs set aside while it does.
 'use strict';
 
-const LAYOUT_VERSION = 2;           // 2: the panels' order of 2026-10-02 (the printer's together)
+const LAYOUT_VERSION = 5;           // 3: the tabs of 2026-10-16 (tools, printer), Output over the canvas; 4: Drawing on Tools; 5: Paper
 const narrow = matchMedia('(max-width: 760px)');
 const isNarrow = () => narrow.matches;
 const layout = (() => {
@@ -20,7 +27,22 @@ const layout = (() => {
   return l && l.v === LAYOUT_VERSION ? l : { v: LAYOUT_VERSION, panels: {}, windows: {} };
 })();
 const saveLayout = () => store.set('layout', layout);
-const docks = { left: $('#left'), right: $('#right') };
+// Each panel's tab; one not here (output) is pinned: in a dock, under the tabs, always there
+const GROUPS = {
+  drawings: ['objects', 'Objects', 'The drawings on the bed, the selected one\'s place, layers, texts, masks'],
+  drawing: ['objects'], paper: ['objects'], layers: ['layers', 'Layers', 'Each pen\'s layer over every drawing, in the order they plot'],
+  captures: ['captures', 'Captures', 'Photos taken with the camera tool'],
+  paint: ['paint', 'Paint', 'Paint shapes with a tool'],
+  tools: ['tools', 'Tools', 'How every tool draws, the tools in the holders and the plan\'s pens, the pen library; the camera, its shots, the NAS'],
+  drawset: ['tools'], pens: ['tools'], camera: ['tools'], shots: ['tools'], nas: ['tools'],
+  printer: ['printer', 'Printer', 'Klipper and its macros, the plotter\'s settings for this job, the LED display, fonts'],
+  machine: ['printer'], display: ['printer'], fonts: ['printer'],
+};
+const groupOf = (p) => (GROUPS[p.dataset.panel || p.dataset.of] || [null])[0];
+const SIDES = ['left', 'right'];            // the docks with tabs; the bar (#outbar) has none
+const groupInfo = (g) => Object.values(GROUPS).find((x) => x[0] === g && x[1]) || [g, g, ''];
+layout.tabs = layout.tabs || {};
+const docks = { left: $('#left'), right: $('#right'), bar: $('#outbar') };
 const home = {};                            // panel -> {dock, order} as the page has it
 const INTERACTIVE = 'button, input, select, textarea, a, label, summary';
 
@@ -36,7 +58,10 @@ function setWhere(p, w) {
 // Unfold a panel (app.js: picking a shape shows its settings)
 function unfoldPanel(name) {
   const p = $(`section[data-panel="${name}"]`);
-  if (!p || !where(p).collapsed) return;
+  if (!p) return;
+  const side = SIDES.find((k) => docks[k].contains(p));
+  if (side && groupOf(p) && tabOf(side) !== 'all' && tabOf(side) !== groupOf(p)) setDockTab(side, groupOf(p));
+  if (!where(p).collapsed) return;
   setWhere(p, { collapsed: false });
   p.classList.remove('collapsed');
 }
@@ -63,9 +88,14 @@ function applyLayout() {
   const panels = $$('section[data-panel]');
   // narrow: a floating one goes back to its dock (where it is kept for a wide screen)
   const dockOf = (p) => (where(p).dock === 'float' && isNarrow() ? home[p.dataset.panel].dock : where(p).dock);
-  for (const side of ['left', 'right']) {
-    panels.filter((p) => dockOf(p) === side).sort((a, b) => where(a).order - where(b).order)
-      .forEach((p) => { p.classList.remove('floating'); p.style.left = p.style.top = p.style.width = ''; docks[side].append(p); });
+  $$('.pstub').forEach((x) => x.remove());
+  for (const side of [...SIDES, 'bar']) {
+    // a floating one's title stays where it was (a stub), among the others in their order
+    const stubs = isNarrow() ? [] : panels.filter((p) => dockOf(p) === 'float' && (where(p).from || home[p.dataset.panel].dock) === side).map(stubOf);
+    [...panels.filter((p) => dockOf(p) === side), ...stubs].sort((a, b) => orderOf(a) - orderOf(b)).forEach((p) => {
+      if (p.matches('section')) { p.classList.remove('floating'); p.style.left = p.style.top = p.style.width = ''; }
+      docks[side].append(p);
+    });
   }
   for (const p of panels.filter((p) => dockOf(p) === 'float')) {
     const w = where(p);
@@ -76,7 +106,168 @@ function applyLayout() {
     $('#floats').append(p);
   }
   panels.forEach((p) => p.classList.toggle('collapsed', !!where(p).collapsed));
+  for (const side of SIDES) {                     // pinned ones (output) under the tabs' panels
+    $$(':scope > section[data-panel]', docks[side]).filter((p) => !groupOf(p)).forEach((p) => docks[side].append(p));
+  }
+  renderTabs();
   insets();
+}
+const orderOf = (x) => where(x.matches('section') ? x : $(`section[data-panel="${x.dataset.of}"]`)).order;
+const titleOf = (p) => ($(':scope > .phead h2', p).firstChild?.nodeValue || p.dataset.panel).trim();
+function stubOf(p) {
+  const x = document.createElement('div');
+  x.className = 'pstub';
+  for (const c of ['plot-only', 'scan-only']) if (p.classList.contains(c)) x.classList.add(c);
+  x.dataset.of = p.dataset.panel;
+  x.title = `${titleOf(p)} is out over the canvas: tap to put it back here`;
+  x.innerHTML = `<span class="pchev" aria-hidden="true">▸</span><h2>${titleOf(p)}</h2><span class="note">out</span>
+    <button class="icon" aria-label="Put it back" title="Put it back here">↩</button>`;
+  return x;
+}
+// A stub, tapped: its panel back where it was
+document.addEventListener('click', (e) => {
+  const x = e.target.closest('.pstub');
+  if (!x) return;
+  const p = $(`section[data-panel="${x.dataset.of}"]`);
+  setWhere(p, { dock: where(p).from || home[p.dataset.panel].dock, from: undefined });
+  applyLayout();
+});
+
+// The docks' tabs: the groups of the panels in a dock that the page's tab (Plot, Scan) shows
+const tabBars = {}, dockHeads = {};
+for (const side of SIDES) {
+  const head = document.createElement('div'), bar = document.createElement('div');
+  head.className = 'dhead';
+  head.append(bar);
+  dockHeads[side] = head;
+  bar.className = 'dtabs';
+  bar.setAttribute('role', 'tablist');
+  bar.setAttribute('aria-label', side === 'left' ? 'Left panels' : 'Right panels');
+  docks[side].prepend(head);
+  tabBars[side] = bar;
+  bar.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-dtab]');
+    if (b) setDockTab(side, b.dataset.dtab);
+  });
+}
+const pageTab = () => (document.body.classList.contains('tab-scan') ? 'scan' : 'plot');
+const offTab = (p) => p.classList.contains(pageTab() === 'scan' ? 'plot-only' : 'scan-only');
+function groupsIn(side) {
+  const gs = [];
+  for (const p of $$(':scope > section[data-panel], :scope > .pstub', docks[side])) {
+    const g = groupOf(p);
+    if (g && !offTab(p) && !gs.includes(g)) gs.push(g);
+  }
+  return gs;
+}
+function tabOf(side) {
+  const gs = groupsIn(side), t = (layout.tabs[side] || {})[pageTab()];
+  return t === 'all' || gs.includes(t) ? t : gs[0] || 'all';
+}
+function setDockTab(side, g) {
+  layout.tabs[side] = { ...(layout.tabs[side] || {}), [pageTab()]: g };
+  saveLayout();
+  renderTabs();
+  insetsWere = '';
+  insets();
+}
+function renderTabs() {
+  for (const side of SIDES) {
+    const gs = groupsIn(side), on = tabOf(side), bar = tabBars[side];
+    if (docks[side].firstElementChild !== dockHeads[side]) docks[side].prepend(dockHeads[side]);     // moving it would blur the find box
+    bar.hidden = gs.length < 2;
+    dockHeads[side].hidden = bar.hidden && !dockHeads[side].querySelector('.find');
+    const want = [...gs.map((g) => { const [, label, help] = groupInfo(g); return [g, label, help]; }),
+      ['all', 'All', 'Every panel of this side, one under the other']];
+    const html = want.map(([g, label, help], i) => `<button role="tab" data-dtab="${g}" class="${g === on ? 'on' : ''}" aria-selected="${g === on}"
+      title="${help}${i < 9 ? ` (Alt+${side === 'right' ? '' : 'Shift+'}${i + 1})` : ''}">${label}</button>`).join('');
+    if (bar.dataset.html !== html) { bar.innerHTML = html; bar.dataset.html = html; }
+    for (const p of $$(':scope > section[data-panel], :scope > .pstub', docks[side])) {
+      p.classList.toggle('tab-off', !finding() && gs.length > 1 && on !== 'all' && !!groupOf(p) && groupOf(p) !== on);
+    }
+  }
+}
+// Alt+1..9: the right side's tabs, Alt+Shift+1..9: the left's
+window.addEventListener('keydown', (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || !/^Digit[1-9]$/.test(e.code) || isNarrow()) return;
+  const side = e.shiftKey ? 'left' : 'right', bs = $$('button[data-dtab]', tabBars[side]), b = bs[+e.code.slice(5) - 1];
+  if (!b || tabBars[side].hidden) return;
+  e.preventDefault();
+  setDockTab(side, b.dataset.dtab);
+});
+
+// Find a setting: the rows of the panels' forms whose label (or its hint) has the words
+const findBox = document.createElement('div');
+findBox.className = 'find';
+findBox.innerHTML = `<input id="find-setting" type="search" placeholder="Find a setting…  /" aria-label="Find a setting"
+  title="Look through every panel's settings and Klipper's macro buttons by name (/; Esc clears it)" autocomplete="off" spellcheck="false">`;
+dockHeads.right.append(findBox);
+const findInput = $('#find-setting', findBox);
+const finding = () => !!findInput.value.trim();
+const FIND_ROWS = '.form > label, .grid > label, #macros button';
+function ownText(el) {
+  let t = el.title || '';
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest('option, select, .note') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  while (walk.nextNode()) t += ' ' + walk.currentNode.nodeValue;
+  for (const c of $$('[title]', el)) t += ' ' + c.title;
+  return t.toLowerCase();
+}
+function runFind() {
+  const words = findInput.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  document.body.classList.toggle('finding', !!words.length);
+  $$('.find-miss, .find-hit, .find-all').forEach((x) => x.classList.remove('find-miss', 'find-hit', 'find-all'));
+  renderTabs();
+  if (!words.length) {                    // what it unfolded folds again
+    findOpened.forEach((d) => { d.open = false; });
+    findOpened.clear();
+    insetsWere = '';
+    insets();
+    return;
+  }
+  const hit = (t) => words.every((w) => t.includes(w));
+  for (const p of $$('section[data-panel]')) {
+    if (offTab(p)) continue;
+    if (hit(($(':scope > .phead h2', p).firstChild?.nodeValue || '').toLowerCase())) { p.classList.add('find-all'); continue; }  // its name: all of it
+    let n = 0;
+    for (const row of $$(FIND_ROWS, p)) {
+      // a label and the control after it (a .form's two columns) go together; a macro button with its group's name
+      const pair = row.matches('.form > label') && row.nextElementSibling && !row.nextElementSibling.matches('label:not(.check)') ? row.nextElementSibling : null;
+      const group = row.closest('.mgroup');
+      const ok = hit(ownText(row) + (pair ? ' ' + ownText(pair) : '') + (group ? ' ' + ownText($('.mlabel', group)) : ''));
+      row.classList.toggle('find-hit', ok);
+      if (pair) pair.classList.toggle('find-hit', ok);
+      if (ok) {
+        n++;
+        for (let d = row.closest('details'); d; d = d.parentElement.closest('details')) {
+          if (!d.open) { findOpened.add(d); d.open = true; }
+        }
+      }
+    }
+    p.classList.toggle('find-miss', !n);
+  }
+  insetsWere = '';
+  insets();
+}
+let findPending = false;
+const findOpened = new Set();
+findInput.addEventListener('input', runFind);
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { findInput.value = ''; runFind(); findInput.blur(); e.stopPropagation(); }
+  if (e.key === 'Enter') { const h = $('section.panel:not(.find-miss) .find-hit input, section.panel:not(.find-miss) .find-hit select, section.panel:not(.find-miss) button.find-hit'); if (h) h.focus(); }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, select, textarea')) return;
+  e.preventDefault();
+  findInput.focus();
+  findInput.select();
+});
+// The panels redraw as the state changes: look again in what they show now
+for (const d of Object.values(docks)) {
+  new MutationObserver(() => {
+    if (!finding() || findPending) return;
+    findPending = true;
+    requestAnimationFrame(() => { findPending = false; runFind(); });
+  }).observe(d, { childList: true, subtree: true });
 }
 
 // How much of the canvas the docks take, for the canvas's own tools
@@ -90,6 +281,11 @@ function insets() {
     st.setProperty('--dock-l', '0px'); st.setProperty('--dock-r', '0px'); st.setProperty('--top', '0px');
     if (typeof drawRulers === 'function') requestAnimationFrame(drawRulers);
     return;
+  }
+  // what scrolls into view in a dock keeps clear of the pinned Output under it
+  for (const d of Object.values(docks)) {
+    const pin = $$(':scope > section[data-panel]', d).find((p) => !groupOf(p) && p.offsetParent !== null);
+    d.style.scrollPaddingBottom = pin ? `${Math.ceil(pin.getBoundingClientRect().height) + 8}px` : '';
   }
   const bare = document.body.classList.contains('bare');
   const shown = (d) => !bare && $$(':scope > section[data-panel]', d).some((p) => p.offsetParent !== null);
@@ -135,7 +331,7 @@ document.addEventListener('pointermove', (e) => {
   }
   p.style.left = `${e.clientX - pdrag.dx}px`;
   p.style.top = `${e.clientY - pdrag.dy}px`;
-  showDrop(dropTarget(e));
+  showDrop(dropTarget(e, p));
 });
 document.addEventListener('pointerup', (e) => {
   if (!pdrag || e.pointerId !== pdrag.id) return;
@@ -149,15 +345,18 @@ document.addEventListener('pointerup', (e) => {
     return;
   }
   d.p.classList.remove('dragging');
-  const t = dropTarget(e);
+  const t = dropTarget(e, d.p);
   showDrop(null);
   if (t.dock === 'float') {
-    setWhere(d.p, { dock: 'float', x: e.clientX - d.dx, y: e.clientY - d.dy, w: d.w });
+    const was = where(d.p);                 // where its stub stays
+    setWhere(d.p, { dock: 'float', from: was.dock === 'float' ? was.from : was.dock, x: e.clientX - d.dx, y: e.clientY - d.dy, w: d.w });
   } else {
     // Its place among the others of that dock: before the one under the pointer
     const others = $$(':scope > section[data-panel]', docks[t.dock]).filter((x) => x !== d.p);
     others.splice(t.index, 0, d.p);
     others.forEach((x, i) => { layout.panels[x.dataset.panel] = { ...where(x), dock: t.dock, order: i }; });
+    // its dock shows its tab, or it would vanish where it was dropped
+    if (SIDES.includes(t.dock) && groupOf(d.p) && (layout.tabs[t.dock] || {})[pageTab()] !== 'all') layout.tabs[t.dock] = { ...(layout.tabs[t.dock] || {}), [pageTab()]: groupOf(d.p) };
     saveLayout();
   }
   applyLayout();
@@ -165,9 +364,11 @@ document.addEventListener('pointerup', (e) => {
 
 document.addEventListener('pointercancel', (e) => { if (pdrag && e.pointerId === pdrag.id && !pdrag.started) pdrag = null; });
 
-function dropTarget(e) {
+function dropTarget(e, p) {
   const lr = docks.left.getBoundingClientRect(), rr = docks.right.getBoundingClientRect();
   const dock = e.clientX < lr.right + 24 ? 'left' : e.clientX > rr.left - 24 ? 'right' : 'float';
+  // Output's own place: the bottom of the canvas, over the scrubber
+  if (dock === 'float' && p && p.dataset.panel === 'output' && e.clientY > innerHeight - 160) return { dock: 'bar', index: 0, before: null };
   if (dock === 'float') return { dock };
   const ps = $$(':scope > section[data-panel]', docks[dock]).filter((p) => p.offsetParent !== null && !p.classList.contains('dragging'));
   let index = ps.length;
@@ -181,7 +382,8 @@ function dropTarget(e) {
 let dropLine = null;
 function showDrop(t) {
   if (!dropLine) { dropLine = document.createElement('div'); dropLine.className = 'dropline'; }
-  if (!t || t.dock === 'float') { dropLine.remove(); return; }
+  docks.bar.classList.toggle('drop-here', !!t && t.dock === 'bar');
+  if (!t || t.dock === 'float' || t.dock === 'bar') { dropLine.remove(); return; }
   t.before ? docks[t.dock].insertBefore(dropLine, t.before) : docks[t.dock].append(dropLine);
 }
 
@@ -257,13 +459,17 @@ window.addEventListener('keydown', (e) => {
   setBare(!document.body.classList.contains('bare'));
 });
 
-for (const side of ['left', 'right']) {
+for (const side of [...SIDES, 'bar']) {
   $$(':scope > section[data-panel]', docks[side]).forEach((sec, i) => makePanel(sec, side, i));
 }
 const windows = [makeWindow($('#viewer'), 'viewer'), makeWindow($('#cams'), 'cams')];
 applyLayout();
 // The docks' contents change with the tab and as panels show and hide
-new MutationObserver(() => requestAnimationFrame(insets)).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+let pageTabWas = pageTab();
+new MutationObserver(() => {
+  if (pageTab() !== pageTabWas) { pageTabWas = pageTab(); renderTabs(); if (finding()) runFind(); }
+  requestAnimationFrame(insets);
+}).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 for (const d of Object.values(docks)) new MutationObserver(() => requestAnimationFrame(insets)).observe(d, { attributes: true, subtree: true, attributeFilter: ['hidden'] });
 window.addEventListener('resize', () => { insetsWere = ''; insets(); });
 narrow.addEventListener('change', () => {

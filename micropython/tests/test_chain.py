@@ -229,6 +229,7 @@ def main():
         for p in procs:
             p.kill()
     bench()
+    plot_bed()
     print('logs in', SIM)
 
 def bench():
@@ -259,6 +260,162 @@ def bench():
         for p in procs:
             p.kill()
 
+def press(*feet):
+    (SIM / 'stim_plot_bed').write_text(json.dumps({'feet': list(feet)}))
+
+def touch_out(name='plot_bed'):
+    path = SIM / ('touch_out_' + name)
+    return path.read_text() if path.exists() else None
+
+def samples(bed, timeout=0.6):
+    '''Plot bed data lines -> [{state, flags, g, feet_g}]'''
+    out = []
+    for k, d in bed.lines(timeout):
+        if k == 'data' and d['kind'] == 6:
+            flags, sum_mg, _, feet = d['values']
+            out.append({'state': d['state'], 'flags': flags, 'g': sum_mg / 1000, 'feet_g': [mg / 1000 for mg, _ in feet]})
+    return out
+
+def logs_until(bed, needle, timeout=6):
+    found = []
+    for k, d in bed.lines(timeout):
+        if k == 'log':
+            found.append(d['text'])
+            if needle in d['text']:
+                break
+    return found
+
+def plot_bed():
+    '''The plot bed on USB alone: load cells, touch line, calibration, updates.'''
+    from link import LOAD_TOUCH, LOAD_ARMED, LOAD_CAL, LOAD_SUM_OK, LOAD_FEET_OK
+    root = install('plot_bed', 'plot_bed')
+    press(0, 0, 0)
+    procs = [start('plot_bed', {}, stdin=subprocess.PIPE, stdout=subprocess.PIPE)]
+    bed = mcu.Dock(PipeSerial(procs[0]))
+    try:
+        hellos = wait_for(lambda: bed.hellos(), what='plot bed hello')
+        check('plot bed: hello at hop 0', hellos[0]['role'] == 'plot_bed')
+        check('plot bed: touch line ok after the boot tare', wait_for(lambda: touch_out() == '1', what='line ok'))
+        got = samples(bed)
+        check('plot bed: streams samples, both ADCs ok, ~0 g',
+              len(got) > 5 and all(s['flags'] & LOAD_SUM_OK and s['flags'] & LOAD_FEET_OK for s in got)
+              and abs(got[-1]['g']) < 1)
+
+        press(10, 10, 10)       # 30 g by the estimate
+        check('plot bed: a press drops the touch line', wait_for(lambda: touch_out() == '0', timeout=2, what='touch'))
+        got = samples(bed)
+        check('plot bed: touched flag and ~30 g (estimate)',
+              got and got[-1]['flags'] & LOAD_TOUCH and 27 < got[-1]['g'] < 33 and not got[-1]['flags'] & LOAD_CAL)
+        press(0, 0, 0)
+        check('plot bed: release raises it again', wait_for(lambda: touch_out() == '1', timeout=2, what='release'))
+
+        bed.send('stall(2000)')
+        time.sleep(0.3)
+        press(10, 10, 10)
+        dropped = wait_for(lambda: touch_out() == '0', timeout=1.2, what='touch while stalled')
+        press(0, 0, 0)
+        check('plot bed: the touch line works while the main loop is stalled (IRQ)', dropped)
+        wait_for(lambda: touch_out() == '1', timeout=4, what='release after the stall')
+        time.sleep(2)           # the stall's end: commands are handled again
+
+        bed.send('threshold(40)')
+        press(10, 10, 10)
+        time.sleep(0.5)
+        check('plot bed: threshold(40) ignores 30 g', touch_out() == '1')
+        press(0, 0, 0)
+        bed.send('threshold(5)')
+
+        bed.send('tare()')
+        logs_until(bed, 'tare>>')
+        press(50, 50, 50)
+        time.sleep(0.3)
+        bed.send('calibrate(150)')
+        logs = logs_until(bed, 'calibrate>>')
+        got = samples(bed)
+        check('plot bed: calibrate(150) -> ~170 counts/g on the sum, ~510 a foot',
+              any('calibrate>>sum 1' in t for t in logs) and got and got[-1]['flags'] & LOAD_CAL
+              and 147 < got[-1]['g'] < 153 and all(48 < g < 52 for g in got[-1]['feet_g']))
+        check('plot bed: cal.json written', json.loads((root / 'cal.json').read_text())['sum'] > 100)
+
+        press(100, 0, 0)
+        time.sleep(0.3)
+        bed.send('calibrate(100, 1)')
+        logs = logs_until(bed, 'calibrate>>')
+        check('plot bed: calibrate(100, 1) weighs foot 1 alone', any('calibrate>>foot 1 5' in t for t in logs))
+        press(0, 0, 0)
+        bed.send('calibrate(100, 2)')
+        logs = logs_until(bed, 'calibrate>>')
+        check('plot bed: no weight over the foot -> refused', any('calibrate>>failed' in t for t in logs))
+
+        wait_for(lambda: touch_out() == '1', timeout=3, what='line ok')
+        bed.send('arm(plot_bed)')
+        lines = [(k, d) for k, d in bed.lines(1.5)]
+        armed = [d for k, d in lines if k == 'armed']
+        check('plot bed: arm tares, then says armed', armed and armed[0]['armed'] is True)
+        got = samples(bed)
+        check('plot bed: armed flag in the samples', got and got[-1]['flags'] & LOAD_ARMED)
+        bed.send('arm(rtp)')
+        time.sleep(0.2)
+        bed.send('disarm()')
+        got = [d for k, d in bed.lines(1) if k == 'armed']
+        check('plot bed: disarm', got and got[0]['armed'] is False)
+
+        bed.send('diag()')
+        logs = logs_until(bed, 'diag>>noise foot3')
+        check('plot bed: diag reports both ADCs and the noise',
+              any('diag>>sum adc: ok' in t for t in logs) and any('diag>>feet adc: ok' in t for t in logs)
+              and sum('diag>>noise' in t for t in logs) == 4)
+
+        (SIM / 'stim_dead_sum').touch()
+        check('plot bed: the sum ADC stops -> touch line fails safe',
+              wait_for(lambda: touch_out() == '0', timeout=2, what='fail safe'))
+        (SIM / 'stim_dead_sum').unlink()
+        check('plot bed: ...and comes back once the ADC does', wait_for(lambda: touch_out() == '1', timeout=10, what='recovery'))
+
+        app = (mcu.HERE / 'lrt_plot_bed.py').read_text() + '\n# updated\n'
+        src = source_with({'lrt_plot_bed.py': app})
+        mcu.run_update(bed, [0], source=src)
+        info = bed.info(0)
+        check('plot bed: update over USB, confirmed, ads1220 shipped, cal.json kept',
+              info['files']['lrt_plot_bed.py'] == mcu.file_hash(src / 'lrt_plot_bed.py') and not info['pending']
+              and 'lib/ads1220.py' in info['files'] and 'cal.json' in info['files'])
+        got = wait_for(lambda: samples(bed), what='samples after the update')
+        check('plot bed: still calibrated after the update', got[-1]['flags'] & LOAD_CAL)
+
+        running = mcu.file_hash(src / 'lrt_plot_bed.py')
+        src = source_with({'lrt_plot_bed.py': 'raise RuntimeError("broken on purpose")\n'})
+        try:
+            mcu.run_update(bed, [0], source=src)
+            rolled_back = False
+        except typer.Exit:
+            rolled_back = True
+        info = bed.info(0)
+        check('plot bed: broken update rolls back',
+              rolled_back and info['files']['lrt_plot_bed.py'] == running and not info['pending'])
+    finally:
+        for p in procs:
+            p.kill()
+
+    # The app fails to start with nothing to roll back: the rescue loop still
+    # takes an update over USB.
+    root = install('plot_bed_rescue', 'plot_bed')
+    (root / 'lrt_plot_bed.py').write_text('raise RuntimeError("broken on purpose")\n')
+    procs = [start('plot_bed_rescue', {}, stdin=subprocess.PIPE, stdout=subprocess.PIPE)]
+    bed = mcu.Dock(PipeSerial(procs[0]))
+    try:
+        hellos = wait_for(lambda: bed.hellos(), what='rescue hello')
+        check('plot bed: rescue loop answers on USB', hellos[0]['role'] == 'rescue:plot_bed')
+        mcu.run_update(bed, [0])
+        hellos = wait_for(lambda: bed.hellos(), what='hello after the rescue')
+        check('plot bed: rescued by an update over USB', hellos[0]['role'] == 'plot_bed')
+    finally:
+        for p in procs:
+            p.kill()
+
 
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['plot_bed']:
+        plot_bed()
+        print('logs in', SIM)
+    else:
+        main()

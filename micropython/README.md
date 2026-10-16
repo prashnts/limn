@@ -1,9 +1,9 @@
 # Limn Resistive Touch
 
-Firmware for the Dock and the bed MCUs (resistive panel, FSR array), and `mcu.py` to install and update them.
+Firmware for the Dock, the bed MCUs (resistive panel, FSR array) and the plot bed (load cells), and `mcu.py` to install and update them.
 
 - `main.py`: bootloader, runs the app named in `node.json`, rolls back bad updates.
-- `lib/`: shared by all MCUs. `link.py` (UART chain), `ota.py` (updates), `touch.py` (touch line), `bridge.py` (USB host).
+- `lib/`: shared by all MCUs. `link.py` (UART chain), `ota.py` (updates), `touch.py` (touch line), `bridge.py` (USB host). `ads1220.py` only goes to the plot bed (`APP_LIBS` in `mcu.py`).
 - `lrt_*.py`: the apps.
 - `nodes/`: `node.json` for each kind of MCU (role, app, UART and pins).
 - `STRATEGY.md`: how it all fits together.
@@ -17,6 +17,7 @@ uv run micropython/mcu.py ports
 uv run micropython/mcu.py install dock --port /dev/cu.usbmodem1101
 uv run micropython/mcu.py install rtp  --port ...
 uv run micropython/mcu.py install fsr  --port ...     # fsr_bed3 for BED_3
+uv run micropython/mcu.py install plot_bed --port ... # load cells, on the Pi's USB: docs/load-cell.md
 ```
 
 `--port` can be left out when only one board is connected, or set once with `export LIMN_PORT=...`.
@@ -55,5 +56,6 @@ uv run micropython/mcu.py update --hop 1 --config fsr_bed3 --port <rtp port>
 On a PC, no hardware:
 ```
 python3 micropython/tests/test_link.py                  # link library
-uv run python micropython/tests/test_chain.py           # Dock, RTP, FSR as processes
+uv run python micropython/tests/test_chain.py           # Dock, RTP, FSR, plot bed as processes
+uv run python micropython/tests/test_chain.py plot_bed  # the plot bed only (fake ADS1220s)
 ```

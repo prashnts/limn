@@ -134,6 +134,20 @@ class Obj(BaseModel):
     # Regions where nothing of it is drawn (eg. over what is printed there already):
     # polygons in the drawing's mm at scale 1, y up, like its shapes before the scale
     masks: list[list[tuple[float, float]]] = []
+    locked: bool = False            # where it is and its size stay: nothing moves or scales it until unlocked
+
+
+class Poster(BaseModel):
+    '''Drawings bigger than the paper, plotted sheet by sheet (poster.py): placed on the poster
+    instead of the bed, cut into sheets of the bed's paper.'''
+    model_config = ConfigDict(extra='forbid')
+    sheet: Literal['portrait', 'landscape'] = 'portrait'    # portrait: as the paper sits on the bed
+    overlap: float = Field(6.0, ge=0)   # mm each sheet shares with the next, to join them
+    marks: bool = True              # crop marks: where to cut, at the paper's edge
+    locked: bool = False            # the grid and every drawing stay where they are
+    origin: tuple[float, float] | None = None   # the grid as it was locked: its bottom left,
+    cols: int | None = Field(None, ge=1)        # its sheets across
+    rows: int | None = Field(None, ge=1)        # and up
 
 
 class PlanPen(BaseModel):
@@ -163,6 +177,7 @@ class Job(BaseModel):
     tool_order: list[str] | None = None
     pens: dict[str, PlanPen] = {}   # the plan's own pens, by tool id: T5, T6, .. (after the holders')
     objects: list[Obj] = []
+    poster: Poster | None = None    # None: the drawings are on the bed, one sheet
     _root: Path = PrivateAttr(default_factory=lambda: Path('.'))
 
     @classmethod
