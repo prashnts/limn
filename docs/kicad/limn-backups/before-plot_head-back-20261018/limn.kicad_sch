@@ -1,0 +1,698 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "081b4e76-24d5-4c38-b554-58695afa3b3a")
+	(paper "A3")
+	(title_block
+		(title "Limn: the machine")
+		(date "2026-10-16")
+		(rev "1")
+		(company "limn")
+	)
+	(lib_symbols)
+	(text "LIMN: the electronics, one sheet per role"
+		(exclude_from_sim no)
+		(at 15.24 15.24 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "0639f1cf-90c6-495c-83c5-faba822130b8")
+	)
+	(text "Open a block for its sheet. Sheets meet through global labels and named power rails.\nSolid boxes: one board or assembly. Dashed: planned, or going (its parts DNP). Wires turn at 45 degrees.\nGathered from the code and docs (2026-10-16): notebooks/pinout.md, micropython/nodes, klipper/*.cfg,\nprojects/limn/content/electronics.md, docs/block-diagrams.md, docs/load-cell.md. Missing details: marked \"to fill in\"."
+		(exclude_from_sim no)
+		(at 15.24 22.86 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "7a51ddc5-6c3d-49bd-a436-2f0d4c0db3dd")
+	)
+	(rectangle
+		(start 17.78 40.64)
+		(end 83.82 85.09)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "75e6f15b-7db2-435e-8f39-b77674e52057")
+	)
+	(text "Supply"
+		(exclude_from_sim no)
+		(at 19.05 41.91 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "8568ad66-fc5b-49f5-973c-a8ec45317cb0")
+	)
+	(rectangle
+		(start 104.14 40.64)
+		(end 172.72 85.09)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "b69abc42-a477-4ed8-a054-cb426377f605")
+	)
+	(text "Host"
+		(exclude_from_sim no)
+		(at 105.41 41.91 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "4a1527a4-000c-4187-b44e-e8c71f45771b")
+	)
+	(rectangle
+		(start 104.14 99.06)
+		(end 248.92 187.96)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "ba746340-7b24-4cda-8b9f-37c3ff4f6a6f")
+	)
+	(text "Motion and the toolhead"
+		(exclude_from_sim no)
+		(at 105.41 100.33 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "63537ef4-5f42-4706-a213-b9a5dda0c6ba")
+	)
+	(rectangle
+		(start 180.34 40.64)
+		(end 330.2 85.09)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "defeea16-243e-4dd1-b002-ad513fee14f9")
+	)
+	(text "Docks"
+		(exclude_from_sim no)
+		(at 181.61 41.91 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "2bb8a5d1-da22-479f-9a69-d667e49d24f7")
+	)
+	(rectangle
+		(start 256.54 99.06)
+		(end 330.2 200.66)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "89c82ee5-43e4-4ae5-85aa-dec7e5d48909")
+	)
+	(text "Beds"
+		(exclude_from_sim no)
+		(at 257.81 100.33 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "2ca62045-c9b8-428f-9fb7-e0748bd9cb43")
+	)
+	(text "USB-C PD charger: 12 V (motion,\nswitched), 9 V (the 5 V bucks),\nthe Pi's port. Rails: +12V,\n+7V5_ZK, +9V, +5V_LED, +5V_TOOL."
+		(exclude_from_sim no)
+		(at 27.94 53.34 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "3cbf71bd-bda0-4656-84b4-df41a9f11d4d")
+	)
+	(text "Pi 4: USB to every MCU and the\ncameras (an FE1.1s hub, planned),\nI2C1 to the tool dock."
+		(exclude_from_sim no)
+		(at 116.84 53.34 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "8d86059c-b707-4911-94d9-60ec7f7e502e")
+	)
+	(text "Melzi v2.0: motors A, B, Z, K,\nthe endstops, the EXT header,\nthe probe pin (PROBE_A4)."
+		(exclude_from_sim no)
+		(at 116.84 111.76 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "b1c7ae21-9ec2-4e11-840e-432a3ad1fc8b")
+	)
+	(text "The drag chain: Z, K, the Y/Z/K\nendstops, MPU9250, endoscope;\nthe coupling (planned)."
+		(exclude_from_sim no)
+		(at 116.84 154.94 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "a9b677db-d341-4def-b444-e0bba3a629a2")
+	)
+	(text "Pico WH (Klipper rpi): the\nNeoPixels, the buzzer, the\nMPU9250 (software I2C)."
+		(exclude_from_sim no)
+		(at 193.04 111.76 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "07b324e4-cc3a-4f57-a3d1-0b48fb559efe")
+	)
+	(text "MCP23017 + 5 holder switches,\nthe PN532 tag reader, the\nindockator strip."
+		(exclude_from_sim no)
+		(at 193.04 53.34 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "47db7bd3-9945-4edd-af18-e5417d848dc8")
+	)
+	(text "RP2040-Zero (the LRT Dock):\nDETECT, the bed's power switch,\nthe pogo connector."
+		(exclude_from_sim no)
+		(at 269.24 53.34 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "e1e67c12-4da5-419d-b620-5db5d6fc7c07")
+	)
+	(text "The detachable bed: ID resistor,\nRTP node (going), FSR node\nand its 4 x 8 sheet."
+		(exclude_from_sim no)
+		(at 269.24 111.76 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "d655d639-9d87-4349-9f4d-b268e062a4a3")
+	)
+	(text "Pro Micro + 2 x ADS1220, the\nthree feet, filters, the sum,\nthe fail-safe touch line."
+		(exclude_from_sim no)
+		(at 269.24 167.64 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "6323fb0b-8bc9-4cf5-a2fc-3cc662fd116b")
+	)
+	(text "The two-strip cell + the plot\nbed board on the toolhead: one\nADS1220, tool ID, tool 5 V."
+		(exclude_from_sim no)
+		(at 193.04 154.94 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "057c1646-e6c3-4692-bd70-96f5f5c64b82")
+	)
+	(sheet
+		(at 25.4 50.8)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "73f98936-3ce4-4617-b966-10672a9bff6b")
+		(property "Sheetname" "Power"
+			(at 25.4 50.088 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "power.kicad_sch"
+			(at 25.4 76.785 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 114.3 50.8)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "483d0733-3533-40c0-9dd3-cbe651b9cde4")
+		(property "Sheetname" "Host (Pi 4)"
+			(at 114.3 50.088 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "host.kicad_sch"
+			(at 114.3 76.785 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 114.3 109.22)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "37f7340c-cd0c-4233-b39a-2153809afce7")
+		(property "Sheetname" "Melzi (motion)"
+			(at 114.3 108.508 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "melzi.kicad_sch"
+			(at 114.3 135.205 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 114.3 152.4)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "a9e017b2-da8f-4bc3-9e78-e8876c41eddc")
+		(property "Sheetname" "Toolhead"
+			(at 114.3 151.688 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "toolhead.kicad_sch"
+			(at 114.3 178.385 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 190.5 109.22)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "9875ce5f-a63d-4449-accb-8cc449bb6d47")
+		(property "Sheetname" "Aux MCU (rpi)"
+			(at 190.5 108.508 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "aux.kicad_sch"
+			(at 190.5 135.205 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 190.5 50.8)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "4aa4743b-3c74-48c9-8851-edaae1f542a8")
+		(property "Sheetname" "Tool dock"
+			(at 190.5 50.088 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "tool_dock.kicad_sch"
+			(at 190.5 76.785 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "7")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 266.7 50.8)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "b734632f-e952-4d37-9e7f-daf4b6f4065f")
+		(property "Sheetname" "Bed dock (LRT Dock)"
+			(at 266.7 50.088 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "bed_dock.kicad_sch"
+			(at 266.7 76.785 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "8")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 266.7 109.22)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "c347023d-0326-4063-ad32-c3e491fe57ac")
+		(property "Sheetname" "Calibration bed"
+			(at 266.7 108.508 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "cal_bed.kicad_sch"
+			(at 266.7 135.205 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "9")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 266.7 165.1)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "15126e1f-0e4f-4eb3-b374-e940521770da")
+		(property "Sheetname" "Plot bed (load cells)"
+			(at 266.7 164.388 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "plot_bed.kicad_sch"
+			(at 266.7 191.085 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "10")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 190.5 152.4)
+		(size 50.8 25.4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "009b373b-24a1-45cf-ba9c-6779188495fe")
+		(property "Sheetname" "Plot head cell (load cell)"
+			(at 190.5 151.688 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "plot_head.kicad_sch"
+			(at 190.5 178.385 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "limn"
+				(path "/081b4e76-24d5-4c38-b554-58695afa3b3a"
+					(page "11")
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+	(embedded_fonts no)
+)

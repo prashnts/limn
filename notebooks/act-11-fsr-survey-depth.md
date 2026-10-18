@@ -188,3 +188,57 @@ Timing from klippy.log: 8 borders ~70s each (~50 taps at ~1.3s), contact z 3 cel
 - contact_z repeats 2 and 3: after the back-off check, fast to the last contact + `approach`, fine steps from there (~6 instead of ~20). If a cell reads `early` there already: says "already reading at z=…" and goes from back_off as before.
 Expected ~6-7 min instead of 11-13 (estimate: Klipper's start delay after each read stays). Tests: test_edge_taps_and_z_repeats_come_down_slowly_only_near_contact, test_a_repeat_reading_at_its_start_goes_back_to_back_off; 48 FSR tests pass. test_marks has 2 failures from before this change (mark (85, 152) vs (84, 152); Z1.0 count).
 To watch on the next run: time per border (was ~70s), "already reading" lines, contact repeats' spread (was 0.007-0.035), and whether borders' ± stay as before.
+
+## 2026-10-13 21:29-23:18: no tape, three pens (black 005, red 01, brown 01)
+
+From klippy.log (Moonraker), extract in ~/limn-shot/fsr-2026-10-13-evening/summary.txt (log next to it). Deployed: c92eb95 + the faster taps.
+
+**The runs:** survey (005, T45) 21:29-21:42; LRT_CALIBRATE ×3 (005: trim 0.3, 0.3, then 0); LRT_FSR_MEASURE ×2 (005, no dock between); LIMN_TOOL_CALIBRATE red (T41) ×2, brown (T42) ×2. A mark after each run whose dz was in range (marks 5-9).
+
+**Without the tape: back to the pre-tape sheet, a bit faster.**
+- Survey: median 144 at 0.08 (12:42 153, 13:12 157; kapton ~half), rest 0 everywhere, nothing faulty. Weak: (0, 7) (0: an edge cell), (1, 3) 39, (1, 6) 48. Both are the old fixed border/z cells. The survey warned that the z cell and the y edge use weak cells. (1, 1)/(1, 2), weak at 13:12, read 157/108 again.
+- Reference borders ±0.001-0.013 (before the tape ±0.002-0.011). Contact repeats spread 0.001-0.018 (was 0.007-0.035). Reference contact over the BLTouch 2.498 / 2.465 / 2.522 (before the tape 2.48-2.55, kapton 2.18).
+- A calibration takes ~8.5 min (BLTouch to tag), a pen ~8.5 min, a border ~50s (were 11-13 min and ~70s).
+- Red run 1: every border clean (dx ±0.024, dy ±0.012), unlike the Blue on kapton (±0.14 / ±0.27). Locate's reach worked on the plotter for the first time: "nothing at the aim by z=5.00", found on (3, 4) at 4.715 (the red is 0.6 shorter than the 005).
+- (1, 3) is the z cell that disagrees: 0.1-0.2 under (1, 6) and (2, 5) in 5 of 7 runs, with "rose … but no more deeper" 3 times. The median hides it, but it is what makes the dz ± 0.04-0.08.
+
+**The main finding: after a mark, with the pen left on the carriage, contact comes 0.3-0.4 higher until the next pickup.**
+
+| run | before it | contact z at (1, 6) (absolute) | over BLTouch |
+|---|---|---|---|
+| 005 cal 2 (22:01) | mark 5, dock + pickup (G28) | 5.237 | 2.465 |
+| 005 cal 3 (22:12) | mark 6, dock + pickup | 5.318 | 2.522 |
+| 005 measure (22:17) | **mark 7, no dock** | 5.634 | 2.838 (+0.32) |
+| 005 measure (22:33) | nothing (11 min idle) | 5.625 | 2.829 |
+| red 1 (22:46) | pickup | 4.626 | 1.831 |
+| red 2 (22:55) | **mark 8, no dock** | 5.006 | 2.211 (+0.38) |
+| brown 1 (23:05) | pickup | 5.802 | 3.007 |
+| brown 2 (23:17) | no mark (dz out of range), no dock | 5.827 | 3.032 (+0.025) |
+
+- Not the tag: LRT_FSR_MEASURE and probe_tool run `_CLEAR_OFFSETS` first, and the FSR reads lrt_fsr as data, so the mark's mesh doesn't carry over.
+- Probably not Z losing steps: every reference calibration probes the BLTouch *before* its pickup's G28, so right after marks 5 and 6 with no home. Those BLTouch z rose only 0.01-0.07 (114.75,43.35: 1.923, 1.972, 1.995).
+- The user doesn't see the pens slide in their tools: it's the toolhead's play (known: 1.67 per mm of press, play.toml), which this fits better. The BLTouch sits by the lead screw and the pen ~34 mm out, so a carriage resting at another end of its play (a tilt) moves the pen's tip a lot and the BLTouch's little: the probes after marks 5 and 6 moved 0.01-0.07. A tilt also swings the tip in XY: the red's dx −0.62 → −0.46, dy +0.08 → −0.15 (each run ±0.01-0.04).
+- So two repeatable states: as left by G28 (every pickup homes), and as left by drawing (the tip ~0.3-0.4 lower). Each holds steady on its own: 2.838 / 2.833 eleven minutes apart, contact repeats within 0.02.
+- The point isn't a rigid machine, it's measuring in the state the pen draws in. Calibration is always in the "after G28" state; a plot draws after many moves, so likely in the other one. Mark 7's misses were drawn right after a measure, the first strokes still in the homed state.
+- Consequence: the red's tag (dz 2.21, dx −0.46, dy −0.15) was written in the "after drawing" state, its run 1 (1.83 / −0.62 / +0.08) in the homed one. Which is right depends on which state the plots draw in.
+
+- Not a spring: a spring comes back to the same rest when unloaded. This holds +0.35 with no load (11 min idle), and contact is taken at the first rise, near zero force. It behaves like friction-held play (hysteresis), so a constant trim can't cover it. It does explain both trims: at 0.3, after the first strokes it presses ~0.3 + 0.35 (too much); at 0, the first strokes press 0 (misses) and the rest ~0.35.
+- The calibration's own slow Z taps (hundreds, up and down) didn't flip the state, so "Z up and down a bit" at FSR speed won't do; something in drawing does (fast hops, XY at draw speed, the press, LEAVE_Z).
+
+- The user's other lead for the misses: the paper isn't clamped well and lifts; the BLTouch pin is too light to push a lifted spot down, the pen does. That gives misses at trim 0 on paper only. It doesn't give the +0.35 on the FSR (no paper there). Both can be true. Paper test: the same trim-0 mark on a clamped/taped-flat patch next to a loose one.
+
+**Test, to find what sets the state:** pickup → LRT_FSR_MEASURE → XY moves only, at plot speed and with plot's hops, nothing touched → measure → LRT_MARK → measure → `G28 Z` → measure. If the moves alone shift it, a fixed settle routine before every contact (and before drawing) puts both in the same state. If only touching paper does, it's the press direction of the play.
+
+**Brown:** dz 3.007 / 3.032 is over TOOL_DZ (−0.5, 3.0), so no mark. A larger dz means the toolhead is higher at touch, i.e. the tip hangs *lower*: the brown is the longest of the three (black 2.5, red 1.83). Moving it down in its tool makes it worse; it needs to go **up** ~0.3-0.5. Raising TOOL_DZ instead hits the Z range: the mark leaves at LEAVE_Z 7 + dz, which is past position_max 10 at dz 3.03. Its run 1 borders were clean (dx −4.09 ±0.04, dy −0.525 ±0.04). Run 2 was "rough" (dx −3.73 ±0.19, dy −0.34 ±0.24): (1, 5)|(2, 5) and (1, 1)|(2, 1) had 1.4 mm of unanswered taps and (2, 4)|(2, 5) 2 taps on the wrong side. Its other borders match run 1 (−4.07, −4.06, −0.50, −0.50). Its written tag is run 2's rough one.
+
+**Trim:** the last reference (22:12) was saved with trim 0, so the pens took trim 0 too (red 1.83 = its contact). Contact is where the FSR starts to rise, not where ink transfers. At trim 0, any error in the paper mesh, the paper or the BLTouch→FSR transfer lifts the pen in places: mark 7's missed lines. 0.3 was too heavy. Try 0.1-0.15 with LRT_MARK TRIM= before recalibrating.
+
+**Also seen:** the red's tag says "(reference)" while it is probed as a pen against the 005.
+
+## 2026-10-14: meshing travel 3mm over the bed (uncommitted, the user deploys)
+
+A probe point costs ~7.2s (lrt_paper 20:14: 24 points in 172s): ~2.4s down from Z5.5 and ~2.4s back up (speed and lift_speed 2.5), ~1.3s deploy/stow, ~0.4s XY. Paper triggers at toolhead −1.5..−0.2, the FSR at ~2.75.
+- `placement.mesh_move_z`: travel = the last mesh's highest point of this bed and profile + z_offset + 3mm (`MOVE_Z_MARGIN`, the user's: less and the pin may not deploy cleanly), never over horizontal_move_z (5.5), which it stays at with nothing to go by. `_run_meshes` passes `HORIZONTAL_MOVE_Z=` and keeps each mesh's top in `lrt_mesh_tops` {bed: {profile: top}}. Tonight's paper: Z2.78 (~1.1s a point less down, as much up: ~4.9s a point, 4×6 in ~2 min). lrt_fsr: 5.5 as before.
+- The first mesh of each bed after deploy has no top yet and runs at 5.5. Check the next one: "[LRT][Mesh] lrt_paper: travel at Z…" and ~5s a point between "probe: at" lines. If it's still ~7.2s, this Klipper ignores HORIZONTAL_MOVE_Z on BED_MESH_CALIBRATE.
+- Not changed: lift_speed 2.5 (5 would save ~0.5s more a point), stow_on_each_sample.
+Tests: test_mesh_travel_goes_by_the_last_mesh_of_the_bed, test_a_bed_meshed_before_is_meshed_again_3mm_over_its_highest_point; 190 pass, the 2 test_marks failures from before.
