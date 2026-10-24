@@ -2,6 +2,8 @@
 # tests/test_chain.py. Not meant to be run by hand.
 #
 #   UARTs   -> socket pairs handed over by the test (--uart ID:FD)
+#   one wire (lib/halfwire.py) -> a socket pair too (--wire PIN:FD), no echo
+#   BED_PROBE -> sim/probe_out_<node>, its level; sim/probe_low_<node>, a line per fall
 #   DETECT  -> a file per node in the sim folder while its touch pin is high
 #   touches -> the test creates sim/stim_rtp or sim/stim_fsr
 #   reset() -> the process restarts itself, keeping the sockets
@@ -22,11 +24,13 @@ parser.add_argument('--name')
 parser.add_argument('--root')
 parser.add_argument('--sim')
 parser.add_argument('--uart', action='append', default=[])
+parser.add_argument('--wire', action='append', default=[])
 args = parser.parse_args()
 ARGV = list(sys.argv)       # runpy replaces sys.argv[0] later
 
 NAME, ROOT, SIM = args.name, args.root, args.sim
 UART_FDS = {int(i): int(fd) for i, fd in (u.split(':') for u in args.uart)}
+WIRE_FDS = {int(i): int(fd) for i, fd in (u.split(':') for u in args.wire)}
 NODE = json.load(open(os.path.join(ROOT, 'node.json')))
 ROLE = NODE['role']
 XP, XM, YP, YM = NODE.get('panel_pins', [28, 26, 27, 29])
@@ -70,6 +74,9 @@ class Pin:
                 return current
             if ROLE == 'rtp' and self.id == XP:
                 return 0 if stim('rtp') else 1
+            if ROLE == 'lit' and self.id == NODE['bed_probe']:
+                beds = [open(sim_path(f)).read() for f in os.listdir(SIM) if f.startswith('probe_out_')]
+                return 0 if stim('lit_probe') or '0' in beds else 1
             for chip in ADS.values():
                 if self.id == chip.drdy:
                     return 0 if chip.ready() else 1
@@ -78,6 +85,12 @@ class Pin:
         if self.id == NODE.get('touch_out'):
             with open(sim_path('touch_out_' + NAME), 'w') as fp:
                 fp.write(str(v))
+        if self.id == NODE.get('probe_pin'):
+            with open(sim_path('probe_out_' + NAME), 'w') as fp:
+                fp.write(str(v))
+            if not v:
+                with open(sim_path('probe_low_' + NAME), 'a') as fp:
+                    fp.write('%.3f\n' % time.time())
         if self.id == NODE.get('touch_pin'):
             path = sim_path('detect_' + NAME)
             if v:
@@ -112,6 +125,13 @@ class ADC:
             if stim('rtp'):
                 return 30000
             return {YP: 65535, XM: 0}.get(self.pin, 30000)
+        if ROLE == 'lit':
+            if self.pin == NODE['bed_detect']:
+                try:
+                    return int(open(sim_path('stim_lit_bed')).read())
+                except (OSError, ValueError):
+                    return 65535                        # no bed
+            return 65535                                # no tool
         if ROLE == 'fsr':
             if stim('fsr') and self.pin == 28 and pins.get(12, [0, 0])[1]:
                 return 60000
@@ -120,7 +140,8 @@ class ADC:
 
 class FakeADS1220:
     '''Registers, conversions timed by the data rate, counts from the loads in
-    sim/stim_plot_bed ({"feet": [g, g, g]}). sim/stim_dead_<kind> unplugs it.'''
+    sim/stim_plot_bed ({"feet": [g, g, g]}), or for LIT's cell sim/stim_lit ({"g": g}).
+    sim/stim_dead_<kind> unplugs it.'''
     RATES = (20, 45, 90, 175, 330, 600, 1000)
     PER_GRAM = 510                  # counts per gram on a foot, as the app's estimate
     OFFSETS = (1200, -800, 300)     # each foot's midpoint, unloaded
@@ -181,6 +202,12 @@ class FakeADS1220:
             buf[:] = bytes([v >> 16, v >> 8 & 0xFF, v & 0xFF])
 
     def counts(self):
+        if self.kind == 'cell':
+            try:
+                grams = json.load(open(sim_path('stim_lit')))['g']
+            except (OSError, ValueError):
+                grams = 0
+            return 900 - 236 * grams + random.gauss(0, 15)
         try:
             feet = json.load(open(sim_path('stim_plot_bed')))['feet']
         except (OSError, ValueError):
@@ -194,6 +221,8 @@ ADS = {}
 if ROLE == 'plot_bed':
     ADS = {NODE['sum_adc']['cs']: FakeADS1220('sum', NODE['sum_adc']),
            NODE['feet_adc']['cs']: FakeADS1220('feet', NODE['feet_adc'])}
+elif ROLE == 'lit':
+    ADS = {NODE['cell_adc']['cs']: FakeADS1220('cell', NODE['cell_adc'])}
 
 class SPI:
     def __init__(self, id, baudrate=1000000, polarity=0, phase=0, **pins):
@@ -252,6 +281,17 @@ class UART:
 
     def txdone(self):
         return True
+
+class HalfWire(UART):
+    '''lib/halfwire.py: the real one drops its own echo, so a socket is the same.'''
+    def __init__(self, pin, baud=115200, sm=4):
+        self.sock = socket.socket(fileno=os.dup(WIRE_FDS[pin]))
+        self.sock.setblocking(False)
+        self.buf = b''
+
+halfwire = types.ModuleType('halfwire')
+halfwire.HalfWire = HalfWire
+sys.modules['halfwire'] = halfwire
 
 class Timer:
     PERIODIC, ONE_SHOT = 1, 0

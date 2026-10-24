@@ -60,6 +60,7 @@ for x, pin_x in enumerate(IO_X):
 
 link = from_config(NODE)
 touch = TouchLine(NODE)
+link.below = touch.relay     # the nodes below: their touches out on our BED_PROBE
 bridge = Bridge(link)     # only used when a host talks to this node over USB
 npx = NeoPixel(Pin(16), 1)
 

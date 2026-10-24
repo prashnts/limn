@@ -1,6 +1,6 @@
 # Limn Resistive Touch
 
-Firmware for the Dock, the bed MCUs (resistive panel, FSR array) and the plot bed (load cells), and `mcu.py` to install and update them.
+Firmware for the Dock, the bed MCUs (resistive panel, FSR array), the plot bed (load cells) and LIT (the plot bed board: the head's cell + the bed dock), and `mcu.py` to install and update them.
 
 - `main.py`: bootloader, runs the app named in `node.json`, rolls back bad updates.
 - `lib/`: shared by all MCUs. `link.py` (UART chain), `ota.py` (updates), `touch.py` (touch line), `bridge.py` (USB host). `ads1220.py` only goes to the plot bed (`APP_LIBS` in `mcu.py`).
@@ -18,7 +18,10 @@ uv run micropython/mcu.py install dock --port /dev/cu.usbmodem1101
 uv run micropython/mcu.py install rtp  --port ...
 uv run micropython/mcu.py install fsr  --port ...     # fsr_bed3 for BED_3
 uv run micropython/mcu.py install plot_bed --port ... # load cells, on the Pi's USB: docs/load-cell.md
+uv run micropython/mcu.py install lit --port ...      # LIT, the plot bed board: the head's cell + the bed dock
 ```
+
+The beds' first node (`rtp`, `fsr`) is on LIT's one wire now (`"up": {"pin": 0}`, BED_PROBE on GP1: STRATEGY.md *LIT*). On the old Dock: `"up": {"id": 0}` instead, and no `probe_pin`.
 
 `--port` can be left out when only one board is connected, or set once with `export LIMN_PORT=...`.
 
@@ -51,6 +54,15 @@ uv run micropython/mcu.py update --hop 1 --config fsr_bed3 --port <rtp port>
 `main.py` and `lib/ota.py` are only replaced with `update --force`: a broken copy needs a USB install to fix.
 
 
+## Load cell bench test
+
+How good a cell is (noise, drift, zero shift after presses, hysteresis, creep, the cable), guided step by step against LIT on USB; the report and the samples go to `notebooks/cell-test/`:
+```
+uv run micropython/cell_test.py --weights 7.5,16,24.5 --label v1 --port <LIT port>
+uv run micropython/cell_test.py --only presses --only wiggle    # no weights at hand
+```
+
+
 ## Tests
 
 On a PC, no hardware:
@@ -58,4 +70,5 @@ On a PC, no hardware:
 python3 micropython/tests/test_link.py                  # link library
 uv run python micropython/tests/test_chain.py           # Dock, RTP, FSR, plot bed as processes
 uv run python micropython/tests/test_chain.py plot_bed  # the plot bed only (fake ADS1220s)
+uv run python micropython/tests/test_chain.py lit       # LIT only
 ```

@@ -3,8 +3,10 @@
 # Copyright (C) 2026 Prashant Sinha <limn@noop.pw>
 # This file may be distributed under the terms of the GNU GPLv3 license.
 #
-# The MCUs are wired as a chain: Dock <-> node 1 <-> node 2 <-> ...
+# The MCUs are wired as a chain: Dock (or LIT) <-> node 1 <-> node 2 <-> ...
 # Every node has an `up` UART (towards the Dock) and optionally a `down` UART.
+# A segment on one wire (the pogo's BED_DATA, lib/halfwire.py) is half duplex:
+# HalfPort below takes turns with a token.
 # See micropython/STRATEGY.md for the wire format.
 #
 # This file also runs on CPython so that it can be tested on a PC:
@@ -24,6 +26,7 @@ T_CMD   = 2     # down: command text, eg. b'calibrate()'
 T_LOG   = 3     # up:   text for humans
 T_DATA  = 4     # up:   sensor sample, see pack_fsr() / pack_rtp()
 T_OTA   = 5     # both: firmware update request / reply, see lib/ota.py
+T_TOKEN = 6     # one wire only: the turn to talk, never leaves the HalfPort
 
 # Downstream frames carry the number of hops left to the target.
 # Upstream frames carry the number of hops travelled, which the Dock reads as
@@ -42,6 +45,8 @@ MAX_FRAME   = 1024  # encoded bytes; anything longer without an END is noise
 TX_BATCH    = 128   # bytes handed to the UART per pump, keeps priorities useful
 CONTROL_MAX = 32    # queued frames per priority before dropping the oldest
 BULK_MAX    = 8
+POLL_MS     = 5     # half duplex: the upper side's empty turns, at most this often
+TOKEN_MS    = 150   # half duplex: silence this long and the upper side takes the turn back
 
 # Priorities
 P_CONTROL = 0       # commands, hello: sent first
@@ -64,8 +69,12 @@ except AttributeError:
 
 try:
     _sleep_ms = time.sleep_ms
+    _ticks_ms = time.ticks_ms
+    _ticks_diff = time.ticks_diff
 except AttributeError:
     _sleep_ms = lambda ms: time.sleep(ms / 1000)
+    _ticks_ms = lambda: int(time.monotonic() * 1000)
+    _ticks_diff = lambda a, b: a - b
 
 
 def encode(ftype, hop, seq, payload=b''):
@@ -95,14 +104,19 @@ def load_node(root=''):
 
 def from_config(node):
     '''Link with the UARTs described in node.json, eg.
-    "up": {"id": 0}, "down": {"id": 0, "tx": 12, "rx": 13}'''
+    "up": {"id": 0}, "down": {"id": 0, "tx": 12, "rx": 13}, or one wire:
+    "up": {"pin": 0} (half duplex, the lower side), "down": {"pin": 0} (the upper side)'''
     def port(key):
         spec = node.get(key)
         if not spec:
             return None
+        baud = spec.get('baud', node.get('baud', BAUD))
+        if 'pin' in spec:
+            from halfwire import HalfWire
+            return HalfPort(HalfWire(spec['pin'], baud), upper=key == 'down')
         from machine import Pin
         pins = {k: Pin(spec[k]) for k in ('tx', 'rx') if k in spec}
-        return open_uart(spec['id'], node.get('baud', BAUD), **pins)
+        return open_uart(spec['id'], baud, **pins)
     return Link(up=port('up'), down=port('down'))
 
 
@@ -169,6 +183,16 @@ class Port:
             return self._bulk.pop(0)
         return None
 
+    def _batch(self):
+        batch = b''
+        while len(batch) < TX_BATCH:
+            frame = self._next()
+            if frame is None:
+                break
+            batch += frame
+            self.stats['tx'] += 1
+        return batch
+
     def pump(self):
         if self._tx:
             # Finish a partial write before anything else.
@@ -177,17 +201,62 @@ class Port:
             return
         if not self.uart.txdone():
             return
-
-        batch = b''
-        while len(batch) < TX_BATCH:
-            frame = self._next()
-            if frame is None:
-                break
-            batch += frame
-            self.stats['tx'] += 1
+        batch = self._batch()
         if batch:
             n = self.uart.write(batch) or 0
             self._tx = batch[n:]
+
+
+TOKEN = encode(T_TOKEN, 0, 0)
+
+class HalfPort(Port):
+    '''A Port on one wire: one side talks at a time. The upper side (towards
+    the host) sends what it has and a token; the lower side answers with one
+    batch and the token back, and never talks without it. A lost token: the
+    upper side takes the turn back after TOKEN_MS of silence. `active` False
+    (the upper side's bed is off): no turns at all, the queue waits.'''
+
+    def __init__(self, wire, upper):
+        super().__init__(wire)
+        self.upper = upper
+        self.active = True
+        self.mine = upper           # our turn
+        self._seen = _ticks_ms()    # the token, or bytes, last
+        self.stats['lost'] = 0
+
+    def frames(self):
+        if self.uart.any():
+            self._seen = _ticks_ms()
+        out = []
+        for f in super().frames():
+            if f.type == T_TOKEN:
+                self.stats['rx'] -= 1
+                self.mine = True
+            else:
+                out.append(f)
+        return out
+
+    def _pending(self):
+        return bool(self._control or self._latest or self._bulk)
+
+    def pump(self):
+        if not self.uart.txdone():
+            return
+        if self.upper:
+            if not self.active:
+                return
+            if not self.mine:
+                if _ticks_diff(_ticks_ms(), self._seen) < TOKEN_MS:
+                    return
+                self.stats['lost'] += 1
+                self.mine = True
+            if not self._pending() and _ticks_diff(_ticks_ms(), self._seen) < POLL_MS:
+                return
+        elif not self.mine:
+            return
+        self.uart.write(self._batch() + TOKEN)
+        self.mine = False
+        self._seen = _ticks_ms()
 
 
 def _priority(ftype, hop, payload):
@@ -202,12 +271,13 @@ class Link:
     '''Routes frames for one node. Only the Dock has no `up` UART.'''
 
     def __init__(self, up=None, down=None, root=''):
-        self.up = Port(up) if up else None
-        self.down = Port(down) if down else None
+        self.up = up if isinstance(up, Port) else Port(up) if up else None
+        self.down = down if isinstance(down, Port) else Port(down) if down else None
         self.root = root        # where files live, only differs in tests
         self.quiet = False      # set during updates: no sensor data or logs
         self.ota = None
         self.tap = None         # tap(frame): sees frames from below and our own, for a USB host
+        self.below = None       # below(frame): sees frames from below, eg. touch.relay
         self._seq = 0
 
     def poll(self):
@@ -218,6 +288,8 @@ class Link:
                 hop = min(f.hop + 1, MAX_HOP)
                 if self.tap:
                     self.tap(Frame(f.type, hop, f.seq, f.payload))
+                if self.below:
+                    self.below(Frame(f.type, hop, f.seq, f.payload))
                 if self.up:
                     self.up.queue(encode(f.type, hop, f.seq, f.payload),
                                   *_priority(f.type, hop, f.payload))

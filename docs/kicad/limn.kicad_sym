@@ -667,7 +667,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -7.62 10.16 0)
+			(at -10.16 19.05 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -676,7 +676,7 @@
 			)
 		)
 		(property "Value" "FE1.1s USB hub"
-			(at -7.62 7.62 0)
+			(at -10.16 16.51 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -702,7 +702,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "FE1.1s 4-port USB 2.0 hub breakout (single TT: the full-speed MCUs share 12 Mbit/s)"
+		(property "Description" "FE1.1s 4-port USB 2.0 hub breakout, its pads: USB in + 4 x USB out (single TT: the full-speed MCUs share 12 Mbit/s; a high-speed device has the 480 Mbit/s)"
 			(at 0 0 0)
 			(effects
 				(font
@@ -713,8 +713,8 @@
 		)
 		(symbol "FE1.1s_USB_hub_0_1"
 			(rectangle
-				(start -7.62 6.35)
-				(end 7.62 -6.35)
+				(start -10.16 15.24)
+				(end 10.16 -15.24)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -725,10 +725,10 @@
 			)
 		)
 		(symbol "FE1.1s_USB_hub_1_1"
-			(pin passive line
-				(at -10.16 2.54 0)
+			(pin power_in line
+				(at -12.7 5.08 0)
 				(length 2.54)
-				(name "UP"
+				(name "5V"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -743,10 +743,10 @@
 					)
 				)
 			)
-			(pin power_in line
-				(at -10.16 0 0)
+			(pin passive line
+				(at -12.7 2.54 0)
 				(length 2.54)
-				(name "5V"
+				(name "GND"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -761,10 +761,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at -10.16 -2.54 0)
+			(pin bidirectional line
+				(at -12.7 -2.54 0)
 				(length 2.54)
-				(name "GND"
+				(name "UP D+"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -779,10 +779,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at 10.16 3.81 180)
+			(pin bidirectional line
+				(at -12.7 -5.08 0)
 				(length 2.54)
-				(name "DN1"
+				(name "UP D-"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -797,10 +797,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at 10.16 1.27 180)
+			(pin bidirectional line
+				(at 12.7 12.7 180)
 				(length 2.54)
-				(name "DN2"
+				(name "DN1 D+"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -815,10 +815,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at 10.16 -1.27 180)
+			(pin bidirectional line
+				(at 12.7 10.16 180)
 				(length 2.54)
-				(name "DN3"
+				(name "DN1 D-"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -833,10 +833,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at 10.16 -3.81 180)
+			(pin bidirectional line
+				(at 12.7 5.08 180)
 				(length 2.54)
-				(name "DN4"
+				(name "DN2 D+"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -844,6 +844,96 @@
 					)
 				)
 				(number "7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 2.54 180)
+				(length 2.54)
+				(name "DN2 D-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 -2.54 180)
+				(length 2.54)
+				(name "DN3 D+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 -5.08 180)
+				(length 2.54)
+				(name "DN3 D-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "10"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 -10.16 180)
+				(length 2.54)
+				(name "DN4 D+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "11"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 12.7 -12.7 180)
+				(length 2.54)
+				(name "DN4 D-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "12"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -1182,7 +1272,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "LM2596 buck module (LM_Buck0), on the Aux PCB"
+		(property "Description" "LM2596 buck module (LM_Buck0): the motors (Z, K) only"
 			(at 0 0 0)
 			(effects
 				(font
@@ -2582,6 +2672,147 @@
 		)
 		(embedded_fonts no)
 	)
+	(symbol "Mini_buck_3A"
+		(pin_names
+			(offset 0.762)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "U"
+			(at -7.62 7.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "Mini buck 3 A"
+			(at -7.62 5.08 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Mini 3 A adjustable buck module: default 1.25 V, solder jumpers 1.5/1.8/2.5/3.3/5 V; 11 x 7 dots, terminals in the corners"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "Mini_buck_3A_0_1"
+			(rectangle
+				(start -7.62 3.81)
+				(end 7.62 -3.81)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+		)
+		(symbol "Mini_buck_3A_1_1"
+			(pin power_in line
+				(at -10.16 1.27 0)
+				(length 2.54)
+				(name "IN+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -10.16 -1.27 0)
+				(length 2.54)
+				(name "IN-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_out line
+				(at 10.16 1.27 180)
+				(length 2.54)
+				(name "OUT+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 10.16 -1.27 180)
+				(length 2.54)
+				(name "OUT-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "4"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
 	(symbol "PD_trigger_12V"
 		(pin_names
 			(offset 0.762)
@@ -3005,273 +3236,6 @@
 		)
 		(embedded_fonts no)
 	)
-	(symbol "Pico_WH"
-		(pin_names
-			(offset 0.762)
-		)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(property "Reference" "U"
-			(at -12.7 15.24 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Pico WH (rpi)"
-			(at -12.7 12.7 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Raspberry Pi Pico WH on the Aux PCB: Klipper [mcu rpi]. Used pins only"
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(symbol "Pico_WH_0_1"
-			(rectangle
-				(start -12.7 11.43)
-				(end 12.7 -11.43)
-				(stroke
-					(width 0.254)
-					(type default)
-				)
-				(fill
-					(type background)
-				)
-			)
-		)
-		(symbol "Pico_WH_1_1"
-			(pin power_out line
-				(at -15.24 6.35 0)
-				(length 2.54)
-				(name "VBUS"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_in line
-				(at -15.24 3.81 0)
-				(length 2.54)
-				(name "VSYS"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_out line
-				(at -15.24 1.27 0)
-				(length 2.54)
-				(name "3V3(OUT)"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -15.24 -1.27 0)
-				(length 2.54)
-				(name "GND"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -15.24 -6.35 0)
-				(length 2.54)
-				(name "USB"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 15.24 8.89 180)
-				(length 2.54)
-				(name "GP4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 15.24 6.35 180)
-				(length 2.54)
-				(name "GP5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 15.24 1.27 180)
-				(length 2.54)
-				(name "GP9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 15.24 -3.81 180)
-				(length 2.54)
-				(name "GP15"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 15.24 -6.35 180)
-				(length 2.54)
-				(name "GP16"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "10"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 15.24 -8.89 180)
-				(length 2.54)
-				(name "GP17"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "11"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-		)
-		(embedded_fonts no)
-	)
 	(symbol "Pololu_MOSFET_switch"
 		(pin_names
 			(offset 0.762)
@@ -3413,165 +3377,6 @@
 		)
 		(embedded_fonts no)
 	)
-	(symbol "Pololu_power_switch"
-		(pin_names
-			(offset 0.762)
-		)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(property "Reference" "U"
-			(at -7.62 10.16 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Pololu power switch"
-			(at -7.62 7.62 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Pololu power switch (pushbutton type): ON / OFF pulse inputs, latching"
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(symbol "Pololu_power_switch_0_1"
-			(rectangle
-				(start -7.62 6.35)
-				(end 7.62 -6.35)
-				(stroke
-					(width 0.254)
-					(type default)
-				)
-				(fill
-					(type background)
-				)
-			)
-		)
-		(symbol "Pololu_power_switch_1_1"
-			(pin power_in line
-				(at -10.16 3.81 0)
-				(length 2.54)
-				(name "VIN"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -10.16 1.27 0)
-				(length 2.54)
-				(name "ON"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at -10.16 -1.27 0)
-				(length 2.54)
-				(name "OFF"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -10.16 -3.81 0)
-				(length 2.54)
-				(name "GND"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_out line
-				(at 10.16 0 180)
-				(length 2.54)
-				(name "VOUT"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-		)
-		(embedded_fonts no)
-	)
 	(symbol "Pro_Micro_RP2040"
 		(pin_names
 			(offset 0.762)
@@ -3615,7 +3420,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "SparkFun Pro Micro RP2040 (DEV-18288); pins numbered by header position, 25-28 Qwiic, 29 USB-C"
+		(property "Description" "SparkFun Pro Micro RP2040 (DEV-18288); pins numbered by header position, 25-28 Qwiic, 29 USB-C, 30/31 the D+/D- pads underneath"
 			(at 0 0 0)
 			(effects
 				(font
@@ -4160,6 +3965,42 @@
 					)
 				)
 			)
+			(pin bidirectional line
+				(at 10.16 -24.13 90)
+				(length 5.08)
+				(name "D+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "30"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 15.24 -24.13 90)
+				(length 5.08)
+				(name "D-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "31"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
 		)
 		(embedded_fonts no)
 	)
@@ -4322,7 +4163,7 @@
 		)
 		(embedded_fonts no)
 	)
-	(symbol "QRE1113_breakout"
+	(symbol "RP2040_Tiny_beam"
 		(pin_names
 			(offset 0.762)
 		)
@@ -4330,7 +4171,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -7.62 8.89 0)
+			(at -22.86 16.51 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4338,8 +4179,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "SparkFun QRE1113 (analog)"
-			(at -7.62 6.35 0)
+		(property "Value" "RP2040-Tiny (beam)"
+			(at -22.86 13.97 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4365,7 +4206,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "SparkFun QRE1113 line sensor breakout, analog (ROB-09453): IR LED with its resistor, phototransistor with a pull-up; OUT falls as a light surface comes close (from memory)"
+		(property "Description" "RP2040-Tiny: the beam node. Used pins only"
 			(at 0 0 0)
 			(effects
 				(font
@@ -4374,10 +4215,10 @@
 				(hide yes)
 			)
 		)
-		(symbol "QRE1113_breakout_0_1"
+		(symbol "RP2040_Tiny_beam_0_1"
 			(rectangle
-				(start -7.62 5.08)
-				(end 7.62 -5.08)
+				(start -22.86 12.7)
+				(end 22.86 -12.7)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -4387,11 +4228,83 @@
 				)
 			)
 		)
-		(symbol "QRE1113_breakout_1_1"
+		(symbol "RP2040_Tiny_beam_1_1"
 			(pin power_in line
-				(at -10.16 2.54 0)
+				(at -25.4 5.08 0)
 				(length 2.54)
-				(name "VCC"
+				(name "5V"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "23"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_out line
+				(at -25.4 2.54 0)
+				(length 2.54)
+				(name "3V3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "21"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -25.4 0 0)
+				(length 2.54)
+				(name "GND"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "22"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -25.4 -5.08 0)
+				(length 2.54)
+				(name "USB"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "24"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 25.4 10.16 180)
+				(length 2.54)
+				(name "GP0 data (PIO)"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -4407,9 +4320,9 @@
 				)
 			)
 			(pin output line
-				(at -10.16 0 0)
+				(at 25.4 5.08 180)
 				(length 2.54)
-				(name "OUT"
+				(name "GP1 probe"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -4424,17 +4337,71 @@
 					)
 				)
 			)
-			(pin passive line
-				(at -10.16 -2.54 0)
+			(pin output line
+				(at 25.4 0 180)
 				(length 2.54)
-				(name "GND"
+				(name "GP6 LED X"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "3"
+				(number "7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 25.4 -2.54 180)
+				(length 2.54)
+				(name "GP7 LED Y"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "8"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 25.4 -7.62 180)
+				(length 2.54)
+				(name "GP26 ADC0 beam X"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "17"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 25.4 -10.16 180)
+				(length 2.54)
+				(name "GP27 ADC1 beam Y"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "18"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -4453,7 +4420,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -17.78 26.67 0)
+			(at -20.32 26.67 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4462,7 +4429,7 @@
 			)
 		)
 		(property "Value" "RP2040-Tiny (FSR)"
-			(at -17.78 24.13 0)
+			(at -20.32 24.13 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4499,8 +4466,8 @@
 		)
 		(symbol "RP2040_Tiny_fsr_0_1"
 			(rectangle
-				(start -17.78 22.86)
-				(end 17.78 -22.86)
+				(start -20.32 22.86)
+				(end 20.32 -22.86)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -4512,720 +4479,6 @@
 		)
 		(symbol "RP2040_Tiny_fsr_1_1"
 			(pin power_in line
-				(at -20.32 5.08 0)
-				(length 2.54)
-				(name "5V"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_out line
-				(at -20.32 2.54 0)
-				(length 2.54)
-				(name "3V3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -20.32 0 0)
-				(length 2.54)
-				(name "GND"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -20.32 -5.08 0)
-				(length 2.54)
-				(name "USB"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 20.32 180)
-				(length 2.54)
-				(name "GP0 UART0 TX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 17.78 180)
-				(length 2.54)
-				(name "GP1 UART0 RX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 15.24 180)
-				(length 2.54)
-				(name "GP2 touch"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 10.16 180)
-				(length 2.54)
-				(name "GP8 col 4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 7.62 180)
-				(length 2.54)
-				(name "GP9 col 1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 5.08 180)
-				(length 2.54)
-				(name "GP10 col 0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "10"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 2.54 180)
-				(length 2.54)
-				(name "GP11 col 3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "11"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 0 180)
-				(length 2.54)
-				(name "GP12 col 2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "12"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 -2.54 180)
-				(length 2.54)
-				(name "GP13 col 5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "13"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 -5.08 180)
-				(length 2.54)
-				(name "GP14 col 6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "14"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 -7.62 180)
-				(length 2.54)
-				(name "GP15 col 7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "15"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 -12.7 180)
-				(length 2.54)
-				(name "GP26 row 3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "16"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 -15.24 180)
-				(length 2.54)
-				(name "GP27 row 2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "17"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 -17.78 180)
-				(length 2.54)
-				(name "GP28 row 1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "18"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 -20.32 180)
-				(length 2.54)
-				(name "GP29 row 0"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "19"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-		)
-		(embedded_fonts no)
-	)
-	(symbol "RP2040_Tiny_rtp"
-		(pin_names
-			(offset 0.762)
-		)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(property "Reference" "U"
-			(at -17.78 19.05 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "RP2040-Tiny (RTP)"
-			(at -17.78 16.51 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "RP2040-Tiny: the RTP node (lrt_resistive_touch.py). Used pins only"
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(symbol "RP2040_Tiny_rtp_0_1"
-			(rectangle
-				(start -17.78 15.24)
-				(end 17.78 -15.24)
-				(stroke
-					(width 0.254)
-					(type default)
-				)
-				(fill
-					(type background)
-				)
-			)
-		)
-		(symbol "RP2040_Tiny_rtp_1_1"
-			(pin power_in line
-				(at -20.32 5.08 0)
-				(length 2.54)
-				(name "5V"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_out line
-				(at -20.32 2.54 0)
-				(length 2.54)
-				(name "3V3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -20.32 0 0)
-				(length 2.54)
-				(name "GND"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -20.32 -5.08 0)
-				(length 2.54)
-				(name "USB"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 12.7 180)
-				(length 2.54)
-				(name "GP0 UART0 TX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 10.16 180)
-				(length 2.54)
-				(name "GP1 UART0 RX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 7.62 180)
-				(length 2.54)
-				(name "GP2 touch"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 20.32 2.54 180)
-				(length 2.54)
-				(name "GP4 UART1 TX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 20.32 0 180)
-				(length 2.54)
-				(name "GP5 UART1 RX"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "9"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 20.32 -5.08 180)
-				(length 2.54)
-				(name "GP26 XM"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "10"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 20.32 -7.62 180)
-				(length 2.54)
-				(name "GP27 YP"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "11"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 20.32 -10.16 180)
-				(length 2.54)
-				(name "GP28 XP"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "12"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin bidirectional line
-				(at 20.32 -12.7 180)
-				(length 2.54)
-				(name "GP29 YM"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "13"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-		)
-		(embedded_fonts no)
-	)
-	(symbol "RP2040_Zero_dock"
-		(pin_names
-			(offset 0.762)
-		)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(property "Reference" "U"
-			(at -20.32 16.51 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "RP2040-Zero (Dock)"
-			(at -20.32 13.97 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Waveshare RP2040-Zero: the Dock (lrt_dock_mcu.py). Used pins only"
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(symbol "RP2040_Zero_dock_0_1"
-			(rectangle
-				(start -20.32 12.7)
-				(end 20.32 -12.7)
-				(stroke
-					(width 0.254)
-					(type default)
-				)
-				(fill
-					(type background)
-				)
-			)
-		)
-		(symbol "RP2040_Zero_dock_1_1"
-			(pin power_out line
 				(at -22.86 5.08 0)
 				(length 2.54)
 				(name "5V"
@@ -5235,7 +4488,7 @@
 						)
 					)
 				)
-				(number "1"
+				(number "23"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5253,7 +4506,7 @@
 						)
 					)
 				)
-				(number "2"
+				(number "21"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5271,7 +4524,7 @@
 						)
 					)
 				)
-				(number "3"
+				(number "22"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5289,7 +4542,43 @@
 						)
 					)
 				)
-				(number "4"
+				(number "24"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at 22.86 20.32 180)
+				(length 2.54)
+				(name "GP0 data (PIO)"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 17.78 180)
+				(length 2.54)
+				(name "GP1 probe"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5300,7 +4589,364 @@
 			(pin output line
 				(at 22.86 10.16 180)
 				(length 2.54)
-				(name "GP7 PWR_OFF"
+				(name "GP8 col 4"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "9"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 7.62 180)
+				(length 2.54)
+				(name "GP9 col 1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "10"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 5.08 180)
+				(length 2.54)
+				(name "GP10 col 0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "11"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 2.54 180)
+				(length 2.54)
+				(name "GP11 col 3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "12"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 0 180)
+				(length 2.54)
+				(name "GP12 col 2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "13"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 -2.54 180)
+				(length 2.54)
+				(name "GP13 col 5"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "14"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 -5.08 180)
+				(length 2.54)
+				(name "GP14 col 6"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "15"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 22.86 -7.62 180)
+				(length 2.54)
+				(name "GP15 col 7"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "16"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 22.86 -12.7 180)
+				(length 2.54)
+				(name "GP26 row 3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "17"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 22.86 -15.24 180)
+				(length 2.54)
+				(name "GP27 row 2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "18"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 22.86 -17.78 180)
+				(length 2.54)
+				(name "GP28 row 1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "19"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin input line
+				(at 22.86 -20.32 180)
+				(length 2.54)
+				(name "GP29 row 0"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "20"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+	(symbol "RP2040_Zero_aux"
+		(pin_names
+			(offset 0.762)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "U"
+			(at -16.51 15.24 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "RP2040-Zero (rpi)"
+			(at -16.51 12.7 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Waveshare RP2040-Zero: Klipper [mcu rpi] on the Aux PCB. Used pins only"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "RP2040_Zero_aux_0_1"
+			(rectangle
+				(start -16.51 11.43)
+				(end 16.51 -11.43)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+		)
+		(symbol "RP2040_Zero_aux_1_1"
+			(pin power_in line
+				(at -19.05 5.08 0)
+				(length 2.54)
+				(name "5V"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "23"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_out line
+				(at -19.05 2.54 0)
+				(length 2.54)
+				(name "3V3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "21"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -19.05 0 0)
+				(length 2.54)
+				(name "GND"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "22"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -19.05 -5.08 0)
+				(length 2.54)
+				(name "USB"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "24"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 19.05 8.89 180)
+				(length 2.54)
+				(name "GP4 MPU_SCL"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5315,10 +4961,10 @@
 					)
 				)
 			)
-			(pin output line
-				(at 22.86 7.62 180)
+			(pin bidirectional line
+				(at 19.05 6.35 180)
 				(length 2.54)
-				(name "GP8 PWR_ON"
+				(name "GP5 MPU_SDA"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5334,16 +4980,16 @@
 				)
 			)
 			(pin output line
-				(at 22.86 2.54 180)
+				(at 19.05 1.27 180)
 				(length 2.54)
-				(name "GP11 PROBE_OUT"
+				(name "GP9 BUZZER"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "7"
+				(number "10"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5352,16 +4998,16 @@
 				)
 			)
 			(pin output line
-				(at 22.86 -2.54 180)
+				(at 19.05 -3.81 180)
 				(length 2.54)
-				(name "GP12 UART0 TX"
+				(name "GP13 INDOCK"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "8"
+				(number "14"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5369,17 +5015,17 @@
 					)
 				)
 			)
-			(pin input line
-				(at 22.86 -5.08 180)
+			(pin output line
+				(at 19.05 -6.35 180)
 				(length 2.54)
-				(name "GP13 UART0 RX"
+				(name "GP14 LAMP"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "9"
+				(number "15"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5387,17 +5033,17 @@
 					)
 				)
 			)
-			(pin input line
-				(at 22.86 -10.16 180)
+			(pin output line
+				(at 19.05 -8.89 180)
 				(length 2.54)
-				(name "GP29 ADC3"
+				(name "GP15 UI"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "10"
+				(number "16"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5711,147 +5357,6 @@
 		)
 		(embedded_fonts no)
 	)
-	(symbol "Resistive_panel"
-		(pin_names
-			(offset 0.762)
-		)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(property "Reference" "U"
-			(at -7.62 10.16 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "4-wire resistive panel"
-			(at -7.62 7.62 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "4-wire resistive touch panel"
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(symbol "Resistive_panel_0_1"
-			(rectangle
-				(start -7.62 6.35)
-				(end 7.62 -6.35)
-				(stroke
-					(width 0.254)
-					(type default)
-				)
-				(fill
-					(type background)
-				)
-			)
-		)
-		(symbol "Resistive_panel_1_1"
-			(pin passive line
-				(at -10.16 3.81 0)
-				(length 2.54)
-				(name "X+"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -10.16 1.27 0)
-				(length 2.54)
-				(name "X-"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -10.16 -1.27 0)
-				(length 2.54)
-				(name "Y+"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "3"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -10.16 -3.81 0)
-				(length 2.54)
-				(name "Y-"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "4"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-		)
-		(embedded_fonts no)
-	)
 	(symbol "Tool_coupling"
 		(pin_names
 			(offset 0.762)
@@ -5860,7 +5365,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -10.16 13.97 0)
+			(at -10.16 11.43 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5869,7 +5374,7 @@
 			)
 		)
 		(property "Value" "Tool coupling (planned)"
-			(at -10.16 11.43 0)
+			(at -10.16 8.89 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5895,7 +5400,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "The toolchanger coupling (planned): 5 V + GND + data pins to the tool"
+		(property "Description" "The toolchanger coupling (planned): 5 V + GND, the ID line and USB to the tool"
 			(at 0 0 0)
 			(effects
 				(font
@@ -5906,8 +5411,8 @@
 		)
 		(symbol "Tool_coupling_0_1"
 			(rectangle
-				(start -10.16 10.16)
-				(end 10.16 -10.16)
+				(start -10.16 7.62)
+				(end 10.16 -7.62)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -5919,7 +5424,7 @@
 		)
 		(symbol "Tool_coupling_1_1"
 			(pin power_in line
-				(at -12.7 7.62 0)
+				(at -12.7 5.08 0)
 				(length 2.54)
 				(name "5V"
 					(effects
@@ -5937,7 +5442,7 @@
 				)
 			)
 			(pin passive line
-				(at -12.7 5.08 0)
+				(at -12.7 2.54 0)
 				(length 2.54)
 				(name "GND"
 					(effects
@@ -5955,7 +5460,7 @@
 				)
 			)
 			(pin passive line
-				(at -12.7 2.54 0)
+				(at -12.7 0 0)
 				(length 2.54)
 				(name "ID"
 					(effects
@@ -5973,9 +5478,9 @@
 				)
 			)
 			(pin passive line
-				(at -12.7 0 0)
+				(at -12.7 -2.54 0)
 				(length 2.54)
-				(name "EN"
+				(name "USB D+"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -5991,9 +5496,9 @@
 				)
 			)
 			(pin passive line
-				(at -12.7 -2.54 0)
+				(at -12.7 -5.08 0)
 				(length 2.54)
-				(name "PWM"
+				(name "USB D-"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6008,46 +5513,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at -12.7 -5.08 0)
-				(length 2.54)
-				(name "SPARE1"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin passive line
-				(at -12.7 -7.62 0)
-				(length 2.54)
-				(name "SPARE2"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
 		)
 		(embedded_fonts no)
 	)
-	(symbol "Toolhead_MCU"
+	(symbol "USB-C_breakout"
 		(pin_names
 			(offset 0.762)
 		)
@@ -6055,7 +5524,7 @@
 		(in_bom yes)
 		(on_board yes)
 		(property "Reference" "U"
-			(at -12.7 11.43 0)
+			(at -8.89 10.16 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6063,8 +5532,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Toolhead MCU (planned)"
-			(at -12.7 8.89 0)
+		(property "Value" "Adafruit USB-C breakout"
+			(at -8.89 7.62 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6090,7 +5559,7 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Toolhead MCU (planned, 2026-10-12): RP2350/RP2040-Zero class, Klipper [mcu tool]. K driver + endstop, ADXL345, HX711, QRE1113, the tool ID / power / data"
+		(property "Description" "Adafruit USB-C breakout: 5.1k on CC1/CC2 (a device), both D+/D- pairs joined"
 			(at 0 0 0)
 			(effects
 				(font
@@ -6099,10 +5568,10 @@
 				(hide yes)
 			)
 		)
-		(symbol "Toolhead_MCU_0_1"
+		(symbol "USB-C_breakout_0_1"
 			(rectangle
-				(start -12.7 7.62)
-				(end 12.7 -7.62)
+				(start -8.89 6.35)
+				(end 8.89 -6.35)
 				(stroke
 					(width 0.254)
 					(type default)
@@ -6112,11 +5581,11 @@
 				)
 			)
 		)
-		(symbol "Toolhead_MCU_1_1"
-			(pin passive line
-				(at -15.24 2.54 0)
+		(symbol "USB-C_breakout_1_1"
+			(pin power_out line
+				(at -11.43 3.81 0)
 				(length 2.54)
-				(name "USB"
+				(name "VBUS"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6131,10 +5600,10 @@
 					)
 				)
 			)
-			(pin power_in line
-				(at -15.24 0 0)
+			(pin bidirectional line
+				(at -11.43 1.27 0)
 				(length 2.54)
-				(name "5V"
+				(name "D+"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6149,10 +5618,10 @@
 					)
 				)
 			)
-			(pin passive line
-				(at -15.24 -2.54 0)
+			(pin bidirectional line
+				(at -11.43 -1.27 0)
 				(length 2.54)
-				(name "GND"
+				(name "D-"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6167,10 +5636,10 @@
 					)
 				)
 			)
-			(pin output line
-				(at 15.24 5.08 180)
+			(pin passive line
+				(at -11.43 -3.81 0)
 				(length 2.54)
-				(name "EN_5V"
+				(name "GND"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6185,10 +5654,10 @@
 					)
 				)
 			)
-			(pin output line
-				(at 15.24 2.54 180)
+			(pin passive line
+				(at 11.43 0 180)
 				(length 2.54)
-				(name "TOOL_EN"
+				(name "cable"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6196,60 +5665,6 @@
 					)
 				)
 				(number "5"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 15.24 0 180)
-				(length 2.54)
-				(name "TOOL_PWM"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "6"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 15.24 -2.54 180)
-				(length 2.54)
-				(name "TOOL_ID"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "7"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin input line
-				(at 15.24 -5.08 180)
-				(length 2.54)
-				(name "LOCK"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "8"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -6391,6 +5806,165 @@
 					)
 				)
 				(number "4"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+		)
+		(embedded_fonts no)
+	)
+	(symbol "USB_cable_pads"
+		(pin_names
+			(offset 0.762)
+		)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "U"
+			(at -8.89 10.16 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "USB cable (cut)"
+			(at -8.89 7.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "A USB cable cut and soldered to the board: VBUS, D+, D-, GND"
+			(at 0 0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(symbol "USB_cable_pads_0_1"
+			(rectangle
+				(start -8.89 6.35)
+				(end 8.89 -6.35)
+				(stroke
+					(width 0.254)
+					(type default)
+				)
+				(fill
+					(type background)
+				)
+			)
+		)
+		(symbol "USB_cable_pads_1_1"
+			(pin passive line
+				(at -11.43 3.81 0)
+				(length 2.54)
+				(name "VBUS"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "1"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at -11.43 1.27 0)
+				(length 2.54)
+				(name "D+"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "2"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin bidirectional line
+				(at -11.43 -1.27 0)
+				(length 2.54)
+				(name "D-"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "3"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at -11.43 -3.81 0)
+				(length 2.54)
+				(name "GND"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "4"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin passive line
+				(at 11.43 0 180)
+				(length 2.54)
+				(name "cable"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "5"
 					(effects
 						(font
 							(size 1.27 1.27)

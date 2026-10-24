@@ -171,6 +171,90 @@ def test_flush_empties_queues():
     assert not node.busy()
 
 
+class OneWire:
+    '''Both ends of one half-duplex wire. Bytes written in the same round by
+    both ends collide: both get garbage, and it is counted.'''
+
+    def __init__(self):
+        self.ends = [FakeUART(), FakeUART()]
+        self.collisions = 0
+        for e in self.ends:
+            e.write = self._writer(e)
+
+    def _writer(self, end):
+        def write(data):
+            end.written += data
+            return len(data)
+        return write
+
+    def deliver(self):
+        a, b = self.ends
+        if a.written and b.written:
+            self.collisions += 1
+            a.inbox += b'\x55' * len(b.written)
+            b.inbox += b'\x55' * len(a.written)
+        else:
+            b.inbox += a.written
+            a.inbox += b.written
+        a.written = b.written = b''
+
+def test_half_duplex_takes_turns():
+    link.POLL_MS, poll_ms = 0, link.POLL_MS
+    try:
+        line = OneWire()
+        top = Link(down=link.HalfPort(line.ends[0], upper=True))
+        bed = Link(up=link.HalfPort(line.ends[1], upper=False))
+        got_top, got_bed = [], []
+        for i in range(40):
+            top.send_down(T_CMD, b'cmd %d' % i, hop=1)
+            bed.send(T_LOG, b'log %d' % i)
+            bed.send(T_DATA, link.pack_fsr(42, [(1, i % 8, 500)]))
+            for _ in range(4):
+                got_top += top.poll()
+                got_bed += bed.poll()
+                line.deliver()
+        for _ in range(20):
+            got_top += top.poll()
+            got_bed += bed.poll()
+            line.deliver()
+        assert line.collisions == 0
+        assert [f.payload for f in got_bed] == [b'cmd %d' % i for i in range(40)]
+        assert sum(f.type == T_LOG for f in got_top) > 0 and any(f.type == T_DATA for f in got_top)
+        assert top.down.stats['bad'] == bed.up.stats['bad'] == 0
+    finally:
+        link.POLL_MS = poll_ms
+
+def test_half_duplex_lower_side_waits_for_its_turn():
+    line = OneWire()
+    bed = Link(up=link.HalfPort(line.ends[1], upper=False))
+    bed.send(T_HELLO, b'fsr>>x')
+    for _ in range(5):
+        bed.poll()
+    assert line.ends[1].written == b''          # never talks first
+    line.ends[1].inbox += link.TOKEN
+    bed.poll()
+    assert line.ends[1].written.endswith(link.TOKEN) and b'fsr>>x' in line.ends[1].written
+
+def test_half_duplex_upper_side_takes_a_lost_turn_back():
+    line = OneWire()
+    port = link.HalfPort(line.ends[0], upper=True)
+    top = Link(down=port)
+    port._seen -= link.POLL_MS + 1              # an empty turn is due
+    top.poll()
+    assert line.ends[0].written == link.TOKEN    # its turn passed, the reply never comes
+    line.ends[0].written = b''
+    port._seen -= link.TOKEN_MS + 1
+    top.send_down(T_CMD, b'ping()')
+    top.poll()
+    assert port.stats['lost'] == 1 and b'ping()' in line.ends[0].written
+    port.active = False                         # the bed is off: no turns
+    line.ends[0].written = b''
+    port._seen -= link.TOKEN_MS + 1
+    top.send_down(T_CMD, b'ping()')
+    top.poll()
+    assert line.ends[0].written == b''
+
+
 if __name__ == '__main__':
     tests = [(name, fn) for name, fn in globals().items() if name.startswith('test_')]
     for name, fn in tests:

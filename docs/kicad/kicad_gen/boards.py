@@ -61,9 +61,17 @@ def pi4():
 
 
 def usb_hub():
-    return block('FE1.1s_USB_hub', 'FE1.1s 4-port USB 2.0 hub breakout (single TT: the full-speed MCUs share 12 Mbit/s)',
-                 left=[('UP', P), ('5V', PI), ('GND', P)],
-                 right=[('DN1', P), ('DN2', P), ('DN3', P), ('DN4', P)], value='FE1.1s USB hub')
+    return block('FE1.1s_USB_hub', 'FE1.1s 4-port USB 2.0 hub breakout, its pads: USB in + 4 x USB out (single TT: '
+                 'the full-speed MCUs share 12 Mbit/s; a high-speed device has the 480 Mbit/s)',
+                 left=[('5V', PI), ('GND', P), None, ('UP D+', B), ('UP D-', B)],
+                 right=[('DN1 D+', B), ('DN1 D-', B), None, ('DN2 D+', B), ('DN2 D-', B), None,
+                        ('DN3 D+', B), ('DN3 D-', B), None, ('DN4 D+', B), ('DN4 D-', B)],
+                 value='FE1.1s USB hub')
+
+
+def usb_pads(name, desc, value, vbus=P):
+    '''A USB cable (or a USB-C breakout) on the board: its four wires as pads, the cable as one pin.'''
+    return block(name, desc, left=[('VBUS', vbus), ('D+', B), ('D-', B), ('GND', P)], right=[('cable', P)], value=value)
 
 
 def uvc(name, desc, value):
@@ -111,10 +119,18 @@ def pico():
                  value='Pico WH (rpi)')
 
 
+RP2040_ZERO_PADS = {**{n: n + 1 for n in range(16)}, 26: 17, 27: 18, 28: 19, 29: 20}   # GPn -> Waveshare's pin
+
+
 def rp2040_zero(name, desc, value, right_pins, left_extra=(), usb_powered=False):
-    '''usb_powered: its 5V pin is the USB's VBUS, a supply for what hangs on it.'''
-    return block(name, desc, left=[('5V', PO if usb_powered else PI), ('3V3', PO), ('GND', P), None, ('USB', P)] + list(left_extra),
-                 right=right_pins, value=value)
+    '''usb_powered: its 5V pin is the USB's VBUS, a supply for what hangs on it. Pin numbers: Waveshare's
+    (the Zero and the Tiny alike): GP0-GP15 = 1-16, GP26-29 = 17-20, 3V3 21, GND 22, 5V 23; 24 = the USB.'''
+    def numbered(p):
+        m = p and re.match(r'GP(\d+)', p[0])
+        return p if not m else (p[0], p[1], RP2040_ZERO_PADS[int(m.group(1))])
+    return block(name, desc, left=[('5V', PO if usb_powered else PI, 23), ('3V3', PO, 21), ('GND', P, 22), None,
+                                   ('USB', P, 24)] + [numbered(p) for p in left_extra],
+                 right=[numbered(p) for p in right_pins], value=value)
 
 
 def ws2812(n, desc, value, name=None):
@@ -170,8 +186,8 @@ def toolhead_mcu():
 
 
 def tool_coupling():
-    return block('Tool_coupling', 'The toolchanger coupling (planned): 5 V + GND + data pins to the tool',
-                 left=[('5V', PI), ('GND', P), ('ID', P), ('EN', P), ('PWM', P), ('SPARE1', P), ('SPARE2', P)],
+    return block('Tool_coupling', 'The toolchanger coupling (planned): 5 V + GND, the ID line and USB to the tool',
+                 left=[('5V', PI), ('GND', P), ('ID', P), ('USB D+', P), ('USB D-', P)],
                  value='Tool coupling (planned)')
 
 
@@ -213,8 +229,10 @@ def pro_micro():
     pins += [pin(k, 22.86, 13.97 - 2.54 * i, 180, n, str(i + 13), length=3.81) for i, (n, k) in enumerate(right)]
     pins += [pin(k, -10.16 + 5.08 * i, -24.13, 90, n, str(i + 25), length=5.08) for i, (n, k) in enumerate(qwiic)]
     pins.append(pin(P, 0, 24.13, 270, 'USB-C', '29', length=5.08))
+    pins.append(pin(B, 10.16, -24.13, 90, 'D+', '30', length=5.08))     # the USB's D+/D- pads underneath
+    pins.append(pin(B, 15.24, -24.13, 90, 'D-', '31', length=5.08))
     return _box('Pro_Micro_RP2040', 'SparkFun Pro Micro RP2040 (DEV-18288); pins numbered by header position, '
-                '25-28 Qwiic, 29 USB-C', 19.05, 19.05, pins, 'Pro Micro RP2040'), 19.05, 19.05
+                '25-28 Qwiic, 29 USB-C, 30/31 the D+/D- pads underneath', 19.05, 19.05, pins, 'Pro Micro RP2040'), 19.05, 19.05
 
 
 def gpio_numbers(sym):

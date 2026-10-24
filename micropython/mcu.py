@@ -32,8 +32,8 @@ import ota
 from link import T_OTA, BROADCAST
 
 NODES = HERE / 'nodes'
-COMMON = ['main.py', 'lib/link.py', 'lib/ota.py', 'lib/touch.py', 'lib/bridge.py']
-APP_LIBS = {'lrt_plot_bed': ['lib/ads1220.py']}     # only the apps that use them
+COMMON = ['main.py', 'lib/link.py', 'lib/ota.py', 'lib/touch.py', 'lib/bridge.py', 'lib/halfwire.py']
+APP_LIBS = {'lrt_plot_bed': ['lib/ads1220.py'], 'limn_lit': ['lib/ads1220.py']}     # only the apps that use them
 CHUNK = 192
 RP2040_VIDS = (0x2E8A, 0x1B4F)    # Raspberry Pi, SparkFun (Pro Micro RP2040)
 BAUD = 115200
@@ -276,7 +276,7 @@ def ports():
 
 @app.command()
 def install(
-    config: Annotated[str, typer.Argument(help="Node config in micropython/nodes/, eg. dock, rtp, fsr, fsr_bed3, plot_bed.")],
+    config: Annotated[str, typer.Argument(help="Node config in micropython/nodes/, eg. dock, rtp, fsr, fsr_bed3, plot_bed, lit.")],
     port: PortOption = None,
 ):
     '''First install (or reinstall) over USB: bootloader, libs, app and node.json.'''

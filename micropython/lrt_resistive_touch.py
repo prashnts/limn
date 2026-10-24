@@ -22,6 +22,7 @@ MAX_SPREAD = NODE.get('max_spread', 4000)   # samples of one read further apart:
 npx = NeoPixel(Pin(16), 1)
 link = from_config(NODE)
 touch = TouchLine(NODE)
+link.below = touch.relay     # the nodes below: their touches out on our BED_PROBE
 bridge = Bridge(link)     # only used when a host talks to this node over USB
 timer_hello = Timer(-1)
 timer_restore_led = Timer(-1)

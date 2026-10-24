@@ -6,8 +6,8 @@
 #   python3 docs/kicad/gen.py [--force] [--check]
 #   --check: ERC, the netlist audit (audit.py) and one SVG per sheet in svg/
 #
-# The root sheet is the overview, one sheet per role: power, host, tool dock, Melzi, toolhead,
-# Aux MCU, bed dock, calibration bed, plot bed. Sheets meet through global labels (USB_*, I2C1_*,
+# The root sheet is the overview, one sheet per role or board: power, host, tool dock, Melzi, toolhead,
+# Aux MCU, calibration bed, plot bed board, hub board, beam bed. Sheets meet through global labels (USB_*, I2C1_*,
 # MOT_*, ENDSTOP_*, PROBE_*, BED_*, ...) and the named power rails (+12V, +7V5_ZK, +5V_LED, ...).
 # Gathered from the code and the docs (see kicad_gen/boards.py). Once the files are edited in
 # KiCad, don't regenerate over them: --force overwrites.
@@ -31,24 +31,24 @@ SHEETS = [  # file, name, builder, title, root position (x, y), size (w, h)
     ('toolhead.kicad_sch', 'Toolhead', sheets_b.toolhead_sheet, 'Limn: toolhead and drag chain', (114.3, 152.4), (50.8, 25.4)),
     ('aux.kicad_sch', 'Aux MCU (rpi)', sheets_b.aux_sheet, 'Limn: Aux MCU, Klipper rpi', (190.5, 109.22), (50.8, 25.4)),
     ('tool_dock.kicad_sch', 'Tool dock', sheets_a.tool_dock_sheet, 'Limn: tool dock, holders and tags', (190.5, 50.8), (50.8, 25.4)),
-    ('bed_dock.kicad_sch', 'Bed dock (LRT Dock)', sheets_b.bed_dock_sheet, 'Limn: bed dock, the LRT Dock', (266.7, 50.8), (50.8, 25.4)),
     ('cal_bed.kicad_sch', 'Calibration bed', sheets_b.cal_bed_sheet, 'Limn: calibration bed', (266.7, 109.22), (50.8, 25.4)),
-    ('plot_bed.kicad_sch', 'Plot bed (load cells)', sheets_b.plot_bed_sheet, 'Limn plot bed: load cells + touch line', (266.7, 165.1), (50.8, 25.4)),
-    ('plot_head.kicad_sch', 'Plot head cell (load cell)', sheets_b.plot_head_sheet, 'Limn: the head load cell, CAT6 to the plot bed board', (190.5, 152.4), (50.8, 25.4)),
+    ('plot_bed_board.kicad_sch', 'Plot bed board', sheets_b.plot_bed_board_sheet, 'Limn: the plot bed board (head cell, tool ID, bed dock)', (190.5, 152.4), (50.8, 25.4)),
+    ('hub.kicad_sch', 'Hub board (USB + tool 5 V)', sheets_b.hub_sheet, 'Limn: the hub board, USB hub + the tool\'s 5 V', (25.4, 109.22), (50.8, 25.4)),
+    ('beam_bed.kicad_sch', 'Beam bed (XY)', sheets_b.beam_bed_sheet, 'Limn: the beam bed, XY by two IR break-beams', (266.7, 165.1), (50.8, 25.4)),
 ]
 
 
 DESCRIPTIONS = [
     'USB-C PD charger: 12 V (motion,\nswitched), 9 V (the 5 V bucks),\nthe Pi\'s port. Rails: +12V,\n+7V5_ZK, +9V, +5V_LED, +5V_TOOL.',
-    'Pi 4: USB to every MCU and the\ncameras (an FE1.1s hub, planned),\nI2C1 to the tool dock.',
+    'Pi 4: the cameras, the hub\nboard (the MCUs, the tool),\nI2C1 to the tool dock.',
     'Melzi v2.0: motors A, B, Z, K,\nthe endstops, the EXT header,\nthe probe pin (PROBE_A4).',
     'The drag chain: Z, K, the Y/Z/K\nendstops, MPU9250, endoscope;\nthe coupling (planned).',
-    'Pico WH (Klipper rpi): the\nNeoPixels, the buzzer, the\nMPU9250 (software I2C).',
+    'RP2040-Zero (Klipper rpi) +\nMP_Buck0: the NeoPixels, the\nbuzzer, the MPU9250\'s I2C.',
     'MCP23017 + 5 holder switches,\nthe PN532 tag reader, the\nindockator strip.',
-    'RP2040-Zero (the LRT Dock):\nDETECT, the bed\'s power switch,\nthe pogo connector.',
-    'The detachable bed: ID resistor,\nRTP node (going), FSR node\nand its 4 x 8 sheet.',
-    'Pro Micro + 2 x ADS1220, the\nthree feet, filters, the sum,\nthe fail-safe touch line.',
-    'The two-strip cell, CAT6 to\nthe plot bed board at the back:\none ADS1220, tool ID, tool 5 V.',
+    'The detachable bed: ID resistor,\nthe FSR node and its 4 x 8\nsheet, on the pogo.',
+    'limn.kicad_pcb: the head cell\n(CAT6), ADS1220, the touch line,\ntool ID/EN, the bed dock.',
+    'FE1.1s hub on the Pi\'s cable,\nMP_Buck1 + switch: the tool\'s\n5 V, CAT6 #2 to the tool.',
+    'RP2040-Tiny, two IR LEDs +\nPT1206BS in an L: X and Y\nedges, trigger on BED_PROBE.',
 ]
 
 
@@ -86,9 +86,10 @@ def main():
               'projects/limn/content/electronics.md, docs/block-diagrams.md, docs/load-cell.md. Missing details: marked "to fill in".',
               15.24, 22.86)
     root.enclose(17.78, 40.64, 83.82, 85.09, 'Supply')
+    root.enclose(17.78, 99.06, 83.82, 143.51, 'At the back')
     root.enclose(104.14, 40.64, 172.72, 85.09, 'Host')
     root.enclose(104.14, 99.06, 248.92, 187.96, 'Motion and the toolhead')
-    root.enclose(180.34, 40.64, 330.2, 85.09, 'Docks')
+    root.enclose(180.34, 40.64, 248.92, 85.09, 'Docks')
     root.enclose(256.54, 99.06, 330.2, 200.66, 'Beds')
     for (file, name, build, title, at, size), desc in zip(SHEETS, DESCRIPTIONS):
         root.text(desc, at[0] + 2.54, at[1] + 2.54)
@@ -122,8 +123,11 @@ def main():
     (HERE / 'sym-lib-table').write_text('(sym_lib_table\n  (version 7)\n  (lib (name "limn")(type "KiCad")'
                                         '(uri "${KIPRJMOD}/limn.kicad_sym")(options "")(descr "Limn boards and modules"))\n)\n')
     sheets = [[ROOT_UUID, "Root"]] + [[str(b[10][1]), str(b[11][2])] for b in blocks]
-    (HERE / 'limn.kicad_pro').write_text(json.dumps({'meta': {'filename': 'limn.kicad_pro', 'version': 3},
-                                                     'sheets': sheets, 'boards': [], 'text_variables': {}}, indent=2) + '\n')
+    pro = HERE / 'limn.kicad_pro'             # KiCad keeps the board's settings in it: only the sheets are ours
+    proj = json.loads(pro.read_text()) if pro.exists() else {'meta': {'filename': 'limn.kicad_pro', 'version': 3},
+                                                              'boards': [], 'text_variables': {}}
+    proj['sheets'] = sheets
+    pro.write_text(json.dumps(proj, indent=2) + '\n')
     print('wrote', ', '.join(out))
     if '--check' in sys.argv:
         check()

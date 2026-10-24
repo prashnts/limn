@@ -10,7 +10,7 @@ def _font(size=1.0):
     return f'(effects (font (size {size} {size}) (thickness {size * 0.15:.3f})))'
 
 
-def _fp(name, descr, ref_at, pads, outline, texts=(), smd=False):
+def _fp(name, descr, ref_at, pads, outline, texts=(), smd=False, model=None):
     x1, y1, x2, y2 = outline
     out = [f'(footprint "{name}"', '\t(version 20241229)', '\t(generator "limn_gen")', '\t(layer "F.Cu")',
            f'\t(descr "{descr}")',
@@ -30,6 +30,9 @@ def _fp(name, descr, ref_at, pads, outline, texts=(), smd=False):
             shape = 'rect' if num == '1' else 'circle'
             d, size = (1.3, 2.4) if kind == 'big' else (1.0, 1.7)
             out.append(f'\t(pad "{num}" thru_hole {shape} (at {x} {y}) (size {size} {size}) (drill {d}) (layers "*.Cu" "*.Mask"))')
+    if model:                       # (file, offset): the module's STEP in limn.3dshapes, offset in mm, y up
+        f, (ox, oy, oz) = model
+        out.append(f'\t(model "${{KIPRJMOD}}/limn.3dshapes/{f}" (offset (xyz {ox} {oy} {oz})) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))')
     out.append(')')
     return '\n'.join(out) + '\n'
 
@@ -54,10 +57,11 @@ def pro_micro_rp2040():
     pads = [(str(i + 1), 0, round(i * P, 2), 'th') for i in range(12)]
     pads += [(str(i + 13), round(6 * P, 2), round(i * P, 2), 'th') for i in range(12)]
     pads.append(('29', round(3 * P, 2), -1.6, 'smd'))
+    pads += [('30', round(2 * P, 2), 1.6, 'smd'), ('31', round(4 * P, 2), 1.6, 'smd')]   # D+/D- underneath: place to check
     pads += [(str(25 + i), round(3.81 + 2.54 * i, 2), 29.4, 'smd') for i in range(4)]   # the Qwiic (not wired)
     texts = [(round(3 * P, 2), 1.0, 'USB-C', 0.8), (round(3 * P, 2), 27.6, 'Qwiic (not wired)', 0.6)]
     return _fp('SparkFun_Pro_Micro_RP2040', 'SparkFun Pro Micro RP2040 (DEV-18288), 2 x 12 pins, rows 15.24 mm apart, '
-               'top view; pad 29 = the USB-C, 25-28 = the Qwiic (connectors, not soldered)', (7.62, -4.5), pads, (-1.27, -2.54, 16.51, 30.48), texts)
+               'top view; pad 29 = the USB-C, 30/31 = D+/D- underneath (wires), 25-28 = the Qwiic (connectors, not soldered)', (7.62, -4.5), pads, (-1.27, -2.54, 16.51, 30.48), texts)
 
 
 def mini_buck():
@@ -92,4 +96,60 @@ def pololu_slide_switch():
                (-1.27, -1.27, 13.97, 13.97), texts)
 
 
-ALL = {'Pololu_Mini_MOSFET_Slide_Switch': pololu_slide_switch, 'ADS1220_module': ads1220_module, 'SparkFun_Pro_Micro_RP2040': pro_micro_rp2040, 'Mini_buck_3A': mini_buck}
+def rp2040_zero(tiny=False):
+    # top view, USB up; Waveshare's numbering (boards.RP2040_ZERO_PADS): GP0-GP8 = 1-9 down the right, GP9-GP13 =
+    # 10-14 along the bottom (right to left), GP14/15, GP26-29 = 15-20 up the left, then 3V3 21, GND 22, 5V 23;
+    # 24 = the USB (Zero: its USB-C; Tiny: the FPC to its adapter). Holes from Waveshare's STEP (23.5 x 18 board)
+    right = [(str(i + 1), round(6 * P, 2), round(i * P, 2), 'th') for i in range(9)]
+    bottom = [(str(10 + i), round((5 - i) * P, 2), round(8 * P, 2), 'th') for i in range(5)]
+    left = [(str(23 - i), 0, round(i * P, 2), 'th') for i in range(9)]
+    edge = 1.38 if tiny else 1.33               # hole centre to the board's side / bottom edge
+    top = 1.59 if tiny else 1.49
+    names = ['5V', 'GND', '3V3', 'GP29', 'GP28', 'GP27', 'GP26', 'GP15', 'GP14']
+    texts = [(1.9, round(i * P, 2), n, 0.6) for i, n in enumerate(names)]
+    texts += [(round(6 * P - 2.0, 2), round(i * P, 2), f'GP{i}', 0.6) for i in range(9)]
+    texts.append((round(3 * P, 2), 0.6, 'FPC (USB)' if tiny else 'USB-C', 0.8))
+    name = 'Waveshare_RP2040_Tiny' if tiny else 'Waveshare_RP2040_Zero'
+    descr = ('Waveshare RP2040-Tiny (the module, its USB on the FPC adapter)' if tiny else 'Waveshare RP2040-Zero') + \
+        ', 23 castellated holes on 2.54 mm, rows 15.24 mm apart, top view; pads = Waveshare\'s pin numbers, 24 = the USB'
+    pads = right + bottom + left + [('24', round(3 * P, 2), -0.5, 'smd')]
+    oy = 21.91 if tiny else 22.01
+    return _fp(name, descr, (7.62, -3.0), pads, (-edge, -top, round(18 - edge, 2), round(8 * P + (1.59 if tiny else 1.69), 2)),
+               texts, model=(f'{name}.stpZ', (-edge, -oy, 0)))
+
+
+def usb_pads(name, descr, size):
+    # four wires as holes in a row, as the symbol numbers them: VBUS 1, D+ 2, D- 3, GND 4; 5 = the cable (a marker)
+    w, h = size
+    pads = [(str(i + 1), round(i * P, 2), 0, 'th') for i in range(4)] + [('5', round(1.5 * P, 2), round(h - 2.5, 2), 'smd')]
+    texts = [(round(i * P, 2), 1.6, n, 0.5) for i, n in enumerate(['VBUS', 'D+', 'D-', 'GND'])]
+    return _fp(name, descr, (round(1.5 * P, 2), -3.0), pads, (round(1.5 * P - w / 2, 2), -1.5, round(1.5 * P + w / 2, 2), round(h - 1.5, 2)), texts)
+
+
+def usb_c_breakout():
+    return usb_pads('Adafruit_USB_C_breakout', 'Adafruit USB-C breakout (5.1k on CC: a device): VBUS, D+, D-, GND '
+                    'as holes in a row; the board\'s own pin order to check against the part', (19.0, 12.0))
+
+
+def usb_cable():
+    return usb_pads('USB_cable_pads', 'A USB cable cut and soldered in: VBUS, D+, D-, GND (VBUS left open where cut)', (9.5, 5.0))
+
+
+def fe11s_hub():
+    # pads as the symbol numbers them: 5V 1, GND 2, UP D+ 3, UP D- 4 down the left; DN1-DN4 D+/D- (5-12) down the
+    # right, a gap between ports. Which breakout: not in the notes yet: map the real pads before soldering
+    left = [(str(i + 1), 0, round(i * P, 2), 'th') for i in range(4)]
+    right = []
+    for k in range(4):
+        for j in range(2):
+            right.append((str(5 + 2 * k + j), round(7 * P, 2), round((3 * k + j) * P, 2), 'th'))
+    texts = [(2.0, round(i * P, 2), n, 0.6) for i, n in enumerate(['5V', 'GND', 'UP D+', 'UP D-'])]
+    texts += [(round(7 * P - 2.6, 2), round((3 * k + j) * P, 2), f'DN{k + 1} D{"+-"[j]}', 0.6) for k in range(4) for j in range(2)]
+    return _fp('FE1.1s_USB_hub_breakout', 'FE1.1s 4-port USB hub breakout: 5V, GND, UP D+/D-, DN1-4 D+/D- as the symbol '
+               'numbers them; pad positions a placeholder: map the board\'s pads', (8.89, -3.0), left + right,
+               (-1.8, -1.8, 19.6, 25.9), texts)
+
+
+ALL = {'Waveshare_RP2040_Zero': rp2040_zero, 'Waveshare_RP2040_Tiny': lambda: rp2040_zero(tiny=True),
+       'Adafruit_USB_C_breakout': usb_c_breakout, 'USB_cable_pads': usb_cable, 'FE1.1s_USB_hub_breakout': fe11s_hub,
+       'Pololu_Mini_MOSFET_Slide_Switch': pololu_slide_switch, 'ADS1220_module': ads1220_module, 'SparkFun_Pro_Micro_RP2040': pro_micro_rp2040, 'Mini_buck_3A': mini_buck}

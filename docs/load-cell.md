@@ -1,6 +1,6 @@
 # Bed load cells: wiring (ADS1220 + RP2040)
 
-2026-10-15. A plan, not built yet. The design: TODO.md, *Paper, pressure and the surface* (feet, the two ADCs, the touch line); the supply: [block-diagrams.md](block-diagrams.md), *Load cell: the ADS1220's supply and inputs*.
+2026-10-15. A plan, not built: set aside 2026-10-23 (the cell went to the toolchanger, 2026-10-16). The design: TODO.md, *Paper, pressure and the surface* (feet, the two ADCs, the touch line); the supply: [block-diagrams.md](block-diagrams.md), *Load cell: the ADS1220's supply and inputs*.
 
 ![Bed load-cell schematic](load-cell-wiring.svg)
 
@@ -8,9 +8,9 @@ The SVGs come from `load-cell-wiring-svg.py` and `load-cell-perfboard-svg.py` (`
 
 ## The schematic (KiCad)
 
-![Plot bed schematic](kicad/svg/plot_bed.svg)
+![Plot bed schematic](load-cell-kicad.svg)
 
-The plot bed is the *Plot bed (load cells)* sheet of the machine's KiCad project, [docs/kicad/](kicad/README.md): the Pro Micro with its header pins in their physical order, the two ADS1220 modules, the feet's gauges (off the board), the completion pair, the RC filters, the sum network, the NPN touch stage and two optional spare headers. The touch line's pull-up is on the *Melzi* sheet (R401, at the Melzi's end, on `PROBE_A4`). The modules' pin numbers are their list order, not the header's: renumber from a photo of the module.
+The plot bed was the *Plot bed (load cells)* sheet of the machine's KiCad project, [docs/kicad/](kicad/README.md); it is set aside now (its drawing: `plot_bed_sheet` in `docs/kicad/kicad_gen/aside.py`, the SVG above: its last committed render): the Pro Micro with its header pins in their physical order, the two ADS1220 modules, the feet's gauges (off the board), the completion pair, the RC filters, the sum network, the NPN touch stage and two optional spare headers. The touch line's pull-up is on the *Melzi* sheet (R401, at the Melzi's end, on `PROBE_A4`). The modules' pin numbers are their list order, not the header's: renumber from a photo of the module.
 
 ## What's on it
 
@@ -141,6 +141,19 @@ uv run micropython/mcu.py update --hop 0 --port <port>       # later updates, ro
 - **A missing chip** is reported (`adc>>sum: reset state ff ff ff ff`) and set up again every 3 s; the other keeps working. So foot 1 on the bench works with only ADS #1 wired (the touch line then reads touched: no sum).
 
 Foot 1 on the bench: ADS #1 alone, foot on AIN0 + the completion pair on AIN3; `diag()` for the noise with nothing on it, then coins with `monitor` (foot 1's mg and raw).
+
+## Firmware: `limn_lit` (2026-10-24)
+
+LIT (*lit*, bed in French) runs the plot bed board as built: one ADS1220 for the toolchanger's cell, the touch line, and the bed dock the Dock MCU used to do. `micropython/limn_lit.py`, pins in `micropython/nodes/lit.json`; `lrt_plot_bed` and `lrt_dock_mcu` are left as they were.
+
+```
+uv run micropython/mcu.py install lit --port <port>
+uv run micropython/mcu.py send 'diag()' --port <port>
+```
+
+- **Cell**: as the plot bed's sum (IRQ on DRDY GP7, 330/s, avg of 4, 5 g / 3.5 g, tare and drift, `arm(lit)`), no feet: samples are kind 6 with an empty feet list. `calibrate(<g>)` only; ~236 counts/g until then.
+- **Bed**: ID on GP29 (the Dock's table), BED_EN GP4 high once the same bed reads 1 s, low after 250 ms gone; `power_on()`, `power_off()`, `read_bed_id()`. BED_PROBE on GP1 is only reported (`bed_probe` lines): Q952 already puts it in series with the touch line.
+- **+5V_SW**: `sw5v(on|off)`, off at boot. **Tool ID**: `tool()` reads GP26 (GP27 left off).
 
 ## Klipper, if ADS #2 goes on a Klipper MCU instead
 

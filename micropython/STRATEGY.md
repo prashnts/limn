@@ -57,6 +57,7 @@ END | type:u8 hop:u8 seq:u8 payload... crc32:u32le | END      (0xC0 and 0xDB esc
 | `T_LOG`   | up        | text                                      |
 | `T_DATA`  | up        | `pack_fsr()` / `pack_rtp()` / `pack_load()` |
 | `T_OTA`   | both      | update request / reply, see `lib/ota.py`  |
+| `T_TOKEN` | both      | one wire only: the turn to talk, never leaves the port |
 
 Sensor payloads (little endian):
 - FSR: `kind=0x4, state, n, n x (row:u8, col:u8, strength:u16 0..1000)`
@@ -140,6 +141,17 @@ lrt_*.py       the app
 `tests/test_chain.py` runs Dock, RTP and FSR as processes (`tests/sim_mcu.py`, fake `machine`) and goes through arming, updates, a broken update and a Dock update with `mcu.py` itself.
 
 
+## LIT: one wire and BED_PROBE (2026-10-24)
+
+LIT (`limn_lit.py`, the plot bed board) takes the Dock's place. The pogo's two UART wires change roles, no change on the beds:
+
+- **GP0 (was the first node's TX) = BED_DATA**: a UART on one open-drain wire (`lib/halfwire.py`: PIO, DMA into a 2 KiB ring, the echo dropped), 4k7 pull-up on LIT. `"up": {"pin": 0}` on the bed, `"down": {"pin": 0}` on LIT.
+- **Half duplex** (`link.HalfPort`): LIT sends what it has and a token; the bed answers with one batch and the token back, and never talks without it. LIT's empty turns at most every 5 ms; silence for 150 ms = a lost token, LIT takes it back (`stats()`: `lost`). No turns while the bed is off. Between bed MCUs: UARTs as before.
+- **GP1 (was RX) = BED_PROBE**: `"probe_pin": 1`, high = OK, low for 10 ms on an armed touch (`lib/touch.py`). On LIT it is in series with the head's touch line (Q952): Klipper's probe pin, in hardware. A node behind (FSR behind RTP on BED_3) has no pogo: the first node relays its touch samples while something is armed (`link.below` → `touch.relay`).
+- The Dock path still works with the old configs (`"up": {"id": 0}`, `"touch_pin": 2`, no `probe_pin`): `tests/test_chain.py` runs both.
+- Beds on the old firmware can't talk to LIT: install them once over USB (`mcu.py install rtp|fsr`).
+
+
 ## Status
 
 - [x] `lib/link.py`: framing, routing, queues, tests (`tests/test_link.py`)
@@ -158,4 +170,5 @@ lrt_*.py       the app
 - [ ] FSR pull-downs: `mcu.py send 'diag()'`. If `pull_down=0`, try `"fsr_pull_down": true` in node.json and re-tune the thresholds
 - [ ] FSR touch IRQ
 - [x] Plot bed (`lrt_plot_bed.py`, 2026-10-16): load cells on 2 ADS1220s, its own fail-safe touch line to a Klipper endstop (not DETECT), USB-only (hop 0). The rescue loop now listens on USB when a node has no up UART (the Dock too), and feeds the watchdog. `docs/load-cell.md` *Firmware*.
+- [x] One wire + BED_PROBE (2026-10-24): `lib/halfwire.py`, `HalfPort`, `probe_pin`; simulated (`test_chain.py lit`), unit-tested turns (`test_link.py`). Not on hardware yet: PIO/DMA, the echo count, 115200 over the pogo.
 - [ ] Plot bed on the real board: `diag()` noise, rates, loop time; the Klipper side (`ext/limn`)

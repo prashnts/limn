@@ -250,6 +250,27 @@ class Sheet:
                 return
         raise KeyError(ref)
 
+    def split(self, ref, keep=None, footprint='Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical'):
+        '''A 1xN header drawn as one part, made N one-pin parts (ref.n) whose pins end where its pins did, so the
+        wiring stays: on a perfboard each pin then goes where its wiring wants it. keep: the pins kept (all).'''
+        lib_id, x, y, r = self.refs[ref]
+        item = next(it for it in self.items if it[0] == 'symbol' and str(find(it, 'uuid')[0][1]) == stable('part', self.file, ref))
+        value = next(x[2] for x in item if isinstance(x, list) and x[:2] == ['property', Q('Value')]).strip('"')
+        on_board = find(item, 'on_board')[0][1] == 'yes'
+        dnp = find(item, 'dnp')[0][1] == 'yes'
+        ends = {n: self.P(ref, n) for n in sorted(self.pins[lib_id], key=int) if keep is None or n in keep}
+        self.items.remove(item)
+        del self.refs[ref]
+        one = self.use('Connector_Generic', 'Conn_01x01')
+        px, py, _, _ = self.pins[one]['1']
+        rx, ry = rot(px, py, r)
+        for n, (ex, ey) in ends.items():
+            self.place(one, f'{ref}.{n}', f'{value} {n}', round(ex - rx, 3), round(ey + ry, 3), rot=r,
+                       footprint=footprint, on_board=on_board, dnp=dnp, note=f'{ref} pin {n}')
+            for x in self.items[-1]:               # the values would overlap at 2.54: the references only
+                if isinstance(x, list) and x[:2] == ['property', Q('Value')]:
+                    x[-1] = font(hide=True)
+
     def _has_top(self, lib_id):
         return any(p[2] == 270 for p in self.pins[lib_id].values())
 
@@ -453,6 +474,22 @@ class Sheet:
                            ['fill', ['type', 'none']], ['uuid', u()]])
         if title:
             self.text(title, x1 + 1.27, y1 + 1.27, size=1.5, bold=True, italic=planned)
+
+    def shift(self, start, dx, dy):
+        '''Move everything drawn since items[start] by (dx, dy): a group drawn at its own place, put elsewhere.'''
+        def walk(it):
+            for x in it:
+                if isinstance(x, list):
+                    if x[:1] in (['at'], ['xy'], ['start'], ['end']):
+                        x[1], x[2] = num(round(float(x[1]) + dx, 3)), num(round(float(x[2]) + dy, 3))
+                    else:
+                        walk(x)
+        for it in self.items[start:]:
+            walk(it)
+        moved = {str(find(it, 'uuid')[0][1]) for it in self.items[start:] if it[0] == 'symbol'}
+        for ref, (lib_id, x, y, r) in self.refs.items():
+            if stable('part', self.file, ref) in moved:
+                self.refs[ref] = (lib_id, round(x + dx, 3), round(y + dy, 3), r)
 
     # output
     def sexpr(self, title_block=None):

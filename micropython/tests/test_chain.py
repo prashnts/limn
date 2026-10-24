@@ -65,6 +65,8 @@ def install(name, config, **overrides):
     '''What `mcu.py install` does, into a folder.'''
     node = json.loads((mcu.NODES / (config + '.json')).read_text())
     node.update(overrides)
+    for key in [k for k, v in node.items() if v is None]:
+        node.pop(key)
     root = SIM / name
     for local, remote in mcu.files_for(node['app']):
         (root / remote).parent.mkdir(parents=True, exist_ok=True)
@@ -72,14 +74,17 @@ def install(name, config, **overrides):
     (root / 'node.json').write_text(json.dumps(node))
     return root
 
-def start(name, uarts, **popen):
+def start(name, uarts, wires=None, **popen):
     fds = {uart_id: sock.fileno() for uart_id, sock in uarts.items()}
+    wire_fds = {pin: sock.fileno() for pin, sock in (wires or {}).items()}
     cmd = [sys.executable, '-u', str(SIM_MCU), '--name', name, '--root', str(SIM / name), '--sim', str(SIM)]
     for uart_id, fd in fds.items():
         cmd += ['--uart', f'{uart_id}:{fd}']
+    for pin, fd in wire_fds.items():
+        cmd += ['--wire', f'{pin}:{fd}']
     log = open(SIM / (name + '.log'), 'w')
     popen.setdefault('stdout', log)
-    return subprocess.Popen(cmd, pass_fds=list(fds.values()), stderr=log, **popen)
+    return subprocess.Popen(cmd, pass_fds=list(fds.values()) + list(wire_fds.values()), stderr=log, **popen)
 
 def source_with(changes):
     '''A copy of micropython/ with some files changed, to update from.'''
@@ -110,8 +115,9 @@ def check(name, ok):
 
 def main():
     install('dock', 'dock', trigger='detect')
-    install('rtp', 'rtp', touch_pin=2)      # as if the diodes were fitted
-    install('fsr', 'fsr', touch_pin=2)
+    # The beds as they were for the Dock: UART0 on the pogo, the DETECT diodes fitted
+    install('rtp', 'rtp', touch_pin=2, up={'id': 0}, probe_pin=None)
+    install('fsr', 'fsr', touch_pin=2, up={'id': 0}, probe_pin=None)
     dock_rtp = socket.socketpair()
     rtp_fsr = socket.socketpair()
     procs = [
@@ -230,17 +236,19 @@ def main():
             p.kill()
     bench()
     plot_bed()
+    lit()
+    lit_chain()
     print('logs in', SIM)
 
 def bench():
     '''RTP -> FSR on the bench: no Dock, the host on the RTP's USB.'''
     install('bench_rtp', 'rtp')
-    install('bench_fsr', 'fsr')
+    install('bench_fsr', 'fsr', up={'id': 0}, probe_pin=None)     # behind the RTP: a UART
     wire = socket.socketpair()
-    nothing = socket.socketpair()           # the RTP's up UART, not connected
+    nothing = socket.socketpair()           # the RTP's pogo wire, not connected
     procs = [
         start('bench_fsr', {0: wire[1]}),
-        start('bench_rtp', {0: nothing[0], 1: wire[0]}, stdin=subprocess.PIPE, stdout=subprocess.PIPE),
+        start('bench_rtp', {1: wire[0]}, wires={0: nothing[0]}, stdin=subprocess.PIPE, stdout=subprocess.PIPE),
     ]
     rtp = mcu.Dock(PipeSerial(procs[-1]))
     try:
@@ -413,9 +421,173 @@ def plot_bed():
             p.kill()
 
 
+def lit():
+    '''LIT (the plot bed board) on USB alone: the cell, the touch line, the bed dock.'''
+    from link import LOAD_TOUCH, LOAD_CAL, LOAD_SUM_OK
+    install('lit', 'lit')
+    (SIM / 'stim_lit').write_text(json.dumps({'g': 0}))
+    pogo = socket.socketpair()              # no bed on the other end
+    procs = [start('lit', {}, wires={0: pogo[0]}, stdin=subprocess.PIPE, stdout=subprocess.PIPE)]
+    board = mcu.Dock(PipeSerial(procs[0]))
+    weigh = lambda g: (SIM / 'stim_lit').write_text(json.dumps({'g': g}))
+    try:
+        hellos = wait_for(lambda: board.hellos(), what='lit hello')
+        check('lit: hello at hop 0', hellos[0]['role'] == 'lit')
+        check('lit: touch line ok after the boot tare', wait_for(lambda: touch_out('lit') == '1', what='line ok'))
+        got = samples(board)
+        check('lit: streams samples, ADC ok, ~0 g, no feet',
+              len(got) > 5 and all(s['flags'] & LOAD_SUM_OK for s in got) and abs(got[-1]['g']) < 1
+              and got[-1]['feet_g'] == [])
+
+        weigh(20)
+        check('lit: a press drops the touch line', wait_for(lambda: touch_out('lit') == '0', timeout=2, what='touch'))
+        got = samples(board)
+        check('lit: touched flag and ~20 g (estimate)', got and got[-1]['flags'] & LOAD_TOUCH and 18 < got[-1]['g'] < 22)
+        weigh(0)
+        check('lit: release raises it again', wait_for(lambda: touch_out('lit') == '1', timeout=2, what='release'))
+
+        board.send('stall(2000)')
+        time.sleep(0.3)
+        weigh(20)
+        dropped = wait_for(lambda: touch_out('lit') == '0', timeout=1.2, what='touch while stalled')
+        weigh(0)
+        check('lit: the touch line works while the main loop is stalled (IRQ)', dropped)
+        wait_for(lambda: touch_out('lit') == '1', timeout=4, what='release after the stall')
+        time.sleep(2)
+
+        board.send('tare()')
+        logs_until(board, 'tare>>')
+        weigh(100)
+        time.sleep(0.3)
+        board.send('calibrate(100)')
+        logs = logs_until(board, 'calibrate>>')
+        got = samples(board)
+        check('lit: calibrate(100) -> ~236 counts/g',
+              any('calibrate>>23' in t for t in logs) and got and got[-1]['flags'] & LOAD_CAL and 97 < got[-1]['g'] < 103)
+        weigh(0)
+        wait_for(lambda: touch_out('lit') == '1', timeout=3, what='line ok')
+
+        (SIM / 'stim_lit_bed').write_text('40000')          # BED_4
+        lines = list(board.lines(2))
+        check('lit: a bed is seen, then powered after a second',
+              any(k == 'bed_detected' and d[0] == 'BED_4' for k, d in lines)
+              and any(k == 'power' and d['on'] for k, d in lines))
+        bed = board.command('read_bed_id()', 'read_bed_id')
+        check('lit: read_bed_id', bed[0] == 'BED_4' and bed[2]['placed'] == 1 and bed[2]['powered'])
+        (SIM / 'stim_lit_probe').touch()
+        got = [d for k, d in board.lines(0.5) if k == 'bed_probe']
+        (SIM / 'stim_lit_probe').unlink()
+        check('lit: the bed\'s trigger is reported', got and got[0]['ok'] is False)
+        (SIM / 'stim_lit_bed').unlink()
+        lines = list(board.lines(1))
+        check('lit: bed removed -> power off', any(k == 'bed_removed' for k, d in lines)
+              and any(k == 'power' and not d['on'] for k, d in lines))
+
+        board.send('diag()')
+        logs = logs_until(board, 'diag>>noise')
+        check('lit: diag reports the ADC, the bed, the tool and the noise',
+              any('diag>>adc: ok' in t for t in logs) and any('diag>>bed NONE' in t and 'tool none' in t for t in logs)
+              and any('diag>>noise rms' in t for t in logs))
+
+        (SIM / 'stim_dead_cell').touch()
+        check('lit: the ADC stops -> touch line fails safe', wait_for(lambda: touch_out('lit') == '0', timeout=2, what='fail safe'))
+        (SIM / 'stim_dead_cell').unlink()
+        check('lit: ...and comes back once the ADC does', wait_for(lambda: touch_out('lit') == '1', timeout=10, what='recovery'))
+    finally:
+        for p in procs:
+            p.kill()
+
+
+def probe_out(name):
+    path = SIM / ('probe_out_' + name)
+    return path.read_text() if path.exists() else None
+
+def probe_lows(name):
+    path = SIM / ('probe_low_' + name)
+    return len(path.read_text().splitlines()) if path.exists() else 0
+
+def lit_chain():
+    '''LIT -> RTP on the pogo's one wire (BED_DATA half duplex, BED_PROBE) -> FSR on a UART.'''
+    install('lit_c', 'lit')
+    install('rtp_c', 'rtp')
+    install('fsr_c', 'fsr_bed3')
+    (SIM / 'stim_lit').write_text(json.dumps({'g': 0}))
+    pogo = socket.socketpair()
+    rtp_fsr = socket.socketpair()
+    procs = [
+        start('fsr_c', {0: rtp_fsr[1]}),
+        start('rtp_c', {1: rtp_fsr[0]}, wires={0: pogo[1]}),
+        start('lit_c', {}, wires={0: pogo[0]}, stdin=subprocess.PIPE, stdout=subprocess.PIPE),
+    ]
+    board = mcu.Dock(PipeSerial(procs[-1]))
+    try:
+        wait_for(lambda: board.hellos(), what='lit hello')
+        board.send('ping()')
+        got = [d for k, d in board.lines(1.5) if k == 'hello']
+        check('one wire: nothing from the bed while it is off', all(d['hop'] == 0 for d in got))
+
+        (SIM / 'stim_lit_bed').write_text('31000')      # BED_3
+        wait_for(lambda: any(k == 'power' and d['on'] for k, d in board.lines(0.5)), timeout=5, what='bed power')
+        hellos = wait_for(lambda: (h := board.hellos()) and len(h) == 3 and h, what='rtp and fsr through the wire')
+        check('one wire: rtp at hop 1, fsr at hop 2 behind it',
+              {hop: h['role'] for hop, h in hellos.items()} == {0: 'lit', 1: 'rtp', 2: 'fsr'})
+        check('BED_PROBE high (OK) at rest', probe_out('rtp_c') == '1')
+
+        board.send('arm(rtp)')         # passed down; LIT only answers arm(lit) itself
+        time.sleep(0.3)
+        (SIM / 'stim_rtp').touch()
+        dropped = wait_for(lambda: probe_lows('rtp_c') == 1, timeout=2, what='BED_PROBE low')
+        samples = [d for k, d in board.lines(0.5) if k == 'data' and d['kind'] == 5]
+        (SIM / 'stim_rtp').unlink()
+        check('armed rtp touch -> BED_PROBE low, samples through the wire', dropped and samples and samples[0]['hop'] == 1)
+        check('...and back high after the hold', wait_for(lambda: probe_out('rtp_c') == '1', timeout=2, what='release'))
+        board.send('disarm()')
+        time.sleep(0.3)
+
+        (SIM / 'stim_fsr').touch()
+        time.sleep(0.8)
+        check('fsr touch, nothing armed -> BED_PROBE stays high', probe_lows('rtp_c') == 1)
+        board.send('arm(fsr)')
+        dropped = wait_for(lambda: probe_lows('rtp_c') > 1, timeout=2, what='relayed touch')
+        (SIM / 'stim_fsr').unlink()
+        board.send('disarm()')
+        check('armed fsr behind the rtp -> relayed on the rtp\'s BED_PROBE', dropped)
+
+        board.send('matrix(on)')
+        frames = [d for k, d in board.lines(1.5) if k == 'data' and d['kind'] == 4 and d['state'] == 43]
+        board.send('matrix(off)')
+        time.sleep(0.3)
+        check('one wire: fsr matrix frames from hop 2 keep flowing (%d in 1.5 s)' % len(frames),
+              len(frames) > 10 and all(len(d['values']) == 32 and d['hop'] == 2 for d in frames))
+
+        rtp_app = (mcu.HERE / 'lrt_resistive_touch.py').read_text() + '\n# updated\n'
+        src = source_with({'lrt_resistive_touch.py': rtp_app})
+        mcu.run_update(board, [1], source=src)
+        info = board.info(1)
+        check('update over the one wire: confirmed',
+              info['files']['lrt_resistive_touch.py'] == mcu.file_hash(src / 'lrt_resistive_touch.py') and not info['pending'])
+        wait_for(lambda: len(board.hellos()) == 3, what='chain back after the update')
+
+        stats = board.command('stats()', 'stats')
+        check('one wire: no damaged frames, no lost turns: %s' % json.dumps(stats['down']),
+              stats['down']['bad'] == 0 and stats['down']['lost'] == 0)
+
+        (SIM / 'stim_lit_bed').unlink()
+        wait_for(lambda: any(k == 'power' and not d['on'] for k, d in board.lines(0.5)), timeout=3, what='bed off')
+        board.send('ping()')
+        got = [d for k, d in board.lines(1.5) if k == 'hello']
+        check('bed off: the turns stop, only lit answers', got and all(d['hop'] == 0 for d in got))
+    finally:
+        for p in procs:
+            p.kill()
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['plot_bed']:
         plot_bed()
+        print('logs in', SIM)
+    elif sys.argv[1:] == ['lit']:
+        lit()
+        lit_chain()
         print('logs in', SIM)
     else:
         main()
