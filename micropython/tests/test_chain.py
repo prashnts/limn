@@ -508,7 +508,8 @@ def probe_lows(name):
 
 def lit_chain():
     '''LIT -> RTP on the pogo's one wire (BED_DATA half duplex, BED_PROBE) -> FSR on a UART.'''
-    install('lit_c', 'lit')
+    # 330/s: three simulated boards can't keep up with LIT's 600 (the chip does)
+    install('lit_c', 'lit', cell_adc=dict(json.loads((mcu.NODES / 'lit.json').read_text())['cell_adc'], sps=330))
     install('rtp_c', 'rtp')
     install('fsr_c', 'fsr_bed3')
     (SIM / 'stim_lit').write_text(json.dumps({'g': 0}))

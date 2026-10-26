@@ -26,6 +26,8 @@
 # Commands (USB, or down the chain like the other nodes):
 #   tare()  calibrate()  calibrate(<g>)  threshold(<g>)  threshold(<g>, <release g>)
 #   stream(on|off)  rate(<Hz>)  arm(lit)  disarm()  diag()  ping()  reset()
+#   flip(): the cell's sign the other way (kept in cal.json); + must be the bed
+#   pushing the pen up, the touch line only fires on +
 #   debug_on()  debug_off()  power_on()  power_off()  read_bed_id()  sw5v(on|off)
 #   tool()  stall(<ms>): a test, the main loop busy while the IRQ keeps the line going
 import json
@@ -58,11 +60,10 @@ CAL_FILE = 'cal.json'
 # 3.3 V reference is 2 x 3.3 V / 128 / 2^24 (~3.1 nV).
 EST_CELL = 236.0        # counts per gram
 TAU_S = 5               # drift tracking time constant, while untouched
-TARE_MS = 250           # arm()
+TARE_MS = 240           # arm(): whole mains periods
 TARE_ALL_MS = 700       # tare()
 CAL_MS = 1500
 NOISE_MS = 2000
-AVG = 4                 # samples averaged for the touch decision
 RETRY_MS = 3000         # setup again of a chip that is missing or stalled
 STALL_MS = 200          # no samples this long: a fault (flash writes stall ~50 ms)
 
@@ -179,6 +180,9 @@ adc = ADS1220(spi, CELL_SPEC['cs'], CELL_SPEC['drdy'], sps=CELL_SPEC.get('sps', 
               mux=tuple(CELL_SPEC['mux']), vref_volts=VREF, continuous=True)
 CELL = Channel('cell', adc, CELL_SPEC['mux'], CELL_SPEC.get('sign', -1), EST_CELL)
 SHIFT = _shift(adc.sps)
+# Samples averaged for the touch decision and the stream: one mains period
+# (20 ms, 12 at 600/s) cancels the 50 Hz the frame picks up (~2 g rms, 2026-10-25).
+AVG = CELL_SPEC.get('avg', max(1, adc.sps // 50))
 
 # GP high = the NPN conducts = the Klipper pin reads low = OK.
 touch_out = Pin(NODE['touch_out'], Pin.OUT, value=0)
@@ -252,10 +256,12 @@ def load_cal():
     if cal.get('cell'):
         CELL.k = cal['cell']
         calibrated = True
+    if cal.get('sign'):
+        CELL.sign = cal['sign']
 
 def save_cal():
     with open(CAL_FILE + '.new', 'w') as fp:
-        json.dump({'cell': CELL.k}, fp)
+        json.dump({'cell': CELL.k if calibrated else None, 'sign': CELL.sign}, fp)
     import os
     try:
         os.remove(CAL_FILE)
@@ -297,7 +303,7 @@ def check_adc():
         setup_adc()
 
 # Shared with the IRQ: only ints in arrays, no allocation there.
-RING = 64               # samples kept for the main loop (~190 ms at 330/s)
+RING = 128              # samples kept for the main loop (~210 ms at 600/s)
 WRAP = 0x0FFFFFF        # sample counter wraps here (small ints only in the IRQ)
 _ring = array('i', [0] * RING)
 _avg = array('i', [0] * AVG)
@@ -334,6 +340,7 @@ def sync_irq():
     '''Tare, thresholds in counts and the hold flag, for the IRQ.'''
     v = _iv
     v[4] = 0 if CELL.tare_q is None else CELL.tare_q >> 8
+    v[5] = CELL.sign
     v[6] = int(threshold_g * CELL.k)
     v[7] = int(release_g * CELL.k)
     v[8] = 1 if hold() else 0
@@ -352,14 +359,14 @@ def drain():
         _fault = ''
         log('adc>>samples again')
         sync_irq()
-    track = not _iv[9] and not armed and not job
+    track = not _iv[9] and not armed and not job and abs(CELL.grams(average())) < release_g / 2
     while _read != n:
         raw = _ring[_read % RING]
         _read = (_read + 1) & WRAP
         CELL.sample(raw)
         if job:
             job.add(raw)
-        if track and abs(CELL.grams(raw)) < release_g / 2:
+        if track:
             CELL.track(SHIFT)
     if track:
         _iv[4] = CELL.tare_q >> 8 if CELL.tare_q is not None else 0
@@ -367,6 +374,11 @@ def drain():
     if _iv[10]:
         _iv[10] = 0
         send_sample()       # the edge right away, not at the next stream tick
+
+
+def average():
+    '''The IRQ's average of the last AVG samples (the last one until it filled).'''
+    return _iv[2] // AVG if _iv[3] >= AVG else CELL.raw
 
 
 # The touch line
@@ -408,7 +420,8 @@ def flags():
 def send_sample(state=S_SAMPLE):
     global _stream_at
     _stream_at = _now()
-    link.send(T_DATA, pack_load(state, flags(), int(CELL.grams() * 1000), CELL.raw, []))
+    raw = average()
+    link.send(T_DATA, pack_load(state, flags(), int(CELL.grams(raw) * 1000), raw, []))
 
 
 # Jobs: tare, calibrate, the noise check. One at a time, the loop keeps going.
@@ -460,7 +473,7 @@ def calibrate(grams):
             return fail('no samples, or no tare')
         k = CELL.counts(mean) / grams
         if k < EST_CELL / 20:
-            return fail('%.1f counts/g: no weight, or the sign is wrong (cell_adc.sign)' % k)
+            return fail('%.1f counts/g: no weight, or the sign is wrong (flip())' % k)
         CELL.k = k
         calibrated = True
         log('calibrate>>%.1f counts/g' % k)
@@ -608,6 +621,11 @@ def handle(frame):
         threshold_g = float(args[0])
         release_g = float(args[1]) if len(args) > 1 else threshold_g * 0.7
         log('threshold>>%.2f g, release %.2f g' % (threshold_g, release_g))
+    elif name == 'flip':
+        CELL.sign = -CELL.sign
+        _iv[5] = CELL.sign
+        save_cal()
+        log('flip>>sign %d' % CELL.sign)
     elif name == 'stream' and args:
         _stream = args[0] == 'on'
     elif name == 'rate' and args:

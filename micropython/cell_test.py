@@ -125,20 +125,29 @@ def step_drift(rec, seconds):
             'seconds': seconds}
 
 def find_presses(t, g):
-    '''(start, end) times of each press: the 0.1 s average above PRESS_G, until it
-    falls under half of that; presses closer than 0.3 s are one.'''
+    '''(start, end, zero) of each press: the 0.1 s average rising past PRESS_G above
+    the zero before it, until it falls back under half of that or 10 % of the peak
+    (a zero that steps up after a hard press still ends it); presses closer than
+    0.3 s are one. Between presses the zero follows the signal (~0.2 s), but not
+    down into dips.'''
     gs = np.convolve(g, np.ones(5) / 5, mode='same')
-    out, start = [], None
+    k = RATE_HZ // 10
+    out, start, zero, peak = [], None, float(np.median(gs[:RATE_HZ // 2])), 0.0
     for i, v in enumerate(gs):
-        if start is None and v > PRESS_G:
-            start = t[i]
-        elif start is not None and v < PRESS_G / 2:
-            if out and start - out[-1][1] < 0.3:
-                start = out.pop()[0]
-            out.append((start, t[i]))
-            start = None
+        if start is None:
+            if v > zero + PRESS_G and v - gs[max(0, i - k)] > PRESS_G / 2:
+                start, peak = t[i], v - zero
+            elif v > zero - PRESS_G:
+                zero += 0.1 * (v - zero)
+        else:
+            peak = max(peak, v - zero)
+            if v < zero + max(PRESS_G / 2, 0.1 * peak):
+                if out and start - out[-1][1] < 0.3:
+                    start, _, zero = out.pop()
+                out.append((start, t[i], zero))
+                start = None
     if start is not None:
-        out.append((start, t[-1]))
+        out.append((start, t[-1], zero))
     return out
 
 def quiet_zero(t, g, lo, hi):
@@ -152,13 +161,13 @@ def analyse_presses(t, g, stop):
     (0.3 s off each edge).'''
     presses = [p for p in find_presses(t, g) if p[0] < stop]
     rows = []
-    for i, (a, b) in enumerate(presses):
+    for i, (a, b, zero) in enumerate(presses):
         prev_end = presses[i - 1][1] if i else t[0]
         next_start = presses[i + 1][0] if i + 1 < len(presses) else stop
         before = quiet_zero(t, g, max(prev_end + 0.3, a - 1.3), a - 0.3)
         after = quiet_zero(t, g, b + 0.3, min(b + 1.3, next_start - 0.3))
         tail = (t >= b) & (t < min(b + 1, next_start))
-        dip = float(smooth(g[tail]).min()) if tail.sum() >= RATE_HZ // 5 else None
+        dip = float(smooth(g[tail]).min()) - zero if tail.sum() >= RATE_HZ // 5 else None
         rows.append({'at_s': float(a), 'peak_g': float(g[(t >= a) & (t <= b)].max()), 'held_s': float(b - a),
                      'undershoot_g': dip,
                      'zero_before_g': before, 'zero_after_g': after,
