@@ -191,6 +191,33 @@ def tool_coupling():
                  value='Tool coupling (planned)')
 
 
+def fpc20_breakout(mirror=False):
+    '''The FPC-20P 0.5 mm to 2 x 10 DIP 2.54 mm breakout (a commercial one, 33 x 26 mm). Pins = the FFC\'s
+    contacts 1-20 (the header numbers printed on it); 21 = the FFC connector (the cable, one pin).
+    mirror: the FFC on the left, the header on the right (the chain end).'''
+    header = [(str(n), P, n) for n in range(1, 21)]
+    ffc = [('FFC', P, 21)]
+    left, right = (ffc, header) if mirror else (header, ffc)
+    return block('FPC20_breakout' + ('_mirror' if mirror else ''),
+                 'FPC-20P 0.5 mm breakout to 2 x 10 DIP 2.54 mm, 33 x 26 mm, two holes: pins 1-20 = the FFC\'s '
+                 'contacts (as printed on the board), 21 = the FFC connector', left=left, right=right,
+                 value='FPC-20P 0.5 mm breakout')
+
+
+def usb_c_cable_cut():
+    return block('USB_C_cable_cut', 'A USB-C cable (USB 2.0, 3 A) cut at one end, its wires soldered there; '
+                 'the plug end into a USB-C receptacle', left=[('VBUS', P), ('D+', B), ('D-', B), ('GND', P),
+                                                               ('CC', P), ('shield', P)],
+                 right=[('plug', P)], ref='W', value='USB-C cable (cut)')
+
+
+def cat6_bridge():
+    return block('CAT6_bridge_pairs', 'CAT6 UTP 32 AWG, the load cell\'s two pairs: the head\'s excitation and '
+                 'signal (left) to the board\'s rails and ADC (right); one wire each, end to end',
+                 left=[('E+ w-orange', P), ('S+ w-blue', P), ('S- blue', P), ('E- orange', P)],
+                 right=[('E+', P), ('S+', P), ('S-', P), ('E-', P)], ref='W', value='CAT6: the bridge pairs')
+
+
 def ads1220_module():
     pins = [('MISO', 'tri_state', 'R'), ('MOSI', 'input', 'R'), ('SCLK', 'input', 'R'), ('CS', 'input', 'R'),
             ('DRDY', 'output', 'R'), ('CLK', 'input', 'R'), ('AVDD', 'power_in', 'T'), ('AGND', 'power_in', 'B'),

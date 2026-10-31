@@ -8,70 +8,229 @@
 import json
 from pathlib import Path
 from . import boards
-from .core import g, font, num
+from .core import g, font, num, Q, stable, find
 from .sheets_a import gnd, pins_named
 
 NODES = Path(__file__).resolve().parents[3] / 'micropython/nodes'
 
 
-def toolhead_sheet(s):
-    s.title_text('TOOLHEAD: what rides the drag chain', 15.24, 15.24)
+# The FFC between the toolchanger and the axis (decided with the user, 2026-10-29): 20 contacts, 0.5 mm, <= 15 cm;
+# the same pin on both breakouts. (net, kind): kind 'g' a global label, 'gnd', '5v' (+5V_TOOL), 'o' an output label
+FFC = {1: ('GND', 'gnd'), 2: ('CELL_EXC_P', 'g'), 3: ('CELL_SIG_P', 'g'), 4: ('CELL_SIG_N', 'g'), 5: ('CELL_EXC_N', 'g'),
+       6: ('GND', 'gnd'), 7: ('ENDSTOP_K', 'o'), 8: ('GND', 'gnd'), 9: ('TOOL_USB_DP', 'g'), 10: ('TOOL_USB_DN', 'g'),
+       11: ('GND', 'gnd'), 12: ('TOOL_ID', 'g'), 13: ('+5V_TOOL', '5v'), 14: ('+5V_TOOL', '5v'), 15: ('+5V_TOOL', '5v'),
+       16: ('GND', 'gnd'), 17: ('MOT_K_1A', 'g'), 18: ('MOT_K_1B', 'g'), 19: ('MOT_K_2A', 'g'), 20: ('MOT_K_2B', 'g')}
+
+
+def _ffc_pins(s, ref):
+    bus = [s.P(ref, str(n)) for n, (_, kind) in FFC.items() if kind == '5v']     # 13-15 joined, one rail symbol
+    d = -1 if s.away(ref, '13') == 180 else 1
+    bx = g(bus[0][0] + d * 2.54)
+    for p in bus:
+        s.wire(p, (bx, p[1]))
+    s.wire((bx, bus[0][1]), (bx, bus[1][1]))
+    s.wire((bx, bus[1][1]), (bx, bus[2][1]))
+    s.junction((bx, bus[1][1]))
+    end = (g(bx + d * 5.08), bus[1][1])
+    s.wire((bx, bus[1][1]), end)
+    _tool_rail(s, end, d)
+    for n, (net, kind) in FFC.items():
+        if kind == 'gnd':
+            gnd(s, ref, str(n), stub=2.54)
+        elif kind == '5v':
+            continue
+        else:
+            s.glabel(net, ref, str(n), shape='output' if kind == 'o' else 'bidirectional', stub=5.08)
+
+
+def _tool_rail(s, end, d):
+    '''+5V_TOOL on a wire's end pointing sideways (d -1: left); the name written beside it (a rotated
+    power symbol\'s own value lands on the wire).'''
+    s.power_at('+5V', end, ang=180 if d < 0 else 0, net='+5V_TOOL', show=False)
+    s.text('+5V_TOOL', g(end[0] - 15.24) if d < 0 else g(end[0] + 5.08), end[1])
+
+
+def toolhead_sheet(s, standalone=False):
+    '''The toolhead (the user, 2026-10-29). The toolchanger (it hangs on the load cell) is a PCB of its own
+    (toolhead_board.kicad_pcb, tools/mkboard.py head): the coupling (3 screws, 4 pogo pins), the K lock\'s motor
+    on 4 pogo pins and its key switch, the cell\'s pads, a 20-pin FFC on a breakout. The FFC (<= 15 cm) ends on a
+    second breakout on the axis by the cable chain, wired to the harness: a USB-C cable (the tool\'s 5 V and
+    USB, to the hub board), CAT6 (the cell, the ID, to LIT), a ribbon (K, to the Melzi). The axis\'s own parts
+    (Z, the endstops, the accelerometer) run in the chain to the back.
+    standalone: the root of the board\'s own project (toolhead_board.kicad_sch, gen.py): the PCB\'s parts on board
+    there, so the board and its schematic are linked (F8, cross-probing).'''
+    s.paper = 'A2'
+    R, C = s.use('Device', 'R'), s.use('Device', 'C')
+    s.title_text('TOOLHEAD: the toolchanger PCB, the FFC, the axis, the drag chain', 15.24, 15.24)
+
+    # ---- the toolchanger: its PCB
+    s.title_text('LOAD CELL', 25.4, 38.1)
+    s.place(s.use('Connector_Generic', 'Conn_01x04'), 'J501', 'cell pads', 63.5, 55.88)
+    for n, net in zip('1234', ('CELL_EXC_P', 'CELL_SIG_P', 'CELL_SIG_N', 'CELL_EXC_N')):
+        s.glabel(net, 'J501', n, stub=5.08)
+    for ref, (a, b), x, v in (('C504', ('CELL_SIG_P', 'CELL_SIG_N'), 86.36, '10n C0G'),
+                              ('C505', ('CELL_EXC_P', 'CELL_EXC_N'), 104.14, '100n')):
+        s.place(C, ref, v, x, 55.88, dnp=True)
+        s.glabel(a, ref, '1', stub=2.54)
+        s.glabel(b, ref, '2', stub=2.54)
+    s.text('J501: the 4 gauge wires (silicone, S+/S- and E+/E-\ntwisted), anchored, then soldered here. The bridge\n'
+           'closes at the gauges (sheet Plot bed board).\nC504/C505: pads for later (C0G), not fitted.\n'
+           'E- is its own wire: never joined to GND here.', 25.4, 72.39)
+
+    s.title_text('K: THE LOCK', 25.4, 96.52)
     mot = s.use('Motor', 'Stepper_Motor_bipolar')
-    for ref, axis, value, x in (('M501', 'Z', 'NEMA 8, lead screw (Z)', 60.96), ('M502', 'K', '10 mm linear micro stepper (K, the key lock)', 129.54)):
-        s.place(mot, ref, value, x, 63.5)
-        for coil_pin, mp in (('1A', '1'), ('1B', '2'), ('2A', '3'), ('2B', '4')):
-            s.glabel(f'MOT_{axis}_{coil_pin}', ref, mp, stub=7.62 if mp in '12' else 5.08)
-    s.text('Z and K: 4 wires each in silicone ribbons, from the Melzi\'s\nX and Z ports (sheet Melzi), drivers at ~7.5 V.', 30.48, 81.28)
+    s.place(mot, 'M502', '10 mm linear micro stepper (K, the key lock)', 63.5, 116.84)
+    for coil_pin, mp in (('1A', '1'), ('1B', '2'), ('2A', '3'), ('2B', '4')):
+        s.glabel(f'MOT_K_{coil_pin}', 'M502', mp, stub=7.62 if mp in '12' else 5.08)
+    s.text('Its flex on 4 pogo pins (one per pad, all on one side):\nwhite (the outermost) 1A, green 1B, yellow 2A,\n'
+           'purple 2B. Coil pairs to check with a meter; the\nJST at the Melzi may be swapped by hand.', 25.4, 134.62)
     sw = s.use('Switch', 'SW_Push')
-    for i, (ref, name, value) in enumerate((('SW501', 'ENDSTOP_Y', 'Y endstop (micro switch)'),
-                                            ('SW502', 'ENDSTOP_Z', 'Z top endstop (micro switch)'),
-                                            ('SW503', 'ENDSTOP_K', 'K: the key\'s switch (lock)'))):
-        y = 101.6 + 10.16 * i
-        s.place(sw, ref, value, 63.5, y)
+    s.place(sw, 'SW503', 'key switch (K)', 53.34, 157.48)
+    s.glabel('ENDSTOP_K', 'SW503', '1', shape='output', stub=5.08)
+    gnd(s, 'SW503', '2', stub=2.54)
+    s.place(C, 'C503', '10n', 91.44, 160.02)
+    s.glabel('ENDSTOP_K', 'C503', '1', shape='output', stub=2.54)
+    gnd(s, 'C503', '2')
+    s.text('Triggered while the key is open (^PA2).\nC503: stepper hash on the line.', 25.4, 175.26)
+
+    s.title_text('THE COUPLING', 116.84, 38.1)
+    pogo = s.use('Connector_Generic', 'Conn_01x01')
+    for i, (ref, net) in enumerate((('J502', 'TOOL_USB_DP'), ('J503', 'TOOL_USB_DN'), ('J504', 'GND'), ('J505', 'TOOL_ID'))):
+        s.place(pogo, ref, 'pogo', 162.56, g(53.34 + 5.08 * i))
+        if net == 'GND':
+            gnd(s, ref, '1', stub=2.54)
+        else:
+            s.glabel(net, ref, '1', stub=5.08)
+    hole = s.use('Mechanical', 'MountingHole_Pad')
+    for ref, x, what in (('H501', 129.54, '5V'), ('H502', 147.32, 'GND'), ('H503', 165.1, 'ID')):
+        s.place(hole, ref, f'screw: {what}', x, 81.28)
+    s.power('+5V', 'H501', '1', net='+5V_TOOL', stub=2.54)
+    gnd(s, 'H502', '1', stub=2.54)
+    s.glabel('TOOL_ID', 'H503', '1', stub=2.54)
+    s.text('Pogo pins: D+/D- ~3 mm apart (the pair stays\ntwisted to them), GND and the ID beside them,\n'
+           'in parallel with the screws. Kinematic\nscrews: 5 V, GND, the ID.', 116.84, 101.6)
+
+    s.title_text('TOOL 5 V', 116.84, 124.46)
+    for ref, v, x in (('C501', '10u', 121.92), ('C502', '100n', 134.62)):
+        s.place(C, ref, v, x, 142.24)
+        s.power('+5V', ref, '1', net='+5V_TOOL')
+        gnd(s, ref, '2')
+    s.place(R, 'R501', '1k5', 152.4, 137.16)
+    s.power('+5V', 'R501', '1', net='+5V_TOOL')
+    s.place(s.use('Device', 'LED'), 'D501', 'LED', 156.21, 147.32, rot=180)
+    s.wire(s.P('R501', '2'), s.P('D501', '2'))
+    k = s.P('D501', '1')
+    s.wire(k, (g(k[0] + 2.54), k[1]), (g(k[0] + 2.54), g(k[1] + 5.08)), chamfer=0)
+    s.power_at('GND', (g(k[0] + 2.54), g(k[1] + 5.08)))
+    s.text('At the 5 V and GND screws. C501 <= 10 uF: a\nPC\'s port at plug-in. D501: ~2 mA, and it\n'
+           'empties C501 once the 5 V is off.', 116.84, 165.1)
+
+    BO = s.add_block(*boards.fpc20_breakout())
+    s.place(BO, 'U506', 'FPC-20P breakout (head)', 213.36, 106.68)
+    _ffc_pins(s, 'U506')
+    s.enclose(15.24, 27.94, 236.22, 185.42, 'The toolchanger: the toolhead PCB (rides the load cell)')
+
+    # ---- the FFC, and its end on the axis
+    BM = s.add_block(*boards.fpc20_breakout(mirror=True))
+    s.place(BM, 'U507', 'FPC-20P breakout (axis)', 284.48, 106.68)
+    s.wire(s.P('U506', '21'), s.P('U507', '21'))
+    s.text('FFC 20P, 0.5 mm, <= 15 cm', 238.76, 104.14)
+    _ffc_pins(s, 'U507')
+
+    W = s.add_block(*boards.usb_c_cable_cut())
+    s.place(W, 'W501', 'USB-C cable (3 A, USB 2.0)', 381.0, 63.5)
+    v = s.P('W501', 'VBUS')
+    s.wire(v, (g(v[0] - 5.08), v[1]))
+    _tool_rail(s, (g(v[0] - 5.08), v[1]), -1)
+    s.glabel('TOOL_USB_DP', 'W501', 'D+', stub=5.08)
+    s.glabel('TOOL_USB_DN', 'W501', 'D-', stub=5.08)
+    gnd(s, 'W501', 'GND', stub=2.54)
+    s.label('TOOL_CC', 'W501', 'CC', stub=5.08)
+    s.nc('W501', 'shield')
+    s.glabel('USB_TOOL', 'W501', 'plug', stub=5.08)
+    s.place(R, 'R502', '5k1', 342.9, 101.6)
+    s.label('TOOL_CC', 'R502', '1', stub=2.54)
+    gnd(s, 'R502', '2')
+    s.text('Cut at this end, soldered to the breakout;\nthe plug in the hub board\'s USB-C (U1007).\n'
+           'R502: Rd on CC, so a PC\'s USB-C port turns\nVBUS on (a test straight on the computer).\n'
+           'Shield: open here (grounded at the plug).', 355.6, 93.98)
+
+    s.title_text('THE HARNESS, FROM THIS BREAKOUT', 355.6, 124.46)
+    s.text('USB-C cable: VBUS on 13-15, GND on the GND pads, D+/D- on 9/10\n(untwisted <= 1 cm), CC: R502. To the hub board.\n'
+           'CAT6 UTP 32 AWG, MX1.25 at LIT (J952): orange E+ (white) / E-,\nblue S+ (white) / S-, green the ID (white) + GND (its\n'
+           'return), brown spare (open at both ends).\n'
+           'Ribbon 26 AWG to the Melzi: K\'s 4 wires, ENDSTOP_K, GND.', 355.6, 129.54)
+    s.enclose(246.38, 27.94, 513.08, 185.42, 'On the axis by the cable chain: the FFC\'s end, wired (the breakout only)')
+
+    # ---- the axis: in the chain, to the back
+    s.title_text('THE AXIS: Z, THE ENDSTOPS, THE ACCELEROMETER (IN THE CHAIN, TO THE BACK)', 15.24, 205.74)
+    s.place(mot, 'M501', 'NEMA 8, lead screw (Z)', 50.8, 236.22)
+    for coil_pin, mp in (('1A', '1'), ('1B', '2'), ('2A', '3'), ('2B', '4')):
+        s.glabel(f'MOT_Z_{coil_pin}', 'M501', mp, stub=7.62 if mp in '12' else 5.08)
+    s.text('Z: 4 wires from the Melzi\'s X port\n(sheet Melzi), drivers at ~7.5 V.', 25.4, 256.54)
+    for ref, name, value, y in (('SW501', 'ENDSTOP_Y', 'Y endstop (micro switch)', 228.6),
+                                ('SW502', 'ENDSTOP_Z', 'Z top endstop (micro switch)', 241.3)):
+        s.place(sw, ref, value, 124.46, y)
         s.glabel(name, ref, '1', shape='output', stub=5.08)
         gnd(s, ref, '2', stub=2.54)
-    s.text('Micro switches KFC-W-13W / KFC-C-15A. K: triggered while\nthe key is open (manual_stepper axis_k, ^PA2).', 30.48, 132.08)
+    s.text('Micro switches KFC-W-13W / KFC-C-15A.', 101.6, 256.54)
+    MPU = s.add_block(*boards.mpu9250())
+    s.place(MPU, 'U502', 'MPU9250 (MPU9255)', 205.74, 236.22)
+    s.power('+3V3', 'U502', 'VCC', net='+3V3_AUX', stub=7.62)
+    gnd(s, 'U502', 'GND', stub=5.08)
+    s.glabel('MPU_SCL', 'U502', 'SCL', shape='input', stub=7.62)
+    s.glabel('MPU_SDA', 'U502', 'SDA', stub=7.62)
+    s.text('Software I2C on the Aux MCU, 0x68.\nVCC from its 3V3: to confirm.', 182.88, 256.54)
     BT = s.add_block(*boards.bltouch())
-    s.place(BT, 'U501', 'BLTouch', 175.26, 109.22, dnp=True)
+    s.place(BT, 'U501', 'BLTouch', 294.64, 236.22, dnp=True)
     for n in pins_named(s, 'U501', 'GND brown') + pins_named(s, 'U501', 'GND black'):
         gnd(s, 'U501', n, stub=5.08)
     s.power('+5V', 'U501', '+5V red', net='+5V_MELZI', stub=7.62)
     s.glabel('BLTOUCH_CTRL', 'U501', 'CTRL orange', shape='input', stub=7.62)
     s.glabel('BLTOUCH_SENSE', 'U501', 'SENSE white', shape='output', stub=7.62)
-    s.enclose(142.24, 93.98, 205.74, 129.54, 'Gone: the BLTouch (no BLTouch planned)', planned=True)
-    MPU = s.add_block(*boards.mpu9250())
-    s.place(MPU, 'U502', 'MPU9250 (MPU9255)', 175.26, 154.94)
-    s.power('+3V3', 'U502', 'VCC', net='+3V3_AUX', stub=7.62)
-    gnd(s, 'U502', 'GND', stub=5.08)
-    s.glabel('MPU_SCL', 'U502', 'SCL', shape='input', stub=7.62)
-    s.glabel('MPU_SDA', 'U502', 'SDA', stub=7.62)
-    s.text('Software I2C on the Aux Pico (gpio4/5), 0x68.\nVCC from the Pico\'s 3V3: to confirm.', 199.39, 147.32)
+    s.enclose(261.62, 220.98, 325.12, 256.54, 'Gone: the BLTouch (no BLTouch planned)', planned=True)
     EB = s.add_block(*boards.endoscope())
-    s.place(EB, 'U503', 'Xitech USB camera board (0bde:8076)', 274.32, 60.96)
+    s.place(EB, 'U503', 'Xitech USB camera board (0bde:8076)', 373.38, 236.22)
     s.glabel('USB_ENDO', 'U503', 'USB', stub=7.62)
     ES = s.add_block(*boards.endo_sensor())
-    s.place(ES, 'U504', 'endoscope sensor', 345.44, 60.96)
+    s.place(ES, 'U504', 'endoscope sensor', 444.5, 236.22)
     for k, p in enumerate(('VDD', 'VCLK', 'VOUT')):
         s.connect('U503', p, 'U504', p, lane=k - 1)
     gnd(s, 'U503', 'GND', stub=2.54)
     gnd(s, 'U504', 'GND', stub=2.54)
-    s.text('Our adapter: a GND between VOUT and VCLK, short runs away from the\nstepper wires, decoupling on VDD at the sensor, never hot-plugged.\nLight: two fibers on the connector\'s optical port (an LED, planned).', 246.38, 76.2)
-    s.enclose(241.3, 43.18, 375.92, 93.98, 'Endoscope camera')
-    TC = s.add_block(*boards.tool_coupling())
-    s.place(TC, 'U505', 'tool coupling', 302.26, 147.32, dnp=True)
-    s.power('+5V', 'U505', '5V', net='+5V_TOOL', stub=7.62)
-    gnd(s, 'U505', 'GND', stub=5.08)
-    s.glabel('TOOL_ID', 'U505', 'ID', stub=5.08)
-    s.glabel('TOOL_USB_DP', 'U505', 'USB D+', stub=5.08)
-    s.glabel('TOOL_USB_DN', 'U505', 'USB D-', stub=5.08)
-    s.text('5 V + GND + the ID + USB (12 V stays motion-only). The ID: read\nand later the link, on the plot bed board; the 5 V switched on the\nhub board; USB: the hub\'s DN2 (CAT6 #2).', 241.3, 165.1)
-    s.enclose(236.22, 129.54, 375.92, 195.58, 'Planned: the tool coupling (docs/block-diagrams.md)', planned=True)
-    s.title_text('THE DRAG CHAIN TODAY (21 wires)', 15.24, 205.74)
-    s.text('- Z motor (4), K motor (4): silicone ribbons.  - A USB-C cable: the endoscope.\n'
-           '- A ribbon: the Y, Z and K endstops, the MPU9250 (I2C), the BLTouch (5), 5 V / 3V3 and GND.\n'
-           '- Mostly 26 AWG (~0.134 ohm/m), a short 30 AWG piece. On 5 V the drop counts twice (GND too).\n'
-           '- The harness\'s connector pins, as the Excalidraw drawing has them: 1 3V3/5V, 4 stepper Z, 5 limit Z,\n'
-           '  6 limit Y, 7 5V, 8 GND; tool side: 1 3V3/5V, 5 stepper K, 6 GND, 7 switch, 8 1-Wire. To fill in.', 15.24, 210.82)
+    s.text('Our adapter: a GND between VOUT and VCLK, short runs away from the\nstepper wires, decoupling on VDD at the sensor, never hot-plugged.\n'
+           'Light: two fibers on the connector\'s optical port (an LED, planned).', 345.44, 251.46)
+    s.enclose(340.36, 218.44, 477.52, 269.24, 'Endoscope camera')
+
+    notes = [
+        (15.24, 'THE FFC', 'Pin = the breakouts\' printed numbers, the same on both ends:\n'
+                 '1 GND (guard), 2 E+, 3-4 S+/S-, 5 E-, 6 GND, 7 ENDSTOP_K,\n8 GND, 9-10 D+/D-, 11 GND, 12 TOOL_ID, 13-15 +5V_TOOL,\n'
+                 '16 GND, 17-20 K (A1 A2 B1 B2). 0.5 mm FFC: ~0.5 A a contact,\nso 1.5 A on 13-15: the tool gets 1 A (F1001).\n'
+                 'Check 1 -> 1 with a meter before power: reversed, 13-15 land\non 6-8.'),
+        (152.4, 'THE TOOLS (THE ID ON THE SCREW AND THE POGO)', 'Simple: GND and the ID bridged (copper tape, a\ntemplate): there, never powered; the RFID tag says which.\n'
+                 'Passive: a resistor GND-ID, powered, no link.\nActuator: a resistor >= 4.7k, powered, the half-duplex link\n'
+                 '(pings; lost = gone). USB: as an actuator, D+/D- pads.\nA resistor on the screws or on the pogos, never a bridge\n'
+                 'on one and a resistor on the other. High power: tethered,\nits 5 V screw open (GND kept).'),
+        (297.18, 'THE TOOL 5 V', 'Read the ID with the 5 V off, then switch it on (GP9, the\nhub board\'s U1006 + F1001 1 A); off before undocking.\n'
+                 'A tool with a chip on the ID line keeps it high-Z while\nunpowered (74LVC2G07 / a 2N7002): else the line clamps\n'
+                 'at ~0.6 V and reads as a low band. USB pins: fine.'),
+        (424.18, 'THE DRAG CHAIN', 'Toolchanger: the USB-C cable, CAT6, the K ribbon.\nThe axis: Z (4), the Y/Z endstops, the MPU9250\n'
+                 '(I2C + 3V3 + GND), the endoscope\'s USB.\nEvery cable anchored on the fixed side (HS) first;\n'
+                 'across the cell only the FFC (a slack U-loop).'),
+    ]
+    for x, head, body in notes:
+        s.title_text(head, x, 287.02)
+        s.text(body, x, 292.1)
+    # its own PCB (toolhead_board.kicad_pcb): the toolchanger's parts; the rest is wired, off any board
+    if standalone:                    # alone, the rails come from other sheets: say so (ERC)
+        for ref, pin in (('C501', '1'), ('C501', '2'), ('U502', 'VCC'), ('U501', '+5V red')):
+            s.flag_at(s.P(ref, pin))
+    own_board(s, standalone=standalone, fps={'limn:FPC20_breakout': 'U506', 'limn:Pogo_pin_D2.0_L5.0': 'J502 J503 J504 J505',
+                  'limn:Micro_limit_sw_inline': 'SW503', 'limn:Stepper_slider_5mm_flex4': 'M502',
+                  'MountingHole:MountingHole_3.2mm_M3_Pad': 'H501 H502 H503',
+                  'Connector_Wire:SolderWire-0.127sqmm_1x04_P3.7mm_D0.48mm_OD1mm': 'J501',
+                  'Capacitor_SMD:C_0805_2012Metric': 'C501 C502 C503 C504 C505',
+                  'Resistor_SMD:R_0805_2012Metric': 'R501', 'LED_SMD:LED_0805_2012Metric': 'D501'})
 
 
 def aux_sheet(s):
@@ -276,13 +435,18 @@ def beam_bed_sheet(s):
                   'limn:Waveshare_RP2040_Tiny': 'U851'})
 
 
-def own_board(s, fps):
+def own_board(s, fps, standalone=False):
     '''A sheet that is its own board (tools/mkboard.py makes its .kicad_pcb): footprints set, and every part
-    "not on board", so Update PCB in limn.kicad_pro leaves limn.kicad_pcb (the plot bed board's) alone.'''
+    "not on board", so Update PCB in limn.kicad_pro leaves limn.kicad_pcb (the plot bed board's) alone.
+    standalone (the board\'s own project): only the parts without a footprint off the board.'''
+    placed = set()
     for fp, refs in fps.items():
         for ref in refs.split():
             s.footprint(ref, fp)
+            placed.add(stable('part', s.file, ref))
     for it in s.items:
+        if standalone and it[0] == 'symbol' and str(find(it, 'uuid')[0][1]) in placed:
+            continue
         if it[0] == 'symbol' and not str(it[1][1]).startswith('power:'):
             for x in it:
                 if isinstance(x, list) and x[0] == 'on_board':
@@ -389,9 +553,9 @@ def touch_line(s, q_ref, rb, rpd, j, x0, y0, q_sym='Q_NPN_CBE', q_value='BC547',
         s.place(s.use('Transistor_FET', 'Q_NMOS_GSD'), q2, 'AO3400', 363.22 + dx, g(e[1] + 12.7))
         s.wire(e, s.P(q2, 'D'))
         gnd(s, q2, 'S')
-        s.place(R, r2, '1k', 344.17 + dx, s.P(q2, 'G')[1], rot=90)
-        s.glabel('BED_PROBE', r2, '1', stub=0)    # as built (the user, 2026-10-24): the gate off the cable side of R969
-        s.wire(s.P(r2, '2'), s.P(q2, 'G'))
+        s.place(R, r2, '1k', 344.17 + dx, s.P(q2, 'G')[1], rot=270)   # turned (the user, 2026-10-29)
+        s.glabel('BED_PROBE', r2, '2', stub=0)    # as built (the user, 2026-10-24): the gate off the cable side of R969
+        s.wire(s.P(r2, '1'), s.P(q2, 'G'))
         note = ('GP6 and BED_PROBE high = Q951 and Q952 conduct\n= the Melzi pin low = OK. A touch, a bed\'s\ntrigger (BED_PROBE low), a dead MCU (100k\nholds the base low) or a cut wire: the\nMelzi\'s pull-up (R401) wins = triggered.\nNo bed: R970 holds BED_PROBE high.', g(x0 + 17.78), 83.82 + dy)
     else:
         gnd(s, q_ref, 'E')
@@ -493,58 +657,49 @@ def plot_bed_board_sheet(s):
                                          (71.12, ('SG953', 'BF350 2A'), ('SG954', 'BF350 2B'), 'SIG_P')):
         s.place(R, top, tv, x, 50.8, on_board=False, left=True, note=f'{tv}: glued on the strip, off the board')
         s.place(R, bot, bv, x, g(50.8 + 7.62), on_board=False, left=True, note=f'{bv}: glued on the strip, off the board')
-        p3(top, '1')
-        gnd(s, bot, '2')
+        s.glabel('CELL_EXC_P', top, '1', stub=2.54)      # the head's nets (sheet Toolhead): to the rails via W951
+        s.glabel('CELL_EXC_N', bot, '2', stub=2.54)
         m = s.P(top, '2')
         s.wire(m, (g(m[0] + 7.62), m[1]))
         s.junction(m)
-        s.label_at(mid, (g(m[0] + 7.62), m[1]), 0)
+        s.glabel_at(f'CELL_{mid}', (g(m[0] + 7.62), m[1]), 0)
     s.text('Strip 1 (lower): 1A up (inner), 1B under.\nStrip 2 (upper): 2A down (inner), 2B on top.\n'
-           'Upper faces 1A + 2B: opposite arms;\n2A + 1B: the other pair.', 22.86, 68.58)
+           'Upper faces 1A + 2B: opposite arms;\n2A + 1B: the other pair.', 22.86, 81.28)
 
-    J8, J4 = s.use('Connector_Generic', 'Conn_01x08'), s.use('Connector_Generic', 'Conn_01x04')
-    s.title_text('MX1.25 AT THE TOOLHEAD', 22.86, 96.52)
-    s.place(J4, 'J951', 'MX1.25', 88.9, 106.68, on_board=False, note='MX1.25 4-pin: the bridge')
-    pin_rail('J951', '1', '+3V3', V)
-    s.label('SIG_P', 'J951', '2', stub=2.54)
-    s.label('SIG_N', 'J951', '3', stub=2.54)
-    pin_rail('J951', '4', 'GND', up=False)
-    s.place(s.use('Connector_Generic', 'Conn_01x01'), 'J954', 'MX1.25', 88.9, 132.08, on_board=False,
-            note='MX1.25 1-pin: the tool ID')       # was 4 with the QRE (set aside 2026-10-23: aside.qre)
-    s.glabel('TOOL_ID', 'J954', '1', stub=7.62)
-    s.text('The bridge closes at the gauges: 4 wires\n(32 AWG, twisted) to J951. TOOL_ID: the\ncoupling\'s ID contact, J954.\n'
-           'The QRE on the toolhead is gone (set aside).', 22.86, 144.78)
-    s.title_text('TO THE COUPLING (CAT6 #2)', 22.86, 163.83)
-    s.place(J8, 'J956', 'MX1.25', 88.9, 184.15, on_board=False, note='MX1.25 8-pin: tool 5 V + USB')
-    rail_bus('J956', '123', '+5V', '+5V_TOOL')
-    s.glabel('TOOL_USB_DP', 'J956', '4', stub=7.62)
-    s.glabel('TOOL_USB_DN', 'J956', '5', stub=7.62)
-    gnd_bus('J956', '678')
-    s.text('To the coupling\'s 5 V and GND\n(sheet Toolhead); D+/D-: the\ncamera tool\'s USB.', 22.86, 180.34)
-    s.enclose(15.24, 17.78, 96.52, 200.66, 'At the toolhead (the cell on Rider-HS)')
+    s.text('Strips and gauges on the cell; the 4 wires to the\ntoolhead PCB\'s J501, then the FFC and CAT6\n(sheet Toolhead).', 22.86, 92.71)
+    s.enclose(15.24, 17.78, 96.52, 101.6, 'At the toolhead (the cell on Rider-HS)')
+
+    J8 = s.use('Connector_Generic', 'Conn_01x08')
+    s.title_text('CAT6: THE BRIDGE PAIRS', 22.86, 111.76)
+    CW = s.add_block(*boards.cat6_bridge())
+    s.place(CW, 'W951', 'CAT6 UTP 32 AWG', 63.5, 129.54, on_board=False, note='the cable: one wire each, end to end')
+    for name, net in (('E+ w-orange', 'CELL_EXC_P'), ('S+ w-blue', 'CELL_SIG_P'), ('S- blue', 'CELL_SIG_N'), ('E- orange', 'CELL_EXC_N')):
+        s.glabel(net, 'W951', name, stub=5.08)
+    pin_rail('W951', 'E+', '+3V3', V)
+    s.label('SIG_P', 'W951', 'S+', stub=5.08)
+    s.label('SIG_N', 'W951', 'S-', stub=5.08)
+    pin_rail('W951', 'E-', 'GND', up=False)
+    s.text('Its own symbol so the head\'s E+/E- stay nets of their\nown (CELL_*), out of the toolhead PCB\'s GND:\n'
+           'they meet the rails only here, at J952. Off any\nboard: J952 is where it lands.', 22.86, 147.32)
 
     s.title_text('CAT6 UTP, 0.6-1 m', 104.14, 101.6)
-    s.text('Stranded (patch) cable, through\nthe cable chain. Analog only.\n\n'
+    s.text('Stranded (patch) cable, through\nthe cable chain. MX1.25 here.\n\n'
            'Pad: wire = signal\n'
            '1: white-orange = E+ (3V3)\n8: orange = E- (GND)\n'
            '3: white-blue = S+ (SIG_P)\n4: blue = S- (SIG_N)\n'
-           '5: white-green = TOOL_ID\n'
-           '2, 6, 7: white-brown, green, brown\n     = spare (were the QRE\'s)\n\n'
+           '5: white-green = TOOL_ID\n6: green = GND (the ID\'s return)\n'
+           '2, 7: white-brown, brown = spare\n\n'
            'All DC.\n'
-           'Head end: J951 = pads 1, 3, 4, 8;\nJ954 = pad 5.', 104.14, 106.68)
-    s.title_text('CAT6 #2: TOOL 5 V + USB', 104.14, 160.02)
-    s.text('Pad: wire = signal\n'
-           '1-3: white-orange, -green, -brown\n     = +5V_TOOL\n'
-           '6-8: orange, green, brown = GND\n'
-           '4: white-blue = USB D+\n5: blue = USB D-\n\n'
-           'From the hub board\'s J1003\n(sheet Hub board): it passes\nthis board by.', 104.14, 165.1)
+           'Head end: the axis breakout\n(sheet Toolhead).', 104.14, 106.68)
+    s.title_text('TOOL 5 V + USB', 104.14, 172.72)
+    s.text('A USB-C cable from the hub\nboard (U1007) to the axis\nbreakout: it passes this\nboard by.', 104.14, 177.8)
 
     s.place(J8, 'J952', 'CAT6', 180.34, 124.46)      # pads 2, 6, 7 spare: split to 1x1s below, without them
     pin_rail('J952', '1', '+3V3', V)
     s.label('SIG_P', 'J952', '3', stub=2.54)
     s.label('SIG_N', 'J952', '4', stub=2.54)
     s.glabel('TOOL_ID', 'J952', '5', stub=7.62)
-    pin_rail('J952', '8', 'GND', up=False)
+    gnd_bus('J952', '68')                          # 6: green, the ID's return (2026-10-29)
 
     board_link(s, 'J957', 180.34, 180.34, 'to the hub board (J1002)', tool_en=False)   # pin 4 out (the user, 2026-10-24)
     s.text('J957: the hub\'s DN3 (5 V on RAW,\nD+/D- on the pads underneath),\nGP9 to the tool\'s switch, +5V_TOOL_IN.', 190.5, 203.2)
@@ -609,7 +764,7 @@ def plot_bed_board_sheet(s):
     avdd_entry(s, 'C955', 'C956', 200.66, 165.1, V)
 
     s.title_text('TOOL 5 V', 279.4, 175.26)
-    s.text('On the hub board now (sheet Hub board): MP_Buck1,\nthe Pololu switch, the fuse and CAT6 #2 (J1003).\nGP9 and J957\'s pin 4 (TOOL_5V_EN) are out (the user,\n2026-10-24): the hub board\'s 100k holds it off.', 279.4, 180.34)
+    s.text('On the hub board now (sheet Hub board): MP_Buck1,\nthe Pololu switch, the fuse and the tool\'s USB-C (U1007).\nGP9 and J957\'s pin 4 (TOOL_5V_EN) are out (the user,\n2026-10-24): the hub board\'s 100k holds it off.', 279.4, 180.34)
 
     # INDICATORS out (the user, 2026-10-24: board space): the Pro Micro's NeoPixel instead
 
@@ -662,7 +817,7 @@ def plot_bed_board_sheet(s):
            'cable to J958. The Dock MCU (lrt_dock_mcu.py)\nand its OR gate input are gone.', 302.26, 71.12)
     s.enclose(297.18, 30.48, 406.4, 96.52, 'Bed connector (at the dock)')
     s.shift(start, 0, 228.6)
-    for ref, keep in (('J952', '13458'), ('J953', None), ('J957', '12356'), ('J958', None), ('J959', None)):
+    for ref, keep in (('J952', '134568'), ('J953', None), ('J957', '12356'), ('J958', None), ('J959', None)):
         s.split(ref, keep)                # 1x1 headers (the user, 2026-10-23): each pin placed where its wiring wants
 
     # footprints for a perfboard layout: SMD in 0805 (the user's, 2026-10-23), modules from limn.pretty
@@ -680,7 +835,7 @@ def plot_bed_board_sheet(s):
 
 def hub_sheet(s):
     '''The hub board (the user\'s plan, 2026-10-20): the FE1.1s hub on its own cable from the Pi (the Pi powers
-    the hub), the tool\'s 5 V (MP_Buck1 from 9 V, the Pololu switch, a polyfuse) and CAT6 #2 to the tool. Data
+    the hub), the tool\'s 5 V (MP_Buck1 from 9 V, the Pololu switch, a polyfuse) and the tool\'s USB-C cable. Data
     only to the self-powered Melzi, the tool and the Aux MCU; the plot bed board takes the hub\'s 5 V.'''
     R = s.use('Device', 'R')
     s.title_text('HUB BOARD: the USB hub and the tool\'s 5 V', 15.24, 15.24)
@@ -707,7 +862,7 @@ def hub_sheet(s):
                                ('DN3', 'PM_USB_DP', 'PM_USB_DN', True), ('DN4', 'AUX_DP', 'AUX_DN', False)):
         for pn, net in ((f'{port} D+', dp), (f'{port} D-', dn)):
             (s.glabel if glob else s.label)(net, 'U1002', pn, stub=5.08)
-    s.text('DN1: the Melzi, DN2: the tool (CAT6 #2),\nDN3: the plot bed board (J1002), DN4: the Aux\n'
+    s.text('DN1: the Melzi, DN2: the tool (U1007),\nDN3: the plot bed board (J1002), DN4: the Aux\n'
            'MCU. DN1, DN2, DN4: data only, their VBUS\npads not connected. One TT: the full-speed\n'
            'MCUs share 12 Mbit/s; the Pi Zero tool\n(high speed) has the 480.', 106.68, 83.82)
 
@@ -774,22 +929,23 @@ def hub_sheet(s):
     s.text('On only when the host says so (key locked, the ID\nsays "power me"): GP9 on the plot bed board, over\n'
            'J1002. R1002 holds it off with the link out or\nthrough a reset. Slide switch at OFF (else always on).', 132.08, 175.26)
 
-    J8 = s.use('Connector_Generic', 'Conn_01x08')
-    s.place(J8, 'J1003', 'CAT6 #2 (to the tool)', 248.92, 160.02)
-    _rail_bus(s, 'J1003', '123', '+5V', '+5V_TOOL')
-    s.glabel('TOOL_USB_DP', 'J1003', '4', stub=7.62)
-    s.glabel('TOOL_USB_DN', 'J1003', '5', stub=7.62)
-    _gnd_bus(s, 'J1003', '678')
-    s.text('Pad: wire = signal\n1-3: white-orange, -green,\n     -brown = +5V_TOOL\n6-8: orange, green, brown = GND\n'
-           '4: white-blue = USB D+\n5: blue = USB D-\n\nThree wires each way: MX1.25\ncontacts ~1 A each.\n'
-           'Head end: J956 (sheet Plot\nhead cell).', 284.48, 142.24)
-    s.enclose(17.78, 124.46, 340.36, 198.12, 'The tool\'s 5 V and CAT6 #2')
+    UT = s.add_block(*boards.usb_pads('USB-C_breakout_tool', 'Adafruit USB-C breakout (5.1k on CC1/CC2), the tool\'s '
+                                      'cable: VBUS fed from +5V_TOOL', 'Adafruit USB-C breakout'))
+    s.place(UT, 'U1007', 'Adafruit USB-C breakout (the tool)', 266.7, 157.48)
+    _pin_rail(s, 'U1007', 'VBUS', '+5V', '+5V_TOOL')
+    s.glabel('TOOL_USB_DP', 'U1007', 'D+', stub=7.62)
+    s.glabel('TOOL_USB_DN', 'U1007', 'D-', stub=7.62)
+    gnd(s, 'U1007', 'GND', stub=5.08)
+    s.glabel('USB_TOOL', 'U1007', 'cable', stub=7.62)
+    s.text('The tool\'s USB-C cable (sheet Toolhead,\nW501; 3 A, USB 2.0): VBUS = +5V_TOOL\nafter F1001, D+/D- = DN2. The cable\n'
+           'carries the 5 V and the GND the FFC\ntakes to the coupling (1 A).', 284.48, 172.72)
+    s.enclose(17.78, 124.46, 340.36, 198.12, 'The tool\'s 5 V and its USB-C cable')
 
     notes = [
         (22.86, 'POWER', '+5V_HUB: the Pi\'s VBUS: the hub, the plot bed board\n(RAW): ~0.1-0.3 A of the Pi 4\'s\n'
                 '1.2 A (all its ports together). +5V_TOOL_IN: MP_Buck1:\nthe tool (U1006, F1001), the bed and\n+5V_SW (U956/U957); never tied to +5V_HUB.'),
         (106.68, 'GROUND', 'One GND: the Pi\'s (USB), the 9 V\'s, the tool\'s\nreturn, the link\'s. The tool\'s current stays\n'
-                 'on this board (CAT6 #2 to J1001); the link\'s\nGND carries only the plot bed board.'),
+                 'on this board (U1007 to J1001); the link\'s\nGND carries only the plot bed board.'),
         (190.5, 'ON ITS OWN', 'Pi + 9 V, J1002 out: the hub and its ports\nwork, the tool stays off (R1002). The plot\n'
                 'bed board alone: its own USB-C, J957 out.'),
         (274.32, 'THE TOOL (PI ZERO)', '~0.2 A measured. It enumerates when U1006\nturns on (its D+ pull-up runs from its\n'
@@ -799,13 +955,12 @@ def hub_sheet(s):
         s.title_text(head, x, 213.36)
         s.text(body, x, 218.44)
     # its own perfboard (hub_board.kicad_pcb): SMD in 0805 / the fuse in 1812, modules from limn.pretty
-    own_board(s, {'limn:Adafruit_USB_C_breakout': 'U1001', 'limn:FE1.1s_USB_hub_breakout': 'U1002',
+    own_board(s, {'limn:Adafruit_USB_C_breakout': 'U1001 U1007', 'limn:FE1.1s_USB_hub_breakout': 'U1002',
                   'limn:USB_cable_pads': 'U1003 U1004', 'limn:Mini_buck_3A': 'U1005',
                   'limn:Pololu_Mini_MOSFET_Slide_Switch': 'U1006',
                   'Resistor_SMD:R_0805_2012Metric': 'R1001 R1002', 'Fuse:Fuse_1812_4532Metric': 'F1001',
                   'Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical': 'J1001',
-                  'Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical': 'J1002',
-                  'Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical': 'J1003'})
+                  'Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical': 'J1002'})
 
 def bed_dock_part(s, V):
     '''The bed dock\'s work on the plot bed board (the user, 2026-10-20): DETECT on GP29 (ADC3), the bed chain\'s

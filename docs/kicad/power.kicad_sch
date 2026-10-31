@@ -11,28 +11,29 @@
 		(company "limn")
 	)
 	(lib_symbols
-		(symbol "Switch:SW_SPST"
+		(symbol "limn:USB_PD_charger"
 			(pin_names
-				(offset 0)
-				(hide yes)
+				(offset 0.762)
 			)
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "SW"
-				(at 0 3.175 0)
+			(property "Reference" "U"
+				(at -12.7 8.89 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
-			(property "Value" "SW_SPST"
-				(at 0 -2.54 0)
+			(property "Value" "UGREEN Nexode 100W"
+				(at -12.7 6.35 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
 			(property "Footprint" ""
@@ -44,7 +45,7 @@
 					(hide yes)
 				)
 			)
-			(property "Datasheet" "~"
+			(property "Datasheet" ""
 				(at 0 0 0)
 				(effects
 					(font
@@ -53,7 +54,7 @@
 					(hide yes)
 				)
 			)
-			(property "Description" "Single Pole Single Throw (SPST) switch"
+			(property "Description" "UGREEN Nexode 100 W GaN, 3 USB-C ports (the plotter's supply)"
 				(at 0 0 0)
 				(effects
 					(font
@@ -62,56 +63,24 @@
 					(hide yes)
 				)
 			)
-			(property "ki_keywords" "switch lever"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "SW_SPST_0_0"
-				(circle
-					(center -2.032 0)
-					(radius 0.508)
+			(symbol "USB_PD_charger_0_1"
+				(rectangle
+					(start -12.7 5.08)
+					(end 12.7 -5.08)
 					(stroke
-						(width 0)
+						(width 0.254)
 						(type default)
 					)
 					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy -1.524 0.254) (xy 1.524 1.778)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(circle
-					(center 2.032 0)
-					(radius 0.508)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
+						(type background)
 					)
 				)
 			)
-			(symbol "SW_SPST_1_1"
+			(symbol "USB_PD_charger_1_1"
 				(pin passive line
-					(at -5.08 0 0)
+					(at -15.24 0 0)
 					(length 2.54)
-					(name "A"
+					(name "AC in"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -127,9 +96,9 @@
 					)
 				)
 				(pin passive line
-					(at 5.08 0 180)
+					(at 15.24 2.54 180)
 					(length 2.54)
-					(name "B"
+					(name "C0 45W"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -137,6 +106,42 @@
 						)
 					)
 					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 15.24 0 180)
+					(length 2.54)
+					(name "C1 30W"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 15.24 -2.54 180)
+					(length 2.54)
+					(name "C2 22.5W"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -270,6 +275,483 @@
 			)
 			(embedded_fonts no)
 		)
+		(symbol "Switch:SW_SPST"
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "SW"
+				(at 0 3.175 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "SW_SPST"
+				(at 0 -2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Single Pole Single Throw (SPST) switch"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "switch lever"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "SW_SPST_0_0"
+				(circle
+					(center -2.032 0)
+					(radius 0.508)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.524 0.254)
+						(xy 1.524 1.778)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 2.032 0)
+					(radius 0.508)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "SW_SPST_1_1"
+				(pin passive line
+					(at -5.08 0 0)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 5.08 0 180)
+					(length 2.54)
+					(name "B"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:GND"
+			(power)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -6.35 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Value" "GND"
+				(at 0 -3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "GND_0_1"
+				(polyline
+					(pts
+						(xy 0 0)
+						(xy 0 -1.27)
+						(xy 1.27 -1.27)
+						(xy 0 -2.54)
+						(xy -1.27 -1.27)
+						(xy 0 -1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "GND_1_1"
+				(pin power_in line
+					(at 0 0 270)
+					(length 0)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:PWR_FLAG"
+			(power)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#FLG"
+				(at 0 1.905 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Value" "PWR_FLAG"
+				(at 0 3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Special symbol for telling ERC where power comes from"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "flag power"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "PWR_FLAG_0_0"
+				(pin power_out line
+					(at 0 0 90)
+					(length 0)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "PWR_FLAG_0_1"
+				(polyline
+					(pts
+						(xy 0 0)
+						(xy 0 1.27)
+						(xy -1.016 1.905)
+						(xy 0 2.54)
+						(xy 1.016 1.905)
+						(xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "power:+12V"
+			(power)
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Value" "+12V"
+				(at 0 3.556 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"+12V\""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "+12V_0_1"
+				(polyline
+					(pts
+						(xy -0.762 1.27)
+						(xy 0 2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 2.54)
+						(xy 0.762 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 0)
+						(xy 0 2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "+12V_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "limn:PD_trigger_9V"
 			(pin_names
 				(offset 0.762)
@@ -393,272 +875,6 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "limn:USB_PD_charger"
-			(pin_names
-				(offset 0.762)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "U"
-				(at -12.7 8.89 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Value" "UGREEN Nexode 100W"
-				(at -12.7 6.35 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "UGREEN Nexode 100 W GaN, 3 USB-C ports (the plotter's supply)"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "USB_PD_charger_0_1"
-				(rectangle
-					(start -12.7 5.08)
-					(end 12.7 -5.08)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-			)
-			(symbol "USB_PD_charger_1_1"
-				(pin passive line
-					(at -15.24 0 0)
-					(length 2.54)
-					(name "AC_in"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 15.24 2.54 180)
-					(length 2.54)
-					(name "C0_45W"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 15.24 0 180)
-					(length 2.54)
-					(name "C1_30W"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 15.24 -2.54 180)
-					(length 2.54)
-					(name "C2_22.5W"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "power:+12V"
-			(power)
-			(pin_numbers
-				(hide yes)
-			)
-			(pin_names
-				(offset 0)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "#PWR"
-				(at 0 -3.81 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Value" "+12V"
-				(at 0 3.556 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "Power symbol creates a global label with name \"+12V\""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "global power"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "+12V_0_1"
-				(polyline
-					(pts
-						(xy -0.762 1.27) (xy 0 2.54)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 2.54) (xy 0.762 1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 2.54)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "+12V_1_1"
-				(pin power_in line
-					(at 0 0 90)
-					(length 0)
-					(name "~"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
 		(symbol "power:+9V"
 			(power)
 			(pin_numbers
@@ -727,7 +943,8 @@
 			(symbol "+9V_0_1"
 				(polyline
 					(pts
-						(xy -0.762 1.27) (xy 0 2.54)
+						(xy -0.762 1.27)
+						(xy 0 2.54)
 					)
 					(stroke
 						(width 0)
@@ -739,7 +956,8 @@
 				)
 				(polyline
 					(pts
-						(xy 0 2.54) (xy 0.762 1.27)
+						(xy 0 2.54)
+						(xy 0.762 1.27)
 					)
 					(stroke
 						(width 0)
@@ -751,7 +969,8 @@
 				)
 				(polyline
 					(pts
-						(xy 0 0) (xy 0 2.54)
+						(xy 0 0)
+						(xy 0 2.54)
 					)
 					(stroke
 						(width 0)
@@ -784,258 +1003,6 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "power:GND"
-			(power)
-			(pin_numbers
-				(hide yes)
-			)
-			(pin_names
-				(offset 0)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "#PWR"
-				(at 0 -6.35 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Value" "GND"
-				(at 0 -3.81 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "global power"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "GND_0_1"
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "GND_1_1"
-				(pin power_in line
-					(at 0 0 270)
-					(length 0)
-					(name "~"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "power:PWR_FLAG"
-			(power)
-			(pin_numbers
-				(hide yes)
-			)
-			(pin_names
-				(offset 0)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "#FLG"
-				(at 0 1.905 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Value" "PWR_FLAG"
-				(at 0 3.81 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" "~"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "Special symbol for telling ERC where power comes from"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "flag power"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "PWR_FLAG_0_0"
-				(pin power_out line
-					(at 0 0 90)
-					(length 0)
-					(name "~"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(symbol "PWR_FLAG_0_1"
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 1.27) (xy -1.016 1.905) (xy 0 2.54) (xy 1.016 1.905) (xy 0 1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-	)
-	(rectangle
-		(start 91.44 76.2)
-		(end 300.99 157.48)
-		(stroke
-			(width 0.2)
-			(type dash)
-			(color 132 0 0 1)
-		)
-		(fill
-			(type none)
-		)
-		(uuid a34776bd-be49-49d8-8023-9c446587b001)
-	)
-	(rectangle
-		(start 91.44 25.4)
-		(end 300.99 66.04)
-		(stroke
-			(width 0.254)
-			(type solid)
-			(color 72 72 72 1)
-		)
-		(fill
-			(type none)
-		)
-		(uuid c72a897c-9dbd-4c39-9773-3c98c9907c0b)
-	)
-	(text "C1 30 W: 9 V, 5 V branches (planned, the user's 2026-10-15 layout)"
-		(exclude_from_sim no)
-		(at 92.71 77.47 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-				(bold yes)
-				(italic yes)
-			)
-			(justify left top)
-		)
-		(uuid "2276982e-015c-4a82-b8c8-d61ca506378f")
-	)
-	(text "C2 22.5 W: the Pi 4 at 5 V 3 A (sheet Host).\nNever from a 12 V -> 5 V buck."
-		(exclude_from_sim no)
-		(at 66.04 170.18 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "50d0261b-3ae1-4c27-9e63-03642684af54")
 	)
 	(text "POWER: one USB-C PD charger, three branches"
 		(exclude_from_sim no)
@@ -1047,565 +1014,7 @@
 			)
 			(justify left top)
 		)
-		(uuid "602ec99a-8436-4526-a2cf-dd16d88169f1")
-	)
-	(text "+9V feeds the two MP1495s:\n- MP_Buck0 on the Aux PCB (sheet Aux MCU): +5V_LED, the Aux MCU,\n  the LEDs, the buzzer.\n- MP_Buck1 on the hub board (sheet Hub board): +5V_TOOL_IN, the\n  tool (switched by U1006 + F1001) the bed and +5V_SW (U956, U957 on the plot bed board)."
-		(exclude_from_sim no)
-		(at 167.64 93.98 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "684acd5b-6200-498c-a8a9-1c24df358c12")
-	)
-	(text "NOTES"
-		(exclude_from_sim no)
-		(at 15.24 200.66 0)
-		(effects
-			(font
-				(size 2 2)
-				(bold yes)
-			)
-			(justify left top)
-		)
-		(uuid "6f4f7da3-ef83-49f2-a634-62f3cdd2c26c")
-	)
-	(text "+7V5_ZK: the Melzi's Z and K drivers (their 12 V trace cut).\nSet 7.2-7.5 V today. The A4982 wants VBB >= 8 V:\n9 V for margin (motor heat is Vref, not the supply)."
-		(exclude_from_sim no)
-		(at 236.22 40.64 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "822b1e4c-958d-46ac-bc2d-a4486137e36b")
-	)
-	(text "C0 45 W: 12 V, motion"
-		(exclude_from_sim no)
-		(at 92.71 26.67 0)
-		(effects
-			(font
-				(size 1.5 1.5)
-				(bold yes)
-			)
-			(justify left top)
-		)
-		(uuid "8cf3018b-fd87-46bf-9cc1-cde0b8bbb9d3")
-	)
-	(text "- Grounds: one ground point near the Melzi, one solid GND wire between the 9 V and 12 V branches there, so stepper\n  return never uses USB cables or signal wires. All GND on these sheets is that one net.\n- No backfeed: ~1 k in series on every line crossing supplies; USB VBUS of the Pi never tied to a buck's 5 V.\n- A fuse or e-fuse per branch (to do): a short anywhere trips the whole charger, every port off.\n- The charger cuts all its ports when a device is plugged into another: careful with hot-plugging.\n- 47-100 uF electrolytic at each MP1495's input (hot-plug ringing ~2 x Vin).\n- From docs/block-diagrams.md (the user's layout) and limn/TODO.md, Toolhead and harness rework."
-		(exclude_from_sim no)
-		(at 15.24 205.74 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "aa8c745d-68f8-4b00-b0f5-7e1f66521c91")
-	)
-	(text "+12V (switched): the Melzi's VIN and the LM2596 (sheet Melzi).\nThe switch only cuts motion."
-		(exclude_from_sim no)
-		(at 162.56 30.48 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "c37927a5-ee11-4654-9590-542b88844835")
-	)
-	(text "+12V also feeds the LM2596 (LM_Buck0) by the Melzi\n(sheet Melzi): +7V5_ZK, the motors only."
-		(exclude_from_sim no)
-		(at 210.82 50.8 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left top)
-		)
-		(uuid "f9d607d8-b4b9-4d14-98c5-b93315b354e5")
-	)
-	(no_connect
-		(at 30.48 80.01)
-		(uuid "abf7c854-d4a1-463f-b773-f81ce1442526")
-	)
-	(wire
-		(pts
-			(xy 73.66 74.93) (xy 73.66 48.26)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "05f601cb-6de9-4b3f-9918-c2dd1c7d4b8f")
-	)
-	(wire
-		(pts
-			(xy 130.81 43.18) (xy 142.24 43.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "07d9f996-2adf-4922-a8f7-61e44ff8d677")
-	)
-	(wire
-		(pts
-			(xy 152.4 43.18) (xy 157.48 43.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "1954c523-bd5c-489c-9096-4717c4588cfe")
-	)
-	(wire
-		(pts
-			(xy 83.82 82.55) (xy 83.82 96.52)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2516a0b0-fb7c-4ec4-b19e-ee0367503083")
-	)
-	(wire
-		(pts
-			(xy 118.11 100.33) (xy 120.65 100.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2601ba66-2400-4a14-8557-0f65c9898e5a")
-	)
-	(wire
-		(pts
-			(xy 71.12 77.47) (xy 73.66 74.93)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "29bee366-b139-40aa-84b9-2872f3b835aa")
-	)
-	(wire
-		(pts
-			(xy 86.36 99.06) (xy 95.25 99.06)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "31038f37-02ed-4934-a988-13c0e4304a50")
-	)
-	(wire
-		(pts
-			(xy 60.96 80.01) (xy 81.28 80.01)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "3a48b89e-f80c-492d-94a5-73b59d252e79")
-	)
-	(wire
-		(pts
-			(xy 129.54 44.45) (xy 130.81 43.18)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "448b0df0-739c-4302-8824-b26f4e157ec9")
-	)
-	(wire
-		(pts
-			(xy 81.28 80.01) (xy 83.82 82.55)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "45d3a02d-ff20-41a8-afff-710c765852d6")
-	)
-	(wire
-		(pts
-			(xy 83.82 96.52) (xy 86.36 99.06)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "71c63eb4-d7cf-475d-8f59-08ff00be1b7e")
-	)
-	(wire
-		(pts
-			(xy 118.11 97.79) (xy 123.19 97.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "80368165-6189-4ee8-b527-7a0c685dabc3")
-	)
-	(wire
-		(pts
-			(xy 60.96 77.47) (xy 71.12 77.47)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "8067cc6b-1939-4033-bd04-93a4ebb18669")
-	)
-	(wire
-		(pts
-			(xy 118.11 44.45) (xy 129.54 44.45)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "967a64b2-be91-4afe-ac34-e25421c1872d")
-	)
-	(wire
-		(pts
-			(xy 60.96 82.55) (xy 71.12 82.55)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c63d0cff-b2a9-4e7e-bbe8-01ca33016333")
-	)
-	(wire
-		(pts
-			(xy 76.2 45.72) (xy 95.25 45.72)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e4ba8f6b-e1bb-4997-9510-ad64b77ee6c3")
-	)
-	(wire
-		(pts
-			(xy 118.11 46.99) (xy 120.65 46.99)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e55876bf-494f-4ba7-abfd-2f8772e52008")
-	)
-	(wire
-		(pts
-			(xy 73.66 48.26) (xy 76.2 45.72)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fde18989-9a8b-4cba-9b0e-8c1f8925a44f")
-	)
-	(global_label "PI_USBC"
-		(shape bidirectional)
-		(at 71.12 82.55 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "2bf99d01-8907-4b70-89e4-ed06418594ad")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 83.82 82.55 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+12V")
-		(at 157.48 43.18 270)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(dnp no)
-		(uuid "145206c6-1540-42cc-b7da-b7bd79af5fb5")
-		(property "Reference" "#PWR003"
-			(at 157.48 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+12V"
-			(at 162.56 43.18 270)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 157.48 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 157.48 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 157.48 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "69cd9183-93aa-4e89-94c3-cce56531d3da")
-		)
-		(instances
-			(project "limn"
-				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "#PWR003")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Switch:SW_SPST")
-		(at 147.32 43.18 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "2c835d38-d248-59da-99da-9b80740e5ba2")
-		(property "Reference" "SW101"
-			(at 149.86 41.91 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "slide switch (Bambu, 12 V 3 A)"
-			(at 149.86 44.45 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 147.32 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 147.32 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 147.32 43.18 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "b4be2b72-0693-4334-be19-e4e15bd216a4")
-		)
-		(pin "2"
-			(uuid "078d31a1-8e41-48b9-8228-58f79fde1b1a")
-		)
-		(instances
-			(project "limn"
-				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "SW101")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "limn:PD_trigger_12V")
-		(at 106.68 45.72 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "3ade9beb-10b2-57ce-adda-610a188ebc47")
-		(property "Reference" "U101"
-			(at 97.79 38.1 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "PD trigger 12 V (Trigger0)"
-			(at 97.79 40.64 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 106.68 45.72 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 106.68 45.72 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 106.68 45.72 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "c7302749-1cac-49c7-85cc-ca416c76701d")
-		)
-		(pin "2"
-			(uuid "894b1952-652d-4f40-b250-de97ad80d24e")
-		)
-		(pin "3"
-			(uuid "2b4cb1a7-deab-478d-8635-57b1c64f7338")
-		)
-		(instances
-			(project "limn"
-				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "U101")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+9V")
-		(at 123.19 97.79 270)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(dnp no)
-		(uuid "54eb5f49-702d-430b-ad73-4cea080c943e")
-		(property "Reference" "#PWR005"
-			(at 123.19 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+9V"
-			(at 128.27 97.79 270)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 123.19 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 123.19 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 123.19 97.79 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "75aa44e2-84e7-48ec-85d7-246fc7546955")
-		)
-		(instances
-			(project "limn"
-				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "#PWR005")
-					(unit 1)
-				)
-			)
-		)
+		(uuid "e355a447-e812-4d54-a4ea-ad871e558d22")
 	)
 	(symbol
 		(lib_id "limn:USB_PD_charger")
@@ -1662,16 +1071,16 @@
 			)
 		)
 		(pin "1"
-			(uuid "17ed4d04-10ab-448f-a740-2ac458d8a3c9")
+			(uuid "8548c73b-3c86-4be0-813f-31eb59116771")
 		)
 		(pin "2"
-			(uuid "180d5f62-43c4-4c7d-85c1-d86601eb9865")
+			(uuid "2406f4cf-a7d0-44bc-8ff8-d95999a5413d")
 		)
 		(pin "3"
-			(uuid "4135e3dd-c493-4728-8ff4-5fc98df3372e")
+			(uuid "d4962742-d99f-4929-a941-5fd9c8d0d284")
 		)
 		(pin "4"
-			(uuid "f0f4fc5f-33fc-4805-85d9-6c4aceb02753")
+			(uuid "0b99dc3b-6d8d-4323-bea8-eadb7270b3b9")
 		)
 		(instances
 			(project "limn"
@@ -1682,6 +1091,250 @@
 			)
 		)
 	)
+	(no_connect
+		(at 30.48 80.01)
+		(uuid "23812b3d-f463-42be-b29d-db42f80b8b0e")
+	)
+	(symbol
+		(lib_id "limn:PD_trigger_12V")
+		(at 106.68 45.72 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "3ade9beb-10b2-57ce-adda-610a188ebc47")
+		(property "Reference" "U101"
+			(at 97.79 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "PD trigger 12 V (Trigger0)"
+			(at 97.79 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 106.68 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 106.68 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 106.68 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a65711c2-67e2-4477-92cd-b55a908856aa")
+		)
+		(pin "2"
+			(uuid "04a015be-24e8-4b38-b42f-76c0ed7b5afb")
+		)
+		(pin "3"
+			(uuid "6ffa87d6-de3f-4154-98d6-27306ae6be7e")
+		)
+		(instances
+			(project "limn"
+				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
+					(reference "U101")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 60.96 77.47)
+			(xy 71.12 77.47)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "662e1f0d-3138-4764-95b9-efcbbd8cf150")
+	)
+	(wire
+		(pts
+			(xy 71.12 77.47)
+			(xy 73.66 74.93)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b103fc64-2c5a-498c-9f06-af52491b2cf6")
+	)
+	(wire
+		(pts
+			(xy 73.66 74.93)
+			(xy 73.66 48.26)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e07f4892-6ecb-438c-ac6e-ae7ba502f770")
+	)
+	(wire
+		(pts
+			(xy 73.66 48.26)
+			(xy 76.2 45.72)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c87ccfeb-4d5e-495c-8651-019496388a38")
+	)
+	(wire
+		(pts
+			(xy 76.2 45.72)
+			(xy 95.25 45.72)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "dd0c907f-6dd9-4c8d-9fff-e5f005739a3a")
+	)
+	(symbol
+		(lib_id "Switch:SW_SPST")
+		(at 147.32 43.18 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "2c835d38-d248-59da-99da-9b80740e5ba2")
+		(property "Reference" "SW101"
+			(at 149.86 41.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "slide switch (Bambu, 12 V 3 A)"
+			(at 149.86 44.45 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 147.32 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 147.32 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 147.32 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "12bfe3c8-47e5-492b-8e8d-539d1274847f")
+		)
+		(pin "2"
+			(uuid "56fcd017-b8ba-4db6-9557-96d0f8bd392e")
+		)
+		(instances
+			(project "limn"
+				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
+					(reference "SW101")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 118.11 44.45)
+			(xy 129.54 44.45)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4aadc266-fd7d-4574-ab35-efaabfcd93aa")
+	)
+	(wire
+		(pts
+			(xy 129.54 44.45)
+			(xy 130.81 43.18)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "be60b17a-761c-455a-a79c-4b87cbf5ce0b")
+	)
+	(wire
+		(pts
+			(xy 130.81 43.18)
+			(xy 142.24 43.18)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "70c2eebf-8748-4cab-9b2a-49b20ec0b7e3")
+	)
+	(wire
+		(pts
+			(xy 118.11 46.99)
+			(xy 120.65 46.99)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0b698579-cb2f-4a31-9ab9-754fea6cf15a")
+	)
 	(symbol
 		(lib_id "power:GND")
 		(at 120.65 46.99 90)
@@ -1690,7 +1343,7 @@
 		(in_bom no)
 		(on_board yes)
 		(dnp no)
-		(uuid "94195bf0-4485-44fd-ac3b-66f016461104")
+		(uuid "5cffa5f7-b90e-4e21-b522-00b371c89e68")
 		(property "Reference" "#PWR001"
 			(at 120.65 46.99 0)
 			(effects
@@ -1738,79 +1391,12 @@
 			)
 		)
 		(pin "1"
-			(uuid "c3207e39-dbe5-4143-8b90-83b0129d2e88")
+			(uuid "dc66d6d1-3d41-416c-9005-f327377b200b")
 		)
 		(instances
 			(project "limn"
 				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
 					(reference "#PWR001")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 120.65 100.33 90)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(dnp no)
-		(uuid "b07b1a69-d54b-48fd-b45a-42ea2fe4e97c")
-		(property "Reference" "#PWR006"
-			(at 120.65 100.33 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "GND"
-			(at 125.73 100.33 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-		(property "Footprint" ""
-			(at 120.65 100.33 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 120.65 100.33 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 120.65 100.33 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "588b2aaa-e1c9-4d0e-ba48-1bcdd115e7c1")
-		)
-		(instances
-			(project "limn"
-				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "#PWR006")
 					(unit 1)
 				)
 			)
@@ -1824,7 +1410,7 @@
 		(in_bom no)
 		(on_board yes)
 		(dnp no)
-		(uuid "c44cd863-a17f-42df-a29c-f3f798277e88")
+		(uuid "5fb5c60c-0c3a-416b-b311-fe6aee0a06e9")
 		(property "Reference" "#FLG002"
 			(at 120.65 46.99 0)
 			(effects
@@ -1871,7 +1457,7 @@
 			)
 		)
 		(pin "1"
-			(uuid "a9cb2a8a-4837-4e59-9175-255684602efd")
+			(uuid "a18761d9-6049-46dd-8912-4985f9dc7453")
 		)
 		(instances
 			(project "limn"
@@ -1881,6 +1467,207 @@
 				)
 			)
 		)
+	)
+	(wire
+		(pts
+			(xy 152.4 43.18)
+			(xy 157.48 43.18)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d5d91dc0-2168-491f-9d82-5c98660b2b20")
+	)
+	(symbol
+		(lib_id "power:+12V")
+		(at 157.48 43.18 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(dnp no)
+		(uuid "592b16d4-8add-490b-b11f-6eb28b37ada4")
+		(property "Reference" "#PWR003"
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+12V"
+			(at 162.56 43.18 270)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a6aa804f-11f4-460d-8594-f176ed43c39b")
+		)
+		(instances
+			(project "limn"
+				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
+					(reference "#PWR003")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:PWR_FLAG")
+		(at 157.48 43.18 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(dnp no)
+		(uuid "338c259b-9975-4c75-b7ec-f7b9c6b1fc5f")
+		(property "Reference" "#FLG004"
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "PWR_FLAG"
+			(at 157.48 39.37 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Footprint" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 157.48 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "eec0f3c2-bb14-4ca5-ba63-c7789518839f")
+		)
+		(instances
+			(project "limn"
+				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
+					(reference "#FLG004")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(text "+12V (switched): the Melzi's VIN and the LM2596 (sheet Melzi).\nThe switch only cuts motion."
+		(exclude_from_sim no)
+		(at 162.56 30.48 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "442e609b-ea9d-455e-8ad5-cce43e7366c0")
+	)
+	(text "+12V also feeds the LM2596 (LM_Buck0) by the Melzi\n(sheet Melzi): +7V5_ZK, the motors only."
+		(exclude_from_sim no)
+		(at 210.82 50.8 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "f3e12eb4-6b38-40eb-9aec-94745c34fc20")
+	)
+	(text "+7V5_ZK: the Melzi's Z and K drivers (their 12 V trace cut).\nSet 7.2-7.5 V today. The A4982 wants VBB >= 8 V:\n9 V for margin (motor heat is Vref, not the supply)."
+		(exclude_from_sim no)
+		(at 236.22 40.64 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "12ca31f4-1904-4f48-b161-ca292b84c4a7")
+	)
+	(rectangle
+		(start 91.44 25.4)
+		(end 300.99 66.04)
+		(stroke
+			(width 0.254)
+			(type solid)
+			(color 72 72 72 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "10fa24a8-9ba1-4731-a639-95ff7cf050ec")
+	)
+	(text "C0 45 W: 12 V, motion"
+		(exclude_from_sim no)
+		(at 92.71 26.67 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "b282b0f9-5a40-484f-ae5d-81d30f59ec80")
 	)
 	(symbol
 		(lib_id "limn:PD_trigger_9V")
@@ -1937,13 +1724,13 @@
 			)
 		)
 		(pin "1"
-			(uuid "e2bc6216-3728-4df9-bae4-0f3e9b7f20eb")
+			(uuid "704b39cb-2807-4d05-8485-3a54fb8b7c5c")
 		)
 		(pin "2"
-			(uuid "0a0e34ac-4ac8-4909-98f4-1e42ef1ea9db")
+			(uuid "0e2b0313-35be-4bc4-a450-dc844489bd2a")
 		)
 		(pin "3"
-			(uuid "18d758f5-d0b1-493e-a23d-faee0b31995d")
+			(uuid "362cb569-c44e-48c4-9a7f-1bad1eec5afa")
 		)
 		(instances
 			(project "limn"
@@ -1954,17 +1741,83 @@
 			)
 		)
 	)
+	(wire
+		(pts
+			(xy 60.96 80.01)
+			(xy 81.28 80.01)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b88f6735-7824-48aa-8d39-502f0e16e0d6")
+	)
+	(wire
+		(pts
+			(xy 81.28 80.01)
+			(xy 83.82 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c5a370de-0589-4487-8012-638ebc6d4cbe")
+	)
+	(wire
+		(pts
+			(xy 83.82 82.55)
+			(xy 83.82 96.52)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3bdccd5d-cbeb-4016-9201-2a4623690577")
+	)
+	(wire
+		(pts
+			(xy 83.82 96.52)
+			(xy 86.36 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9923dcaf-a96b-4c10-b99d-4d06eabe74a9")
+	)
+	(wire
+		(pts
+			(xy 86.36 99.06)
+			(xy 95.25 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f8af1523-037d-41fe-824c-c977db4031d1")
+	)
+	(wire
+		(pts
+			(xy 118.11 97.79)
+			(xy 123.19 97.79)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "874ee9f0-b727-4846-aab2-d171b82eb21e")
+	)
 	(symbol
-		(lib_id "power:PWR_FLAG")
-		(at 157.48 43.18 0)
+		(lib_id "power:+9V")
+		(at 123.19 97.79 270)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom no)
 		(on_board yes)
 		(dnp no)
-		(uuid "fe506609-92c1-495f-8862-d0cefe03939b")
-		(property "Reference" "#FLG004"
-			(at 157.48 43.18 0)
+		(uuid "7f417c20-e8ac-4f66-92a8-2dd9435c360b")
+		(property "Reference" "#PWR005"
+			(at 123.19 97.79 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1972,17 +1825,17 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "PWR_FLAG"
-			(at 157.48 39.37 0)
+		(property "Value" "+9V"
+			(at 128.27 97.79 270)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(hide yes)
+				(justify left)
 			)
 		)
 		(property "Footprint" ""
-			(at 157.48 43.18 0)
+			(at 123.19 97.79 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1991,7 +1844,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 157.48 43.18 0)
+			(at 123.19 97.79 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2000,7 +1853,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 157.48 43.18 0)
+			(at 123.19 97.79 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2009,15 +1862,198 @@
 			)
 		)
 		(pin "1"
-			(uuid "f49b2736-432f-4fc0-b9cb-f4b09d029240")
+			(uuid "7c145f9e-a31b-4a6f-953f-04ae1d71186c")
 		)
 		(instances
 			(project "limn"
 				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
-					(reference "#FLG004")
+					(reference "#PWR005")
 					(unit 1)
 				)
 			)
 		)
 	)
+	(wire
+		(pts
+			(xy 118.11 100.33)
+			(xy 120.65 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d0d0e449-e5fb-4266-bd8f-3879badb5ac6")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 120.65 100.33 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(dnp no)
+		(uuid "8f045325-46e3-4c89-81da-a2a3f8212681")
+		(property "Reference" "#PWR006"
+			(at 120.65 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 125.73 100.33 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+		(property "Footprint" ""
+			(at 120.65 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 120.65 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" ""
+			(at 120.65 100.33 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "f5c5255a-d462-4010-90b2-88cce5285bb6")
+		)
+		(instances
+			(project "limn"
+				(path "/a62be8bb-3bee-5be4-85eb-e7ddd4c34ea2/5da87dc0-dbb1-5a4a-a8ab-769ec5bb8951"
+					(reference "#PWR006")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(text "+9V feeds the two MP1495s:\n- MP_Buck0 on the Aux PCB (sheet Aux MCU): +5V_LED, the Aux MCU,\n  the LEDs, the buzzer.\n- MP_Buck1 on the hub board (sheet Hub board): +5V_TOOL_IN, the\n  tool (switched by U1006 + F1001) the bed and +5V_SW (U956, U957 on the plot bed board)."
+		(exclude_from_sim no)
+		(at 167.64 93.98 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "d6049e27-6904-47a1-a5e3-3808bcf00ba6")
+	)
+	(rectangle
+		(start 91.44 76.2)
+		(end 300.99 157.48)
+		(stroke
+			(width 0.2)
+			(type dash)
+			(color 132 0 0 1)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "c3bf6f4d-560d-4145-8a5d-4ff8ad60ef1e")
+	)
+	(text "C1 30 W: 9 V, 5 V branches (planned, the user's 2026-10-15 layout)"
+		(exclude_from_sim no)
+		(at 92.71 77.47 0)
+		(effects
+			(font
+				(size 1.5 1.5)
+				(bold yes)
+				(italic yes)
+			)
+			(justify left top)
+		)
+		(uuid "6532a1d5-3310-41a8-9706-523814d8b250")
+	)
+	(wire
+		(pts
+			(xy 60.96 82.55)
+			(xy 71.12 82.55)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "57c151f2-8f78-4e19-9ae9-841fa7a3f7c5")
+	)
+	(global_label "PI_USBC"
+		(shape bidirectional)
+		(at 71.12 82.55 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "a76af8b0-2fbc-4095-9e89-dbfa6b04171d")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 83.82 82.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+				(hide yes)
+			)
+		)
+	)
+	(text "C2 22.5 W: the Pi 4 at 5 V 3 A (sheet Host).\nNever from a 12 V -> 5 V buck."
+		(exclude_from_sim no)
+		(at 66.04 170.18 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "847d193f-90af-460b-93a1-febfe86fbbd1")
+	)
+	(text "NOTES"
+		(exclude_from_sim no)
+		(at 15.24 200.66 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left top)
+		)
+		(uuid "cdf71a5c-ea39-4d15-b59b-4d8be7bd5295")
+	)
+	(text "- Grounds: one ground point near the Melzi, one solid GND wire between the 9 V and 12 V branches there, so stepper\n  return never uses USB cables or signal wires. All GND on these sheets is that one net.\n- No backfeed: ~1 k in series on every line crossing supplies; USB VBUS of the Pi never tied to a buck's 5 V.\n- A fuse or e-fuse per branch (to do): a short anywhere trips the whole charger, every port off.\n- The charger cuts all its ports when a device is plugged into another: careful with hot-plugging.\n- 47-100 uF electrolytic at each MP1495's input (hot-plug ringing ~2 x Vin).\n- From docs/block-diagrams.md (the user's layout) and limn/TODO.md, Toolhead and harness rework."
+		(exclude_from_sim no)
+		(at 15.24 205.74 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "0ba1c103-9946-4212-a710-29c395e48eef")
+	)
+	(embedded_fonts no)
 )

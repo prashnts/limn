@@ -28,7 +28,7 @@ SHEETS = [  # file, name, builder, title, root position (x, y), size (w, h)
     ('power.kicad_sch', 'Power', sheets_a.power_sheet, 'Limn: power', (25.4, 50.8), (50.8, 25.4)),
     ('host.kicad_sch', 'Host (Pi 4)', sheets_a.host_sheet, 'Limn: host, Raspberry Pi 4', (114.3, 50.8), (50.8, 25.4)),
     ('melzi.kicad_sch', 'Melzi (motion)', sheets_a.melzi_sheet, 'Limn: Melzi, motion', (114.3, 109.22), (50.8, 25.4)),
-    ('toolhead.kicad_sch', 'Toolhead', sheets_b.toolhead_sheet, 'Limn: toolhead and drag chain', (114.3, 152.4), (50.8, 25.4)),
+    ('toolhead.kicad_sch', 'Toolhead', sheets_b.toolhead_sheet, 'Limn: toolhead PCB, the FFC and the drag chain', (114.3, 152.4), (50.8, 25.4)),
     ('aux.kicad_sch', 'Aux MCU (rpi)', sheets_b.aux_sheet, 'Limn: Aux MCU, Klipper rpi', (190.5, 109.22), (50.8, 25.4)),
     ('tool_dock.kicad_sch', 'Tool dock', sheets_a.tool_dock_sheet, 'Limn: tool dock, holders and tags', (190.5, 50.8), (50.8, 25.4)),
     ('cal_bed.kicad_sch', 'Calibration bed', sheets_b.cal_bed_sheet, 'Limn: calibration bed', (266.7, 109.22), (50.8, 25.4)),
@@ -38,16 +38,22 @@ SHEETS = [  # file, name, builder, title, root position (x, y), size (w, h)
 ]
 
 
+# Boards with a project of their own, so the board and its schematic link (F8, cross-probing): the same sheet,
+# drawn again as that project's root. Edit the generator, not one copy: the two are written together
+STANDALONE = [  # file, project, builder, title
+    ('toolhead_board.kicad_sch', 'toolhead_board', sheets_b.toolhead_sheet, 'Limn: the toolhead PCB (its own project)'),
+]
+
 DESCRIPTIONS = [
     'USB-C PD charger: 12 V (motion,\nswitched), 9 V (the 5 V bucks),\nthe Pi\'s port. Rails: +12V,\n+7V5_ZK, +9V, +5V_LED, +5V_TOOL.',
     'Pi 4: the cameras, the hub\nboard (the MCUs, the tool),\nI2C1 to the tool dock.',
     'Melzi v2.0: motors A, B, Z, K,\nthe endstops, the EXT header,\nthe probe pin (PROBE_A4).',
-    'The drag chain: Z, K, the Y/Z/K\nendstops, MPU9250, endoscope;\nthe coupling (planned).',
+    'The toolchanger PCB (coupling,\nK lock, cell pads, FFC), the\naxis, the drag chain.',
     'RP2040-Zero (Klipper rpi) +\nMP_Buck0: the NeoPixels, the\nbuzzer, the MPU9250\'s I2C.',
     'MCP23017 + 5 holder switches,\nthe PN532 tag reader, the\nindockator strip.',
     'The detachable bed: ID resistor,\nthe FSR node and its 4 x 8\nsheet, on the pogo.',
     'limn.kicad_pcb: the head cell\n(CAT6), ADS1220, the touch line,\ntool ID/EN, the bed dock.',
-    'FE1.1s hub on the Pi\'s cable,\nMP_Buck1 + switch: the tool\'s\n5 V, CAT6 #2 to the tool.',
+    'FE1.1s hub on the Pi\'s cable,\nMP_Buck1 + switch: the tool\'s\n5 V, its USB-C cable.',
     'RP2040-Tiny, two IR LEDs +\nPT1206BS in an L: X and Y\nedges, trigger on BED_PROBE.',
 ]
 
@@ -99,6 +105,19 @@ def main():
     rs = root.sexpr()
     rs.insert(-1, ['sheet_instances', ['path', Q('/'), ['page', Q('1')]]])
     out['limn.kicad_sch'] = dump(rs) + '\n'
+
+    for file, project, build, title in STANDALONE:          # a board's own project: its sheet as the root
+        uid = stable('sheet', file)
+        s = Sheet('Root', file, project, f'/{uid}', title)
+        build(s, standalone=True)
+        rs = s.sexpr()
+        rs.insert(-1, ['sheet_instances', ['path', Q('/'), ['page', Q('1')]]])
+        out[file] = dump(rs) + '\n'
+        pro = HERE / f'{project}.kicad_pro'
+        proj = json.loads(pro.read_text()) if pro.exists() else {'meta': {'filename': f'{project}.kicad_pro', 'version': 3},
+                                                                  'boards': [], 'text_variables': {}}
+        proj['sheets'] = [[uid, 'Root']]
+        out[pro.name] = json.dumps(proj, indent=2) + '\n'
 
     if (HERE / 'limn.kicad_sch').exists() and '--force' not in sys.argv:
         sys.exit(f'{HERE}/limn.kicad_sch exists (maybe edited in KiCad): --force to overwrite')

@@ -3,7 +3,7 @@
 # board's: these sheets' parts are "not on board" there (sheets_b.own_board), so Update PCB never brings them in.
 # Never writes over an existing board (--force does); later changes: by hand, or a sync like tools/sync.py.
 #
-#   python3 tools/mkboard.py hub|aux|beam [--force]
+#   python3 tools/mkboard.py hub|aux|beam|head [--force]
 import re, sys, subprocess, tempfile
 from pathlib import Path
 import pcbnew
@@ -18,30 +18,37 @@ P = 2.54
 LAYOUT = {
     'hub': {'U1001': (2, 1, 0), 'U1002': (12, 0, 0), 'U1003': (22, 1, 0), 'U1004': (22, 4, 0), 'J1002': (27, 0, 0),
             'J1001': (0, 7, 0), 'U1005': (0, 10, 0), 'U1006': (21, 11, 0), 'R1001': (21.5, 8, 0), 'R1002': (24.5, 8, 0),
-            'F1001': (30, 13, 0), 'J1003': (35, 8, 0)},
+            'F1001': (30, 13, 0), 'U1007': (33, 8, 0)},
     'aux': {'U601': (1, 1, 0), 'Q601': (11, 4, 0), 'BZ601': (16, 4, 0), 'J601': (7, 12, 0), 'U604': (10, 10, 0)},
     'beam': {'U851': (1.27, 2.54, 0), 'R860': (20.3, 1.5, 0), 'R861': (20.3, 5.0, 0),
              'R852': (25.0, 2.0, 0), 'R854': (25.0, 5.0, 0), 'Q851': (29.5, 3.5, 0), 'R853': (34.0, 2.0, 0), 'D852': (38.5, 2.0, 0),
              'R855': (25.0, 10.0, 0), 'R857': (25.0, 13.0, 0), 'Q852': (29.5, 11.5, 0), 'R856': (34.0, 10.0, 0), 'D853': (38.5, 10.0, 0),
              'R858': (25.0, 19.0, 0), 'Q853': (30.0, 19.0, 0), 'R859': (25.0, 23.0, 0), 'Q854': (30.0, 23.0, 0),
              'J851': (3.0, 28.5, 90), 'R851': (24.0, 28.5, 0)},
+    'head': {'U506': (55.0, 30.0, 0), 'M502': (9.0, 13.0, 0), 'SW503': (30.0, 8.0, 0), 'C503': (25.0, 16.0, 90),
+             'J502': (40.0, 6.0, 0), 'J503': (43.0, 6.0, 0), 'J504': (40.0, 10.0, 0), 'J505': (43.0, 10.0, 0),
+             'H501': (34.0, 19.0, 0), 'H502': (52.0, 5.0, 0), 'H503': (56.0, 17.0, 0),
+             'J501': (5.0, 28.0, 270), 'C504': (10.0, 32.0, 90), 'C505': (10.0, 36.0, 90),
+             'C501': (16.0, 32.0, 90), 'C502': (16.0, 36.0, 90), 'R501': (16.0, 41.0, 90), 'D501': (16.0, 45.0, 90)},
 }
 BOARDS = {   # sheet name, file, title, perfboard args
     'hub': ('Hub board (USB + tool 5 V)', 'hub_board.kicad_pcb', 'Limn hub board: perfboard', {}),
     'aux': ('Aux MCU (rpi)', 'aux_board.kicad_pcb', 'Limn Aux PCB: perfboard', {}),
     'beam': ('Beam bed (XY)', 'beam_bed_board.kicad_pcb', 'Limn beam bed: the beam node',
              dict(cols=17, rows=13, margin=1.27, holes=False)),       # 43.2 x 33.0 mm, to fit the bed
+    'head': ('', 'toolhead_board.kicad_pcb', 'Limn toolhead PCB: the toolchanger',        # its own project's root
+             dict(cols=25, rows=21, margin=1.27, holes=False)),       # 61 x 50.8 mm: a first outline, to fit the head
 }
 
 
-def netlist():
+def netlist(project='limn'):
     # kicad-cli leaves "not on board" parts out of the netlist: export from a copy with them back on
     tmp = Path(tempfile.mkdtemp())
-    for f in list(HERE.glob('*.kicad_sch')) + [HERE / 'limn.kicad_pro', HERE / 'limn.kicad_sym', HERE / 'sym-lib-table']:
+    for f in list(HERE.glob('*.kicad_sch')) + [HERE / f'{project}.kicad_pro', HERE / 'limn.kicad_sym', HERE / 'sym-lib-table']:
         (tmp / f.name).write_text(f.read_text().replace('(on_board no)', '(on_board yes)'))
     out = tmp / 'limn.net'
     subprocess.run(['kicad-cli', 'sch', 'export', 'netlist', '--format', 'kicadsexpr', '-o', str(out),
-                    str(tmp / 'limn.kicad_sch')], check=True, capture_output=True)
+                    str(tmp / f'{project}.kicad_sch')], check=True, capture_output=True)
     nl = out.read_text()
     comps = {}
     for m in re.finditer(r'\(comp \(ref "([^"]+)"\)(.*?)\n\s*\(tstamps "([^"]+)"\)\)', nl, re.S):
@@ -49,6 +56,7 @@ def netlist():
         fp = re.search(r'\(footprint "([^"]*)"\)', body)
         sheet = re.search(r'\(sheetpath \(names "([^"]*)"\) \(tstamps "([^"]*)"\)\)', body)
         comps[m.group(1)] = dict(value=re.search(r'\(value "([^"]*)"\)', body).group(1), fp=fp.group(1) if fp else '',
+                                 dnp='(property (name "dnp")' in body, no_bom='(property (name "exclude_from_bom")' in body,
                                  sheet=sheet.group(1), path=sheet.group(2) + m.group(3))
     pinnet = {}
     for block in nl.split('(net (code ')[1:]:
@@ -68,8 +76,10 @@ def main():
     dst = HERE / file
     if dst.exists() and '--force' not in sys.argv:
         sys.exit(f'{file} exists (a layout?): not touched; --force to write over it')
-    comps, pinnet = netlist()
-    parts = sorted((r for r, c in comps.items() if c['sheet'] == f'/{sheet}/' and c['fp']),
+    project = file.replace('.kicad_pcb', '') if (HERE / file.replace('.kicad_pcb', '.kicad_sch')).exists() else 'limn'
+    comps, pinnet = netlist(project)
+    sheet = f'/{sheet}/' if sheet else '/'
+    parts = sorted((r for r, c in comps.items() if c['sheet'] == sheet and c['fp']),
                    key=lambda r: (not r.startswith('U'), r[0] != 'J', r))      # modules first, then connectors
     dst.write_text(perfboard.board(title=title, **args))
     board = pcbnew.LoadBoard(str(dst))
@@ -91,6 +101,9 @@ def main():
         c = comps[ref]
         lib, name = c['fp'].split(':')
         fp = pcbnew.FootprintLoad(lib_path(lib), name)
+        fp.SetFPID(pcbnew.LIB_ID(lib, name))          # else the library nickname is empty: a parity mismatch
+        fp.SetDNP(c['dnp'])                           # and the symbol's DNP / BOM, not the library's
+        fp.SetExcludedFromBOM(c['no_bom'])
         fp.SetReference(ref)
         fp.SetValue(c['value'])
         fp.SetPath(pcbnew.KIID_PATH(c['path']))
@@ -116,7 +129,7 @@ def main():
         x = px + bx + bw + P
         shelf = max(shelf, py + by + bh - y)
     board.Save(str(dst))
-    off = [r for r, c in comps.items() if c['sheet'] == f'/{sheet}/' and not c['fp'] and not r.startswith('#')]
+    off = [r for r, c in comps.items() if c['sheet'] == sheet and not c['fp'] and not r.startswith('#')]
     print(f'wrote {file}: {len(parts)} parts, {len(nets)} nets; no footprint (off the board): {" ".join(off) or "-"}')
 
 

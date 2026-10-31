@@ -16,7 +16,7 @@ def _fp(name, descr, ref_at, pads, outline, texts=(), smd=False, model=None):
            f'\t(descr "{descr}")',
            f'\t(property "Reference" "REF**" (at {ref_at[0]} {ref_at[1]} 0) (layer "F.SilkS") {_font()})',
            f'\t(property "Value" "{name}" (at {ref_at[0]} {y2 + 1.5:.2f} 0) (layer "F.Fab") {_font()})',
-           '\t(attr through_hole)']
+           f'\t(attr {"smd" if smd else "through_hole"})']
     for layer, w in (('F.SilkS', 0.12), ('F.Fab', 0.1)):
         out.append(f'\t(fp_rect (start {x1} {y1}) (end {x2} {y2}) (stroke (width {w}) (type solid)) (fill no) (layer "{layer}"))')
     out.append(f'\t(fp_rect (start {x1 - 0.25:.2f} {y1 - 0.25:.2f}) (end {x2 + 0.25:.2f} {y2 + 0.25:.2f}) '
@@ -26,6 +26,12 @@ def _fp(name, descr, ref_at, pads, outline, texts=(), smd=False, model=None):
     for num, x, y, kind in pads:
         if kind == 'smd':           # a connector on the module (no hole): the cable, not soldered
             out.append(f'\t(pad "{num}" smd rect (at {x} {y}) (size 1 1) (layers "F.Cu" "F.Mask"))')
+        elif kind == 'pogo':        # a pogo pin's flat base (D 2.0) soldered on
+            out.append(f'\t(pad "{num}" smd circle (at {x} {y}) (size 2.4 2.4) (layers "F.Cu" "F.Paste" "F.Mask"))')
+        elif kind == 'slot':        # a flat solder tab through a slot
+            out.append(f'\t(pad "{num}" thru_hole oval (at {x} {y}) (size 1.2 2.0) (drill oval 0.6 1.4) (layers "*.Cu" "*.Mask"))')
+        elif kind == 'npth':        # a mounting hole, M3
+            out.append(f'\t(pad "" np_thru_hole circle (at {x} {y}) (size 3.3 3.3) (drill 3.3) (layers "*.Cu" "*.Mask"))')
         else:
             shape = 'rect' if num == '1' else 'circle'
             d, size = (1.3, 2.4) if kind == 'big' else (1.0, 1.7)
@@ -150,6 +156,53 @@ def fe11s_hub():
                (-1.8, -1.8, 19.6, 25.9), texts)
 
 
-ALL = {'Waveshare_RP2040_Zero': rp2040_zero, 'Waveshare_RP2040_Tiny': lambda: rp2040_zero(tiny=True),
+def fpc20_breakout():
+    # top view, the FFC connector at the bottom edge (the photo, ~/limn-shot/Capture d’écran 2026-10-29 à 18.02.34.png):
+    # odd contacts 1-19 on the lower row right to left, even 2-20 on the upper row; the board 33 x 26 mm, the
+    # header centred, two holes (~D 3.3) 17 mm down; the connector across 7-25 mm. Origin: pad 1. 21 = the FFC
+    pads = [(str(n), -round((n - 1) // 2 * P, 2), 0 if n % 2 else -P, 'th') for n in range(1, 21)]
+    x1, y1 = -round(9 * P + (33 - 9 * P) / 2, 2), -5.74
+    x2, y2 = round(x1 + 33, 2), round(y1 + 26, 2)
+    pads += [('', round(x1 + 2.9, 2), round(y1 + 17.0, 2), 'npth'), ('', round(x2 - 2.9, 2), round(y1 + 17.0, 2), 'npth'),
+             ('21', round(x1 + 16.5, 2), round(y1 + 21.8, 2), 'smd')]
+    texts = [(round(x1 + 16.5, 2), round(y1 + 24.5, 2), 'FFC 20P 0.5 mm in', 0.8), (-1.27, 1.8, '1', 0.6), (-1.27, -4.3, '2', 0.6),
+             (round(-9 * P, 2), -4.3, '20', 0.6)]
+    return _fp('FPC20_breakout', 'FPC-20P 0.5 mm to 2 x 10 DIP 2.54 mm breakout (commercial, 33 x 26 mm), top view; '
+               'pads = the printed contact numbers, 21 = the FFC connector (marker); hole and connector places from '
+               'the photo: check against the board', (round(x1 + 16.5, 2), round(y1 - 1.5, 2)), pads, (x1, y1, x2, y2), texts)
+
+
+def pogo_pin():
+    return _fp('Pogo_pin_D2.0_L5.0', 'Pogo pin, D 2.0 flat base, 5.0 mm (3.5 barrel + 1.5 plunger), soldered on its base',
+               (0, -2.2), [('1', 0, 0, 'pogo')], (-1.2, -1.2, 1.2, 1.2), smd=True, model=('Pogo_pin_5mm.stpZ', (0, 0, 0)))
+
+
+def micro_limit_sw_inline():
+    # the user's model (micro-limit-sw-inline): the body 5.8 x 10 x 4.3, the actuator nub up, two flat tabs
+    # 0.2 thick under the body at x 1.8, y 0 and -3.1 (model y up: here +3.1); the body on the board
+    texts = [(-1.0, 0, 'key', 0.6)]
+    return _fp('Micro_limit_sw_inline', 'Inline micro limit switch (the key\'s switch), 5.8 x 10 mm; its two tabs '
+               'in slots, from the user\'s model: check against the part', (0, -6.2),
+               [('1', 1.8, 3.1, 'slot'), ('2', 1.8, 0, 'slot')], (-2.9, -5.0, 2.9, 5.0), texts,
+               model=('Micro_limit_sw_inline.stpZ', (0, 0, 2.15)))
+
+
+def stepper_slider():
+    # the 5 mm stepper slider (the K lock): its base 13.7 x 22.5 (the user's model); its flex has the four
+    # pads on one side, here on four pogo pins: white (the outermost) 1, green 2, yellow 3, purple 4.
+    # The pads' pitch and place on the flex: not measured yet (3.0 apart past the motor's end, a placeholder)
+    ys = [round(-4.5 + i * 3.0, 2) for i in range(4)]        # 3.0 apart: D 2.4 pads keep 0.6
+    pads = [(str(i + 1), 9.5, y, 'pogo') for i, y in enumerate(ys)]
+    texts = [(12.4, y, c, 0.5) for y, c in zip(ys, ('white', 'green', 'yellow', 'purple'))]
+    texts.append((0, 0, 'K lock motor', 0.8))
+    return _fp('Stepper_slider_5mm_flex4', '5 mm micro stepper slider (the K lock), its flex on 4 pogo pins (D 2.0, '
+               '5 mm; one per pad): white 1, green 2, yellow 3, purple 4; the flex pads\' pitch and place are a '
+               'placeholder', (0, -12.5), pads, (-7.08, -11.25, 14.5, 11.25), texts, smd=True,
+               model=('Stepper_slider_5mm.stpZ', (0, 0, 5.8)))
+
+
+ALL = {'FPC20_breakout': fpc20_breakout, 'Pogo_pin_D2.0_L5.0': pogo_pin, 'Micro_limit_sw_inline': micro_limit_sw_inline,
+       'Stepper_slider_5mm_flex4': stepper_slider,
+       'Waveshare_RP2040_Zero': rp2040_zero, 'Waveshare_RP2040_Tiny': lambda: rp2040_zero(tiny=True),
        'Adafruit_USB_C_breakout': usb_c_breakout, 'USB_cable_pads': usb_cable, 'FE1.1s_USB_hub_breakout': fe11s_hub,
        'Pololu_Mini_MOSFET_Slide_Switch': pololu_slide_switch, 'ADS1220_module': ads1220_module, 'SparkFun_Pro_Micro_RP2040': pro_micro_rp2040, 'Mini_buck_3A': mini_buck}
