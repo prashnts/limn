@@ -484,6 +484,25 @@ def create_app(data=None):
             ws.save()
             return ws.state()
 
+    @app.post('/api/objects/{oid}/svg')
+    async def replace_svg(oid: str, file: UploadFile = File(...)):
+        '''Its SVG replaced, the rest kept (where it is, its scale, pens): an editor (vellum) keeping it
+        in sync. The old file stays in uploads/, for undo.'''
+        data = await file.read()
+        with ws.lock:
+            o = ws.obj(oid)
+            path = ws.uploads / f'{_unique({p.stem for p in ws.uploads.glob("*.svg")}, oid)}.svg'
+            path.write_bytes(data)
+            try:
+                svg.load_cached(path)
+            except Exception as e:
+                path.unlink()
+                raise HTTPException(400, f'{file.filename}: not an SVG I can read ({e})')
+            ws.remember()
+            o.svg = str(path.relative_to(ws.data))
+            ws.save()
+            return {'id': oid, 'state': ws.state()}
+
     @app.post('/api/objects/{oid}/order')
     def order(oid: str, body: dict = Body(...)):
         '''{to: front|back|forward|backward}: later in the job is on top (it hides what

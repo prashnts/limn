@@ -425,3 +425,15 @@ def test_a_job_saved_as_a_file_opens_again_here_or_elsewhere(client, tmp_path):
     assert len(svgs) == 1 and svgs[0] != 'uploads/metro.svg' and (tmp_path / 'other' / svgs[0]).exists()
     assert other.post('/api/undo').json()['changed']             # one step back: its own drawing again
     assert other.post('/api/job/file', files={'file': ('x.json', b'{"a": 1}', 'application/json')}).status_code == 400
+
+
+def test_replace_svg_keeps_placement(client):
+    oid = add(client)['id']
+    before = client.get('/api/state').json()['job']['objects'][0]
+    st = client.post(f'/api/objects/{oid}/svg', files={'file': ('m.svg', METRO.replace('#ff0000', '#0000ff').encode(),
+                                                                 'image/svg+xml')}).json()['state']
+    after = st['job']['objects'][0]
+    assert after['svg'] != before['svg'] and after['placement'] == before['placement']
+    assert 'stroke #0000ff' in [g['key'] for g in st['objects'][oid]['groups']]
+    assert client.post(f'/api/objects/{oid}/svg', files={'file': ('x.svg', b'nope', 'image/svg+xml')}).status_code == 400
+    assert client.post('/api/objects/none/svg', files={'file': ('x.svg', METRO.encode(), 'image/svg+xml')}).status_code == 404
