@@ -102,33 +102,33 @@ def toolhead_sheet(s, standalone=False):
         else:
             s.glabel(net, ref, '1', stub=5.08)
     hole = s.use('Mechanical', 'MountingHole_Pad')
-    for ref, x, what in (('H501', 129.54, '5V'), ('H502', 147.32, 'GND'), ('H503', 165.1, 'ID')):
-        s.place(hole, ref, f'screw: {what}', x, 81.28)
+    for ref, x, what in (('H501', 129.54, 'right, 5V'), ('H502', 147.32, 'left, GND'), ('H503', 165.1, 'top, ID')):
+        s.place(hole, ref, f'screw {what}', x, 81.28)
     s.power('+5V', 'H501', '1', net='+5V_TOOL', stub=2.54)
     gnd(s, 'H502', '1', stub=2.54)
     s.glabel('TOOL_ID', 'H503', '1', stub=2.54)
-    s.text('Pogo pins: D+/D- ~3 mm apart (the pair stays\ntwisted to them), GND and the ID beside them,\n'
-           'in parallel with the screws. Kinematic\nscrews: 5 V, GND, the ID.', 116.84, 101.6)
+    s.text('Pogo pins: D+/D- (~3 cm untwisted to them),\nGND and the ID beside them, in parallel with\n'
+           'the screws. Kinematic screws: top the ID,\nleft GND, right 5 V (2026-11-01).', 116.84, 101.6)
 
     s.title_text('TOOL 5 V', 116.84, 124.46)
     for ref, v, x in (('C501', '10u', 121.92), ('C502', '100n', 134.62)):
         s.place(C, ref, v, x, 142.24)
         s.power('+5V', ref, '1', net='+5V_TOOL')
         gnd(s, ref, '2')
-    s.place(R, 'R501', '1k5', 152.4, 137.16)
+    s.place(R, 'R501', '4k7', 152.4, 137.16)
     s.power('+5V', 'R501', '1', net='+5V_TOOL')
-    s.place(s.use('Device', 'LED'), 'D501', 'LED', 156.21, 147.32, rot=180)
+    s.place(s.use('Device', 'LED'), 'D501', 'LED yellow', 156.21, 147.32, rot=180)
     s.wire(s.P('R501', '2'), s.P('D501', '2'))
     k = s.P('D501', '1')
     s.wire(k, (g(k[0] + 2.54), k[1]), (g(k[0] + 2.54), g(k[1] + 5.08)), chamfer=0)
     s.power_at('GND', (g(k[0] + 2.54), g(k[1] + 5.08)))
-    s.text('At the 5 V and GND screws. C501 <= 10 uF: a\nPC\'s port at plug-in. D501: ~2 mA, and it\n'
+    s.text('At the 5 V and GND screws. C501 <= 10 uF: a\nPC\'s port at plug-in. D501: ~0.6 mA, and it\n'
            'empties C501 once the 5 V is off.', 116.84, 165.1)
 
     BO = s.add_block(*boards.fpc20_breakout())
     s.place(BO, 'U506', 'FPC-20P breakout (head)', 213.36, 106.68)
     _ffc_pins(s, 'U506')
-    s.enclose(15.24, 27.94, 236.22, 185.42, 'The toolchanger: the toolhead PCB (rides the load cell)')
+    s.enclose(15.24, 27.94, 236.22, 185.42, 'The toolchanger: the toolhead PCB (rides the load cell); built for now wired straight on U506 (2026-11-01)')
 
     # ---- the FFC, and its end on the axis
     BM = s.add_block(*boards.fpc20_breakout(mirror=True))

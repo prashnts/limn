@@ -54,7 +54,7 @@ Once the schematic is edited in KiCad, regenerating overwrites the edits: don't,
 - [ ] The Adafruit USB-C breakout's pin order (U1001: VBUS, D+, D-, GND in a row for now).
 - [ ] The beam bed's pogo: its pitch and pin order (J851: a 1x05 2.54 mm row for now); where the LEDs/PTs sit against the slots; the board's thickness.
 - [ ] The toolhead PCB: the K flex pads' pitch and place (3.0 mm past the motor's end, a placeholder), the key switch's tabs (from the model), the screws' size and places, the outline; the breakout's STEP (the user, 2026-10-30).
-- [ ] The FFC: same-side or opposite contacts decide 1 -> 1 or 1 -> 20 between the two breakouts: check with a meter before power.
+- [x] The FFC: 1 -> 1 (the cell reads right through pins 2-5, 2026-11-01; reversed they'd land on 16-19). Meter 13-15 before power anyway.
 - [ ] The bed pogo connector's pin order (power, GND, DETECT, TX, RX).
 - [ ] The cameras on the Pi: which is on which port, and which devices are on the hub vs straight on the Pi today.
 - [ ] The buzzer circuit: gate resistor, supply, flyback diode.
