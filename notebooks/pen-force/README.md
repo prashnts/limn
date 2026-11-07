@@ -2,6 +2,12 @@
 
 T3 Stabilo (stb-88, worn), holder 44, new ramp plate. Head cell on LIT at 100 Hz plus Klipper's trapq on one clock (`penrec.py`), so every sample has a position and speed. Each stroke is drawn once 0.6 mm above contact (the air pass, the baseline) and then inked. Z follows a plane fitted to 5 contact points (knee of a 0.02 ladder, repeats ≤ 0.04, residual ≤ 0.04).
 
+First drawing run with the force logged all along: lines, W, circles and dots, Z following the fitted plane.
+
+![drawing](drawing.png)
+
+Each sample painted where the head was (trapq), minus the stroke's air pass, in the photo's orientation (`drawing.py`). Darker = heavier: the 0.3 circle and the + strokes; the 0.1 circle stays ~5 g and inks only part of it. Blobs in the photo = touchdowns.
+
 ![trace](trace.png)
 
 Touchdown at 5 mm/s overshoots, up to +26 g at press 0.3: that's the blob at stroke starts. Force also climbs along this Y+ stroke (0.3: 20 → 35 g), so the plane is off by ~0.1 along Y or the tool tilts.
