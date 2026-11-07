@@ -23,3 +23,11 @@ First run: the DOCK pickup left the tool ~1.1 mm high. A 6 g X− stroke knocked
 Holder 44 dock scans (carried tool, empty holder, `dockscan.py`): Y ≈ 135.3 (macro 136), Z ≈ 8.2 (8), switch at X ~175.5 (176). ±50–70 g floor from sag and the cradle self-centring.
 
 Files: `pen-draw-*.jsonl` (`['c', t, g, flags]` samples, `['q', …]` trapq), `pen-contact-*.jsonl`, `plane.json`. `uv run --with numpy --with matplotlib python plots.py`.
+
+## Plan (2026-11-07, agreed)
+1. Probe: LIT touch out → PA4 (old BLTouch pin), `[probe]`, `LIT_ARM` as activate_gcode.
+2. `ext/limn/lit.py`: LIT_TARE / LIT_ARM / LIT_THRESHOLD / CELL_LOG, as macros for the UI; LIT_DEBUG to follow the force.
+3. Paper mesh with the carried pen (dots); later a fixed pointer on the toolchanger.
+4. Seat check after pickup, a log per plot, press in grams.
+5. Slicer: split strokes for touchdown/heading trims.
+6. Offsets: beam break for XY, the cell for Z where needed (variable lines, Posca).
