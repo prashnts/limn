@@ -22,6 +22,8 @@
 #                                           #   was on the holders (then every 0.5 s for a minute)
 #   manual_dock_window: 20                  # s from a scan by hand until the tool is on the carriage
 #   manual_dock_x_max: 110                  # X the carriage may reach with a tool docked by hand
+#   lit_serial: /dev/serial/by-id/usb-MicroPython_...   # optional: LIT, the head's load cell (lit.py)
+#   lit_log_dir: ~/printer_data/logs/limn-cell          # LIT_LOG writes there (Moonraker serves logs/)
 #
 # Install: ln -sfn ~/limn/ext/limn ~/klipper/klippy/extras/limn
 #
@@ -38,6 +40,7 @@
 # tool_holder.py  which holders have their tool, and the tools' tags
 # leds.py      what the dock and UI LEDs show
 # drying.py    how long each known pen has been out of its cap
+# lit.py       LIT, the head's load cell: force, tare/arm/threshold, the force log
 import os
 import json
 import logging
@@ -57,6 +60,7 @@ from .i2c import Bus
 from .tool_holder import ToolHolder, parse_pins
 from .leds import ToolLeds, tool_buttons, CHANGE_PHASES
 from .drying import Drying
+from .lit import Lit
 
 # What the UI matrix shows while these run (leds.py ACTIVITIES: an icon, the tool's digit by turns)
 STAGE_LEDS = ('ui_tool_', 'ui_icon', 'ui_progress')
@@ -192,6 +196,10 @@ class Limn:
             self.manual_x_max = float(config.get('manual_dock_x_max', MANUAL_X_MAX))
             self.fsr_map_dir = config.get('fsr_map_dir', '~/printer_data/logs/fsr-maps')
 
+        lit = config.get('lit_serial', None)
+        self.lit = Lit(self.reactor, lit, say=self.gcode.respond_info,
+                       log_dir=config.get('lit_log_dir', '~/printer_data/logs/limn-cell')) if lit else None
+
         for name, handler, desc in (
             ('LRT_CONNECT', self.cmd_CONNECT, "Connect to the Dock"),
             ('LRT_DISCONNECT', self.cmd_DISCONNECT, "Disconnect from the Dock"),
@@ -231,6 +239,16 @@ class Limn:
              "LRT_FSR_MATRIX [SECONDS=1] [DEBUG=1]: the FSR arrays in matrix mode, what arrives per hop. Nothing moves"),
             ('LRT_CHAIN', self.cmd_CHAIN, "Show the MCUs on the chain and the link counters"),
             ('LRT_DEBUG', self.cmd_DEBUG, "LRT_DEBUG ON=0|1: show sensor data"),
+            ('LIT_STATUS', self.cmd_LIT_STATUS, "LIT_STATUS: the head's load cell: force now, its flags"),
+            ('LIT_TARE', self.cmd_LIT_TARE, "LIT_TARE: zero the head's load cell here (nothing touching)"),
+            ('LIT_ARM', self.cmd_LIT_ARM, "LIT_ARM: tare, then arm the touch line (before a probe)"),
+            ('LIT_THRESHOLD', self.cmd_LIT_THRESHOLD,
+             "LIT_THRESHOLD G=3 [RELEASE=]: grams that trigger the touch line, release (default 0.7 G)"),
+            ('LIT_DEBUG', self.cmd_LIT_DEBUG,
+             "LIT_DEBUG [ON=0|1] [EVERY=0.5]: a console line with the force every EVERY s"),
+            ('LIT_LOG', self.cmd_LIT_LOG,
+             "LIT_LOG [START=1|0] [NAME=]: every sample, with where the toolhead was, to "
+             "logs/limn-cell/<NAME>.jsonl (100/s while it runs)"),
             ('TOOL_HOLDERS', self.cmd_TOOL_HOLDERS, "Show which tool holders have their tool"),
             ('TOOL_HOLDER_CHECK', self.cmd_TOOL_HOLDER_CHECK,
              "TOOL_HOLDER_CHECK T=41 EXPECT=occupied|empty [ARM=1]: stop unless the holder is so"),
@@ -319,6 +337,8 @@ class Limn:
             self.holder.start()
         if self.dock.connect():
             self.dock.send('read_bed_id()')
+        if self.lit:
+            self.lit.connect()
 
     def _on_ready(self):
         if self.holder:
@@ -1270,6 +1290,70 @@ class Limn:
         gcmd.respond_info(f"[LRT] debug {'on' if self.debug else 'off'}; bed={self.bed} "
                           f"calibrated rtp={self.calibrated('rtp')} fsr={self.calibrated('fsr')}")
 
+    # LIT: the head's load cell
+    def _lit(self, gcmd):
+        if not self.lit:
+            raise gcmd.error("LIT: no lit_serial in [limn]")
+        if not self.lit.connect():
+            raise gcmd.error("LIT: not connected")
+        return self.lit
+
+    def cmd_LIT_STATUS(self, gcmd):
+        st = self._lit(gcmd).status(self.reactor.monotonic())
+        gcmd.respond_info("[LIT] " + ', '.join(f"{k} {v}" for k, v in st.items()))
+
+    def cmd_LIT_TARE(self, gcmd):
+        lit = self._lit(gcmd)
+        try:
+            gcmd.respond_info(f"[LIT] tare {lit.tare()}")
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+
+    def cmd_LIT_ARM(self, gcmd):
+        lit = self._lit(gcmd)
+        try:
+            armed = lit.arm()
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+        if not armed:
+            raise gcmd.error("LIT: tare failed, not armed")
+        gcmd.respond_info("[LIT] armed")
+
+    def cmd_LIT_THRESHOLD(self, gcmd):
+        lit = self._lit(gcmd)
+        grams = gcmd.get_float('G', 3.0, above=0.)
+        release = gcmd.get_float('RELEASE', None, above=0.)
+        try:
+            gcmd.respond_info(f"[LIT] threshold {lit.threshold(grams, release)}")
+        except ROUTINE_ERRORS as e:
+            raise gcmd.error(str(e))
+
+    def cmd_LIT_DEBUG(self, gcmd):
+        lit = self._lit(gcmd)
+        on = gcmd.get_int('ON', 0 if lit.debug_every else 1)
+        lit.debug(gcmd.get_float('EVERY', 0.5, minval=0.1) if on else 0)
+        gcmd.respond_info(f"[LIT] debug {'every %.1f s' % lit.debug_every if on else 'off'}")
+
+    def cmd_LIT_LOG(self, gcmd):
+        lit = self._lit(gcmd)
+        if not gcmd.get_int('START', 0 if lit.log else 1):
+            done = lit.log_stop()
+            gcmd.respond_info(f"[LIT] log saved: {done[0]} ({done[1]} samples)" if done else "[LIT] no log running")
+            return
+        name = gcmd.get('NAME', time.strftime('cell-%Y%m%d-%H%M%S'))
+        path = lit.log_start(name, self._toolhead_at)
+        gcmd.respond_info(f"[LIT] logging to {path}")
+
+    def _toolhead_at(self, eventtime):
+        '''(x, y, z, speed) of the toolhead at eventtime, from Klipper's trapq; None if not known.'''
+        report = self.printer.lookup_object('motion_report', None)
+        mcu = self.printer.lookup_object('mcu', None)
+        trapqs = getattr(report, 'dtrapqs', None) or getattr(report, 'trapqs', None) or {}    # renamed in Klipper
+        if mcu is None or 'toolhead' not in trapqs:
+            return None
+        pos, speed = trapqs['toolhead'].get_trapq_position(mcu.estimated_print_time(eventtime))
+        return None if pos is None else (pos[0], pos[1], pos[2], speed)
+
     # Tool holder
     def _attach_holder(self, holder):
         self.holder = holder
@@ -2017,6 +2101,7 @@ class Limn:
             'wipe': self._wipe_status(),
             'sheet': self._sheet_status(),     # the test marks' and purges' sheet: how full (marks.py)
             'leds': {k: v for k, v in self._led_states.items() if v},     # what the UI and dock LEDs show (leds.py)
+            'lit': self.lit.status(eventtime) if self.lit else None,     # the head's load cell (lit.py)
         }
 
 

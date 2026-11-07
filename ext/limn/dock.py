@@ -42,8 +42,10 @@ class Lines:
 
 class Dock:
 
-    def __init__(self, reactor, port, baud=115200, say=None):
+    def __init__(self, reactor, port, baud=115200, say=None, interval=READ_INTERVAL, name='Dock'):
         self.reactor = reactor
+        self.interval = interval    # s between reads; LIT reads faster, its samples are stamped on arrival
+        self.name = name
         self.port = port
         self.baud = baud
         self.say = say or logging.info
@@ -68,7 +70,7 @@ class Dock:
         try:
             self.serial = serial.Serial(self.port, self.baud, timeout=0, write_timeout=0)
         except (OSError, serial.SerialException) as e:
-            self.say(f"[LRT] Unable to connect to the Dock: {e}")
+            self.say(f"[LRT] Unable to connect to the {self.name}: {e}")
             return False
         self.lines = Lines()
         if self.timer:
@@ -89,13 +91,13 @@ class Dock:
 
     def send(self, cmd):
         if not self.connect():
-            raise ConnectionError("Dock not connected")
+            raise ConnectionError(f"{self.name} not connected")
         try:
             self.serial.write((cmd.strip() + '\r\n').encode())
         except Exception as e:
             logging.exception("[LRT] write failed")
             self.disconnect()
-            raise ConnectionError(f"Dock write failed: {e}")
+            raise ConnectionError(f"{self.name} write failed: {e}")
 
     def send_to(self, hop, cmd):
         '''A command for one node only.'''
@@ -134,10 +136,10 @@ class Dock:
             data = self.serial.read(self.serial.in_waiting or 1)
         except Exception:
             logging.exception("[LRT] read failed")
-            self.say("[LRT] ERROR - Unable to communicate with the Dock.")
+            self.say(f"[LRT] ERROR - Unable to communicate with the {self.name}.")
             self.serial.close()
             self.serial = None
             return self.reactor.NEVER
         for line in self.lines.feed(data):
             self.handle_line(line)
-        return eventtime + READ_INTERVAL
+        return eventtime + self.interval
