@@ -96,6 +96,9 @@ Offset `d` (~0.25 at 45°, ~0.5 at 60°; 60° for 300 gsm card), swivels at corn
 - [ ] Coupling: power only when ID seen and key locked; data pins high-Z until powered; plating on the contact pins, drop under 1.3 A.
 - [ ] Power: draw the whole tree; charger cuts all ports on plug-in (test); WS2812 at 5 V with a level shifter; Pico W VSYS ≤ 5.5 V.
 - [ ] Drying beeps on a long plot; a Fluidd button for `TOOL_DRY RESET=1`.
+- [ ] Key lock vs pogo pins (`Limn 2.1 v67 - section.step`, 2026-11-06): the floor the dowel bears on is flat (y −48.5, 30-150°), no lead-in; dowel 0.08 into it, set rigidly by the 3 M3 balls. With the 4 pins the clamp needs N ≥ their push, the dowel climbs the slot edge under load, the 16 T m0.6 pinion (r ≈ 4.8, ~1:1 to the dowel) stalls. Plan: (1) spring under the pinion's front face (shoulder 1.5 deeper, wave spring Ø7/11 or 1.5 O-ring), pinion rests on the cover: its 0.42 gap gives 0.5 interference; spring force at 0.5 ≈ 1.3× pin push (measure). (2) plate: 0.8 deep lead-in at both leading slot edges over ~40°, flat, 0.15 detent at 90°, chamfered edges; balls only seat (equal protrusion 3.65, caliper). (3) grease. Est. rack force: ~1.2 N on the ramp, ~0.5 N on the flat (μ 0.15, N 3.75 N).
+  - `Limn-Tool-Dock-Plate.step` (2026-11-06): lead-ins on all 4 slot edges (either turn), linear from the edge (0.6 at r4 … 1.15 at r6.8) to 0 at ~68°, flat 68-84°, radial detent 0.15 deep at 90/270 (84-96°). Good. Rigid key until the O-ring: locked clamp = overlap − 0.15, so set the balls for ~0.25-0.3 overlap on the flat (or detent 0.08 for now).
+  - `Limn-Tool-Dock-Plate.step 2` (2026-11-07, pen tools: no pogo contact): bottom pair in a 1.7 deep recess (8 x 2.5, pins at ±3/−9 inside, 0.6 below the tips), top pair through holes (±10, z 4); floor/ramps unchanged. Good; balls for ~0.15-0.2 overlap.
 
 ## Beyond pens
 
